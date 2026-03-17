@@ -1,0 +1,295 @@
+name: Cloud Build Engine — Flutter APK Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: 'App display name'
+        required: true
+        default: 'Cloud Build Engine'
+      package_name:
+        description: 'Android package name (e.g. com.example.app)'
+        required: true
+        default: 'com.matrix.cloudbuildengine'
+      source_url:
+        description: 'Source ZIP URL (GitHub repo URL, raw ZIP, or Google Drive share link)'
+        required: true
+      flutter_version:
+        description: 'Flutter version to use'
+        required: false
+        default: '3.29.1'
+      build_mode:
+        description: 'Build mode: release | debug | profile'
+        required: false
+        default: 'release'
+
+jobs:
+  build:
+    name: Build ${{ inputs.app_name }} (${{ inputs.build_mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      APP_NAME:      ${{ inputs.app_name }}
+      PACKAGE_NAME:  ${{ inputs.package_name }}
+      SOURCE_URL:    ${{ inputs.source_url }}
+      FLUTTER_VER:   ${{ inputs.flutter_version }}
+      BUILD_MODE:    ${{ inputs.build_mode }}
+
+    steps:
+
+      # ── 1. System dependencies ──────────────────────────────────────────────
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            unzip wget curl jq python3 python3-pip \
+            openjdk-17-jdk-headless apksigner zipalign
+
+      # ── 2. Set up Flutter ───────────────────────────────────────────────────
+      - name: Set up Flutter ${{ inputs.flutter_version }}
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter_version }}
+          channel: stable
+          cache: true
+
+      - name: Flutter doctor
+        run: flutter doctor --android-licenses || true
+
+      # ── 3. Android SDK ──────────────────────────────────────────────────────
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: latest
+          accept-android-sdk-licenses: true
+          packages: >
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
+
+      # ── 4. Download & extract source ────────────────────────────────────────
+      - name: Download source code
+        run: |
+          mkdir -p /tmp/source_raw /tmp/project
+          RAW_URL="${SOURCE_URL}"
+
+          # Detect Google Drive share link and convert
+          if echo "$RAW_URL" | grep -q "drive.google.com/file/d/"; then
+            FILE_ID=$(echo "$RAW_URL" | sed 's|.*drive.google.com/file/d/\([^/]*\).*|\1|')
+            RAW_URL="https://drive.google.com/uc?export=download&confirm=t&id=${FILE_ID}"
+            echo "Converted Drive link → $RAW_URL"
+          fi
+
+          # Detect GitHub repo URL (not a .zip link)
+          if echo "$RAW_URL" | grep -qE "^https://github.com/[^/]+/[^/]+$"; then
+            RAW_URL="${RAW_URL}/archive/refs/heads/main.zip"
+            echo "GitHub repo → archive URL: $RAW_URL"
+          fi
+
+          echo "Downloading from: $RAW_URL"
+          wget --content-disposition -q -O /tmp/source_raw/source.zip "$RAW_URL"
+          echo "Download complete: $(du -sh /tmp/source_raw/source.zip | cut -f1)"
+
+      - name: Extract source code
+        run: |
+          unzip -q /tmp/source_raw/source.zip -d /tmp/source_raw/extracted
+          # Handle nested single-directory zips
+          TOP=$(ls /tmp/source_raw/extracted/ | head -1)
+          if [ -d "/tmp/source_raw/extracted/$TOP" ] && [ "$(ls /tmp/source_raw/extracted/ | wc -l)" -eq 1 ]; then
+            mv "/tmp/source_raw/extracted/$TOP"/* /tmp/project/
+          else
+            mv /tmp/source_raw/extracted/* /tmp/project/
+          fi
+          echo "Project contents:"
+          ls /tmp/project/
+
+      # ── 5. Detect project type ──────────────────────────────────────────────
+      - name: Detect & validate Flutter project
+        working-directory: /tmp/project
+        run: |
+          if [ ! -f "pubspec.yaml" ]; then
+            echo "ERROR: pubspec.yaml not found. This does not appear to be a Flutter project."
+            exit 1
+          fi
+          echo "Flutter project detected ✓"
+          grep "^name:" pubspec.yaml || true
+          flutter --version
+
+      # ── 6. Patch package name & app name ───────────────────────────────────
+      - name: Patch package name and app name
+        working-directory: /tmp/project
+        run: |
+          SAFE_PKG="${PACKAGE_NAME}"
+          SAFE_NAME="${APP_NAME}"
+
+          echo "Patching package: $SAFE_PKG"
+          echo "Patching app name: $SAFE_NAME"
+
+          # Patch AndroidManifest.xml
+          if [ -f "android/app/src/main/AndroidManifest.xml" ]; then
+            OLD_PKG=$(grep -oP 'package="\K[^"]+' android/app/src/main/AndroidManifest.xml | head -1)
+            if [ -n "$OLD_PKG" ] && [ "$OLD_PKG" != "$SAFE_PKG" ]; then
+              sed -i "s|package=\"${OLD_PKG}\"|package=\"${SAFE_PKG}\"|g" android/app/src/main/AndroidManifest.xml
+              echo "Patched AndroidManifest: $OLD_PKG → $SAFE_PKG"
+            fi
+          fi
+
+          # Patch build.gradle applicationId
+          if [ -f "android/app/build.gradle" ]; then
+            sed -i "s|applicationId \".*\"|applicationId \"${SAFE_PKG}\"|g" android/app/build.gradle
+            sed -i "s|applicationId '.*'|applicationId '${SAFE_PKG}'|g" android/app/build.gradle
+          fi
+
+          # Patch app label in strings.xml or AndroidManifest
+          if [ -f "android/app/src/main/res/values/strings.xml" ]; then
+            sed -i "s|<string name=\"app_name\">.*</string>|<string name=\"app_name\">${SAFE_NAME}</string>|" \
+              android/app/src/main/res/values/strings.xml
+          fi
+
+          echo "Patching complete"
+
+      # ── 7. Fix common build issues ──────────────────────────────────────────
+      - name: Auto-fix gradle build issues
+        working-directory: /tmp/project
+        run: |
+          # Fix deprecated compile/provided usages
+          find . -name "build.gradle" | xargs sed -i \
+            -e "s|compile '|implementation '|g" \
+            -e "s|testCompile '|testImplementation '|g" \
+            -e "s|provided '|compileOnly '|g" \
+            -e "s|compile \"'|implementation \"|g" 2>/dev/null || true
+
+          # Ensure compileSdkVersion is at least 34
+          find . -name "build.gradle" | xargs sed -i \
+            -e "s|compileSdkVersion [0-9]\{1,2\}|compileSdkVersion 35|g" \
+            -e "s|targetSdkVersion [0-9]\{1,2\}|targetSdkVersion 35|g" 2>/dev/null || true
+
+          # Accept Android licenses silently
+          yes | flutter doctor --android-licenses 2>/dev/null || true
+          echo "Gradle fixes applied"
+
+      # ── 8. Flutter pub get ──────────────────────────────────────────────────
+      - name: Get Flutter dependencies
+        working-directory: /tmp/project
+        run: |
+          flutter pub get
+          echo "Dependencies resolved ✓"
+
+      # ── 9. Set up keystore (pre-generated, embedded — no secrets needed) ──────
+      - name: Set up signing keystore
+        working-directory: /tmp/project
+        run: |
+          # ── Keystore is embedded directly — generated for Cloud Build Engine ──
+          # Alias : cbe_release_key
+          # Valid : 2026-03-17  →  2053-08-02  (27 years)
+          # Owner : CN=Cloud Build Engine, O=Matrix, C=NG
+          cat > /tmp/ks.b64 << 'KSEOF'
+          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
+          KSEOF
+
+          # Strip whitespace and decode
+          tr -d ' \n' < /tmp/ks.b64 | base64 -d > /tmp/release.keystore
+          echo "Keystore decoded: $(ls -lh /tmp/release.keystore | awk '{print $5}')"
+
+          # Write key.properties for Flutter gradle
+          cat > android/key.properties <<EOF
+          storePassword=CloudBuild@Matrix2026
+          keyPassword=CloudBuild@Matrix2026
+          keyAlias=cbe_release_key
+          storeFile=/tmp/release.keystore
+          EOF
+          echo "key.properties written ✓"
+
+          # Auto-patch build.gradle to use keystore if not already configured
+          if ! grep -q "key.properties" android/app/build.gradle; then
+            python3 - <<'PYEOF'
+          import re
+
+          gradle_path = "android/app/build.gradle"
+          with open(gradle_path, "r") as f:
+              content = f.read()
+
+          keystore_block = '''
+          def keystorePropertiesFile = rootProject.file("key.properties")
+          def keystoreProperties = new Properties()
+          if (keystorePropertiesFile.exists()) {
+              keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+          }
+
+          '''
+          signing_config = '''
+              signingConfigs {
+                  release {
+                      if (keystorePropertiesFile.exists()) {
+                          keyAlias keystoreProperties['keyAlias']
+                          keyPassword keystoreProperties['keyPassword']
+                          storeFile file(keystoreProperties['storeFile'])
+                          storePassword keystoreProperties['storePassword']
+                      }
+                  }
+              }
+          '''
+          if "keystorePropertiesFile" not in content:
+              content = re.sub(r"(android\s*\{)", keystore_block + r"\1", content, count=1)
+          if "signingConfigs" not in content:
+              content = re.sub(r"(android\s*\{)", r"\1" + signing_config, content, count=1)
+          content = re.sub(
+              r"(buildTypes\s*\{[^}]*release\s*\{)",
+              r"\1\n            signingConfig signingConfigs.release",
+              content, flags=re.DOTALL
+          )
+          with open(gradle_path, "w") as f:
+              f.write(content)
+          print("build.gradle patched for keystore signing ✓")
+          PYEOF
+          fi
+          echo "Signing setup complete ✓"
+
+      # ── 10. Build APK ───────────────────────────────────────────────────────
+      - name: Build Flutter APK (${{ inputs.build_mode }})
+        working-directory: /tmp/project
+        run: |
+          echo "Building Flutter APK in $BUILD_MODE mode..."
+          flutter build apk --$BUILD_MODE --target-platform android-arm64 --no-pub
+          echo "Build complete ✓"
+
+      # ── 11. Locate & rename APK ─────────────────────────────────────────────
+      - name: Locate and rename APK
+        working-directory: /tmp/project
+        run: |
+          APK_PATH=$(find build/app/outputs -name "*.apk" | head -1)
+          if [ -z "$APK_PATH" ]; then
+            echo "ERROR: No APK found after build"
+            find build/ -name "*.apk" 2>/dev/null || true
+            exit 1
+          fi
+
+          SAFE_NAME=$(echo "$APP_NAME" | tr ' ' '_' | tr -dc '[:alnum:]_-')
+          FINAL_NAME="${SAFE_NAME}_${BUILD_MODE}_arm64.apk"
+          cp "$APK_PATH" "/tmp/${FINAL_NAME}"
+          echo "APK_NAME=${FINAL_NAME}" >> $GITHUB_ENV
+          echo "APK_PATH=/tmp/${FINAL_NAME}" >> $GITHUB_ENV
+          echo "APK ready: ${FINAL_NAME} ($(du -sh /tmp/${FINAL_NAME} | cut -f1))"
+
+      # ── 12. Upload artifact ─────────────────────────────────────────────────
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APK_NAME }}
+          path: ${{ env.APK_PATH }}
+          retention-days: 14
+
+      # ── 13. Build summary ───────────────────────────────────────────────────
+      - name: Write build summary
+        if: always()
+        run: |
+          echo "## Cloud Build Engine — Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| App Name | $APP_NAME |" >> $GITHUB_STEP_SUMMARY
+          echo "| Package | $PACKAGE_NAME |" >> $GITHUB_STEP_SUMMARY
+          echo "| Flutter | $FLUTTER_VER |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Mode | $BUILD_MODE |" >> $GITHUB_STEP_SUMMARY
+          echo "| APK | $APK_NAME |" >> $GITHUB_STEP_SUMMARY

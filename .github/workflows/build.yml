@@ -50,6 +50,8 @@ jobs:
             unzip wget curl jq python3 nodejs npm \
             openjdk-17-jdk-headless apksigner zipalign
           java -version
+          # Pre-install jetifier globally so "jetify" command works instantly
+          npm install -g jetifier --silent 2>/dev/null || true
 
       # ── 2. Download source ───────────────────────────────────────────────────
       - name: Download source code
@@ -181,6 +183,26 @@ jobs:
       - name: Accept Android licenses
         run: yes | flutter doctor --android-licenses 2>/dev/null || yes | sdkmanager --licenses 2>/dev/null || true
 
+      # ── Cache Gradle dependencies ─────────────────────────────────────────────
+      - name: Cache Gradle packages
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      # ── Cache npm / node_modules ──────────────────────────────────────────────
+      - name: Cache npm
+        uses: actions/cache@v5
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
       # ── 7. Patch package name & app name ─────────────────────────────────────
       - name: Patch package name and app name
         working-directory: /tmp/project
@@ -289,7 +311,7 @@ jobs:
             {} \; 2>/dev/null || true
 
           echo "Running jetifier..."
-          npx jetify 2>/dev/null || true
+          jetify 2>/dev/null || npx jetifier 2>/dev/null || true
 
           # ── Strip AndroidIDE overrides + boost Gradle JVM ────────────────────
           ANDROID_DIR=android
@@ -345,8 +367,10 @@ jobs:
           cp /tmp/release.keystore android/app/release.keystore
           cd android
           chmod +x gradlew
-          ./gradlew assemble$(echo "$BUILD_MODE" | sed 's/.*/\u&/') \
-            -PreactNativeArchitectures=arm64-v8a,armeabi-v7a --no-daemon
+          ./gradlew assemble$(echo "$BUILD_MODE" | sed 's/.*/\\u&/') \
+            -PreactNativeArchitectures=arm64-v8a \
+            -Dkotlin.compiler.execution.strategy=in-process \
+            --no-daemon --parallel
           cd ..
           APK=$(find android/app/build/outputs/apk -name "*.apk" | head -1)
           echo "BUILD_OUTPUT=$APK" >> $GITHUB_ENV
@@ -384,7 +408,8 @@ jobs:
             {} \; 2>/dev/null || true
 
           echo "Running jetifier..."
-          npx jetify 2>/dev/null || true
+          # Use globally pre-installed jetifier; fall back to npx silently
+          jetify 2>/dev/null || npx jetifier 2>/dev/null || true
 
           # ── Find gradlew anywhere in the tree (excluding node_modules) ────────
           GRADLEW_PATH=$(find . -name "gradlew" -not -path "*/node_modules/*" | head -1)
@@ -450,7 +475,10 @@ jobs:
 
           cd "$GRADLE_DIR"
           chmod +x gradlew
-          ./gradlew assemble$(echo "$BUILD_MODE" | sed 's/.*/\u&/') --no-daemon
+          ./gradlew assemble$(echo "$BUILD_MODE" | sed 's/.*/\u&/') \
+            -PreactNativeArchitectures=arm64-v8a \
+            -Dkotlin.compiler.execution.strategy=in-process \
+            --no-daemon --parallel
           cd -
           APK=$(find . -name "*.apk" -not -path "*/intermediates/*" | head -1)
           echo "BUILD_OUTPUT=$(realpath $APK)" >> $GITHUB_ENV

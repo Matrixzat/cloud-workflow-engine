@@ -1,0 +1,36 @@
+name: CBE Relay — repository_dispatch → workflow_dispatch
+
+on:
+  repository_dispatch:
+    types: [build-request]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Relay to build.yml via workflow_dispatch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP_NAME:       ${{ github.event.client_payload.app_name }}
+          PKG_NAME:       ${{ github.event.client_payload.package_name }}
+          JOB_ID:         ${{ github.event.client_payload.job_id }}
+          ASSET_ID:       ${{ github.event.client_payload.asset_id }}
+          FLUTTER_VER:    ${{ github.event.client_payload.flutter_version }}
+          BUILD_MODE:     ${{ github.event.client_payload.build_mode }}
+        run: |
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github.v3+json" \
+            /repos/${{ github.repository }}/actions/workflows/build.yml/dispatches \
+            -f ref=main \
+            -f "inputs[app_name]=$APP_NAME" \
+            -f "inputs[package_name]=$PKG_NAME" \
+            -f "inputs[job_id]=$JOB_ID" \
+            -f "inputs[asset_id]=$ASSET_ID" \
+            -f "inputs[flutter_version]=$FLUTTER_VER" \
+            -f "inputs[build_mode]=$BUILD_MODE"
+          echo "Relayed dispatch for job $JOB_ID to build.yml"

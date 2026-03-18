@@ -666,7 +666,6 @@ jobs:
         with:
           name: apk-${{ inputs.job_id }}
           path: ${{ env.APK_PATH }}
-          retention-days: 1
 
       # ── 13. Build summary ─────────────────────────────────────────────────────
       - name: Build summary

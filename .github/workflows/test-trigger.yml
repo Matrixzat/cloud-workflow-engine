@@ -1,0 +1,13 @@
+name: Trigger Test
+on:
+  repository_dispatch:
+    types: [build-request]
+jobs:
+  echo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Echo params
+        run: |
+          echo "job_id=${{ github.event.client_payload.job_id }}"
+          echo "app=${{ github.event.client_payload.app_name }}"
+

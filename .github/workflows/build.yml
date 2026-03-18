@@ -31,7 +31,7 @@ jobs:
   build:
     name: Build ${{ inputs.app_name }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     env:
       APP_NAME:     ${{ inputs.app_name }}
@@ -187,6 +187,32 @@ jobs:
       - name: Accept Android licenses
         run: yes | flutter doctor --android-licenses 2>/dev/null || yes | sdkmanager --licenses 2>/dev/null || true
 
+      # ── Install project-specific NDK + compileSdk platform ────────────────────
+      - name: Install project-specific NDK and SDK platform
+        run: |
+          BUILD_GRADLE=$(find /tmp/project/android -name "build.gradle" -path "*/app/build.gradle" | head -1)
+          if [ -z "$BUILD_GRADLE" ]; then
+            echo "No app/build.gradle found — skipping NDK/SDK auto-install"
+            exit 0
+          fi
+
+          NDK_VER=$(grep 'ndkVersion' "$BUILD_GRADLE" 2>/dev/null | grep -oP '[\d.]{5,}' | head -1)
+          COMPILE_SDK=$(grep 'compileSdk' "$BUILD_GRADLE" 2>/dev/null | grep -oP '\b\d{2}\b' | head -1)
+          echo "Detected → ndkVersion: '${NDK_VER}', compileSdk: '${COMPILE_SDK}'"
+
+          if [ -n "$NDK_VER" ]; then
+            echo "Installing NDK $NDK_VER..."
+            sdkmanager "ndk;$NDK_VER" 2>&1 | tail -4 || true
+          fi
+
+          if [ -n "$COMPILE_SDK" ] && [ "$COMPILE_SDK" != "35" ]; then
+            echo "Installing platforms;android-${COMPILE_SDK}..."
+            sdkmanager "platforms;android-${COMPILE_SDK}" "build-tools;${COMPILE_SDK}.0.0" 2>&1 | tail -4 || true
+          fi
+
+          yes | sdkmanager --licenses 2>/dev/null || true
+          echo "Done ✓"
+
       # ── Cache Gradle dependencies ─────────────────────────────────────────────
       - name: Cache Gradle packages
         uses: actions/cache@v5
@@ -275,13 +301,26 @@ jobs:
         if: steps.detect.outputs.type == 'flutter'
         working-directory: /tmp/project
         run: |
-          cp /tmp/key.properties android/key.properties
-          # Patch build.gradle for signing if needed
-          if ! grep -q "key.properties" android/app/build.gradle; then
+          # ── Write correct local.properties (Gradle reads this before Flutter can update it)
+          FLUTTER_SDK_PATH=$(dirname $(dirname $(which flutter)))
+          mkdir -p android
+          cat > android/local.properties << EOF
+sdk.dir=${ANDROID_SDK_ROOT:-$ANDROID_HOME}
+flutter.sdk=$FLUTTER_SDK_PATH
+flutter.buildMode=$BUILD_MODE
+flutter.versionName=1.0.0
+flutter.versionCode=1
+EOF
+          echo "local.properties written: sdk.dir=${ANDROID_SDK_ROOT}, flutter.sdk=$FLUTTER_SDK_PATH"
+
+          # ── Patch build.gradle for signing if project doesn't already have a keystore configured
+          if ! grep -q "key.properties\|storeFile\|matrix_hbc\|release.keystore" android/app/build.gradle; then
+            cp /tmp/key.properties android/key.properties
             sed -i '/^android {/i def kp = new Properties(); def kf = rootProject.file("key.properties"); if (kf.exists()) { kp.load(new FileInputStream(kf)) }' android/app/build.gradle
             sed -i 's/buildTypes {/signingConfigs { release { keyAlias kp["keyAlias"]; keyPassword kp["keyPassword"]; storeFile kp["storeFile"] ? file(kp["storeFile"]) : null; storePassword kp["storePassword"] } }\n    buildTypes {/' android/app/build.gradle
             sed -i '/release {/a\            signingConfig signingConfigs.release' android/app/build.gradle
           fi
+
           flutter pub get
           flutter build apk --$BUILD_MODE --target-platform android-arm64 --no-pub
           echo "BUILD_OUTPUT=/tmp/project/build/app/outputs/flutter-apk/app-${BUILD_MODE}.apk" >> $GITHUB_ENV

@@ -47,11 +47,15 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            unzip wget curl jq python3 nodejs npm \
-            openjdk-17-jdk-headless apksigner zipalign
-          java -version
+            unzip wget curl jq python3 apksigner zipalign
           # Pre-install jetifier globally so "jetify" command works instantly
           npm install -g jetifier --silent 2>/dev/null || true
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
       # ── 2. Download source ───────────────────────────────────────────────────
       - name: Download source code
@@ -190,7 +194,7 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ github.run_id }}
+          key: gradle-${{ runner.os }}-v2
           restore-keys: |
             gradle-${{ runner.os }}-
 
@@ -199,7 +203,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.npm
-          key: npm-${{ runner.os }}-${{ github.run_id }}
+          key: npm-${{ runner.os }}-v2
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -255,7 +259,11 @@ jobs:
         working-directory: /tmp/project
         run: |
           echo "Installing npm dependencies…"
-          npm install --legacy-peer-deps
+          if [ -f package-lock.json ]; then
+            npm ci --legacy-peer-deps
+          else
+            npm install --legacy-peer-deps
+          fi
           echo "Running expo prebuild to generate android/ folder…"
           npx expo prebuild --platform android --no-install 2>&1 || \
           npx expo-cli eject 2>&1 || true
@@ -282,7 +290,11 @@ jobs:
         if: steps.detect.outputs.type == 'reactnative'
         working-directory: /tmp/project
         run: |
-          npm install --legacy-peer-deps
+          if [ -f package-lock.json ]; then
+            npm ci --legacy-peer-deps
+          else
+            npm install --legacy-peer-deps
+          fi
 
           # ── Android compatibility patches ────────────────────────────────────
           echo "Patching node_modules build.gradle files..."
@@ -325,7 +337,6 @@ jobs:
           for KEY_VAL in \
             "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError" \
             "org.gradle.daemon=false" \
-            "org.gradle.parallel=true" \
             "android.useAndroidX=true" \
             "android.enableJetifier=true"; do
             KEY="${KEY_VAL%%=*}"
@@ -430,7 +441,6 @@ jobs:
           for KEY_VAL in \
             "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError" \
             "org.gradle.daemon=false" \
-            "org.gradle.parallel=true" \
             "android.useAndroidX=true" \
             "android.enableJetifier=true"; do
             KEY="${KEY_VAL%%=*}"

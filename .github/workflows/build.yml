@@ -45,7 +45,7 @@ jobs:
 
     steps:
 
-      # ── 1. System dependencies ──���────────────────────────────────────────────
+      # ── 1. System dependencies ──�����────────────────────────────────────────────
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
@@ -680,37 +680,63 @@ jobs:
           echo "| Mode | $BUILD_MODE |" >> $GITHUB_STEP_SUMMARY
           echo "| APK | $APK_NAME |" >> $GITHUB_STEP_SUMMARY
 
-  # ── Cleanup: hard-delete APK artifact 10 min after build ───────────────
+  # ── Cleanup: smart-poll then hard-delete APK artifact ────────────────────
+  # Logic:
+  #   - Poll every 60s to check if the artifact still exists.
+  #   - If it disappears on its own → the app started downloading; the worker
+  #     already fired DELETE via ctx.waitUntil(). Exit clean.
+  #   - If it still exists after 10 minutes with no download → force-delete it.
   cleanup:
     needs: build
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Wait 10 min then delete APK artifact
+      - name: Smart-poll then force-delete APK artifact
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_ID:   ${{ github.run_id }}
           JOB_ID:   ${{ inputs.job_id }}
           REPO:     ${{ github.repository }}
         run: |
-          echo "Sleeping 10 min before artifact cleanup..."
-          sleep 600
-          echo "Checking for artifact apk-${JOB_ID}..."
-          ARTIFACT_ID=$(curl -s \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            "https://api.github.com/repos/${REPO}/actions/runs/${RUN_ID}/artifacts" \
-            | python3 -c "
+          API="https://api.github.com/repos/${REPO}"
+          MAX_WAIT=10   # minutes before force-delete if no download detected
+          POLL=0
+
+          get_artifact_id() {
+            curl -s \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              "${API}/actions/runs/${RUN_ID}/artifacts" \
+              | python3 -c "
 import sys, json
 arts = json.load(sys.stdin).get('artifacts', [])
-match = [a for a in arts if a["name"] == "apk-" + "${JOB_ID}"]
-print(match[0]["id"] if match else "")
-            " 2>/dev/null)
-          if [ -z "${ARTIFACT_ID}" ]; then
-            echo "Artifact already gone (app downloaded it). Done."
-          else
-            CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              "https://api.github.com/repos/${REPO}/actions/artifacts/${ARTIFACT_ID}")
-            echo "DELETE artifact ${ARTIFACT_ID} → HTTP ${CODE}"
-            [ "${CODE}" = "204" ] && echo "Artifact deleted." || echo "Already gone."
-          fi
+match = [a for a in arts if a['name'] == 'apk-'${JOB_ID}']
+print(match[0]['id'] if match else '')
+" 2>/dev/null
+          }
+
+          echo "=== Artifact cleanup watchdog started ==="
+          echo "Will force-delete if not downloaded within ${MAX_WAIT} minutes."
+
+          while true; do
+            AID=$(get_artifact_id)
+
+            if [ -z "${AID}" ]; then
+              echo "Artifact gone (downloaded by app). Cleanup complete."
+              exit 0
+            fi
+
+            POLL=$((POLL + 1))
+            echo "[${POLL}m] Artifact ${AID} still exists. Waiting..."
+
+            if [ "${POLL}" -ge "${MAX_WAIT}" ]; then
+              echo "10-minute window elapsed with no download. Force-deleting artifact ${AID}..."
+              CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                "${API}/actions/artifacts/${AID}")
+              echo "DELETE ${AID} → HTTP ${CODE}"
+              [ "${CODE}" = "204" ] && echo "Artifact force-deleted." || echo "Already gone or error."
+              exit 0
+            fi
+
+            sleep 60
+          done

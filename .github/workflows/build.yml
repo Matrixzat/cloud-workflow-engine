@@ -123,6 +123,61 @@ jobs:
 
           echo "Project root contents:"; ls /tmp/project/
 
+      # ── 3b. Auto-patch gradle.properties ────────────────────────────────────
+      - name: Patch gradle.properties for CI compatibility
+        run: |
+          # Find every gradle.properties in the project (root + any submodule)
+          find /tmp/project -name "gradle.properties" | while read GP; do
+            echo "── Scanning: $GP"
+            CHANGED=0
+
+            # 1. parallel=true → false  (prevents RAM exhaustion on 7 GB runner)
+            if grep -q "^org\.gradle\.parallel\s*=\s*true" "$GP"; then
+              sed -i 's/^org\.gradle\.parallel\s*=\s*true/org.gradle.parallel=false/' "$GP"
+              echo "  ✔ parallel: true → false"
+              CHANGED=1
+            fi
+
+            # 2. caching=false → true  (enable build cache for speed)
+            if grep -q "^org\.gradle\.caching\s*=\s*false" "$GP"; then
+              sed -i 's/^org\.gradle\.caching\s*=\s*false/org.gradle.caching=true/' "$GP"
+              echo "  ✔ caching: false → true"
+              CHANGED=1
+            fi
+
+            # 3. configuration-cache=true → false  (unstable on fresh CI runners)
+            if grep -q "^org\.gradle\.configuration-cache\s*=\s*true" "$GP"; then
+              sed -i 's/^org\.gradle\.configuration-cache\s*=\s*true/org.gradle.configuration-cache=false/' "$GP"
+              echo "  ✔ configuration-cache: true → false"
+              CHANGED=1
+            fi
+
+            # 4. Remove AIDE / AndroidIDE / Termux hardcoded java.home path
+            if grep -q "^org\.gradle\.java\.home\s*=" "$GP"; then
+              sed -i 's|^org\.gradle\.java\.home\s*=.*|# org.gradle.java.home removed — AIDE path not valid on CI|' "$GP"
+              echo "  ✔ org.gradle.java.home — removed (AIDE path)"
+              CHANGED=1
+            fi
+
+            # 5. Remove AIDE / Termux hardcoded aapt2 override path
+            if grep -q "^android\.aapt2FromMavenOverride\s*=" "$GP"; then
+              sed -i 's|^android\.aapt2FromMavenOverride\s*=.*|# android.aapt2FromMavenOverride removed — AIDE path not valid on CI|' "$GP"
+              echo "  ✔ android.aapt2FromMavenOverride — removed (AIDE path)"
+              CHANGED=1
+            fi
+
+            # 6. Remove AIDE log-sender flag (harmless but noisy)
+            if grep -q "^android\.injected\.logSender\.enable\s*=" "$GP"; then
+              sed -i 's|^android\.injected\.logSender\.enable\s*=.*|# android.injected.logSender.enable removed — AIDE only|' "$GP"
+              echo "  ✔ android.injected.logSender.enable — removed (AIDE only)"
+              CHANGED=1
+            fi
+
+            if [ "$CHANGED" -eq 0 ]; then
+              echo "  (no changes needed)"
+            fi
+          done
+
       # ── 4. Detect project type ───────────────────────────────────────────────
       - name: Detect project type
         id: detect

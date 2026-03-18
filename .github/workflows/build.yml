@@ -260,17 +260,93 @@ jobs:
         if: steps.detect.outputs.type == 'reactnative'
         working-directory: /tmp/project
         run: |
-          npm install
-          # Patch outdated compile() → implementation() in any node_modules build.gradle
-          find node_modules -name "build.gradle" -exec sed -i \
-            -e 's/\bcompile(\(.*react-native.*\)/implementation(\1/g' \
-            -e 's/\bcompile(\(.*\)$/implementation(\1/g' \
-            {} + 2>/dev/null || true
+          npm install --legacy-peer-deps
+
+          # ── Android compatibility patches ────────────────────────────────────
+          echo "Patching node_modules build.gradle files..."
+          find node_modules -name "build.gradle" ! -path "*/build/*" \
+            -exec sed -i -E \
+              -e 's/\btestCompile\b/testImplementation/g' \
+              -e 's/\bandroidTestCompile\b/androidTestImplementation/g' \
+              -e 's/\bcompile\b/implementation/g' \
+              -e 's/\bprovided\b/compileOnly/g' \
+              -e 's/\bapt\b/annotationProcessor/g' \
+              -e 's/compileSdkVersion [12][0-9]/compileSdkVersion 33/g' \
+              -e 's/targetSdkVersion [12][0-9]/targetSdkVersion 33/g' \
+            {} \; 2>/dev/null || true
+
+          echo "Patching AndroidX imports in node_modules Java/Kotlin sources..."
+          find node_modules -path "*/src/main/java/*" \( -name "*.java" -o -name "*.kt" \) \
+            ! -path "*/build/*" -exec sed -i \
+              -e 's|import android\.support\.annotation\.|import androidx.annotation.|g' \
+              -e 's|import android\.support\.v4\.app\.|import androidx.|g' \
+              -e 's|import android\.support\.v4\.content\.|import androidx.core.content.|g' \
+              -e 's|import android\.support\.v4\.util\.|import androidx.collection.|g' \
+              -e 's|import android\.support\.v4\.|import androidx.legacy.v4.|g' \
+              -e 's|import android\.support\.v7\.app\.|import androidx.appcompat.app.|g' \
+              -e 's|import android\.support\.v7\.|import androidx.appcompat.|g' \
+              -e 's|import android\.support\.design\.|import com.google.android.material.|g' \
+            {} \; 2>/dev/null || true
+
+          echo "Running jetifier..."
+          npx jetify 2>/dev/null || true
+
+          # ── Strip AndroidIDE overrides + boost Gradle JVM ────────────────────
+          ANDROID_DIR=android
+          PROPS="$ANDROID_DIR/gradle.properties"
+          if [ -f "$PROPS" ]; then
+            sed -i '/org\.gradle\.java\.home\s*=/d' "$PROPS" 2>/dev/null || true
+            sed -i '/android\.aapt2FromMavenOverride\s*=/d' "$PROPS" 2>/dev/null || true
+            sed -i '/com\.itsaky\.androidide/d' "$PROPS" 2>/dev/null || true
+            sed -i '/\/data\/\(user\|data\)\/[0-9]/d' "$PROPS" 2>/dev/null || true
+          fi
+          for KEY_VAL in \
+            "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError" \
+            "org.gradle.daemon=false" \
+            "org.gradle.parallel=true" \
+            "android.useAndroidX=true" \
+            "android.enableJetifier=true"; do
+            KEY="${KEY_VAL%%=*}"
+            grep -q "^${KEY}=" "$PROPS" 2>/dev/null || echo "$KEY_VAL" >> "$PROPS"
+          done
+
+          # ── Restore missing gradle-wrapper.jar ───────────────────────────────
+          WRAPPER_JAR="$ANDROID_DIR/gradle/wrapper/gradle-wrapper.jar"
+          if [ ! -f "$WRAPPER_JAR" ]; then
+            echo "gradle-wrapper.jar missing — downloading..."
+            mkdir -p "$ANDROID_DIR/gradle/wrapper"
+            curl -fsSL -o "$WRAPPER_JAR" \
+              https://github.com/gradle/gradle/raw/v8.5.0/gradle/wrapper/gradle-wrapper.jar || true
+          fi
+
+          # ── Upgrade Gradle wrapper if too old for Java 17 (<7.3) ─────────────
+          WRAPPER_PROPS="$ANDROID_DIR/gradle/wrapper/gradle-wrapper.properties"
+          if [ -f "$WRAPPER_PROPS" ]; then
+            GRAD_VER=$(grep -oP 'gradle-\K[\d.]+(?=-(?:bin|all)\.zip)' "$WRAPPER_PROPS" | head -1)
+            GRAD_MAJOR=$(echo "$GRAD_VER" | cut -d. -f1)
+            GRAD_MINOR=$(echo "$GRAD_VER" | cut -d. -f2)
+            if [ -n "$GRAD_MAJOR" ] && { [ "$GRAD_MAJOR" -lt 7 ] || { [ "$GRAD_MAJOR" -eq 7 ] && [ "$GRAD_MINOR" -lt 3 ]; }; }; then
+              echo "Gradle $GRAD_VER too old for Java 17 — upgrading to 7.6.4"
+              sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-7.6.4-bin.zip|' "$WRAPPER_PROPS"
+            fi
+          fi
+
+          # ── Fix duplicate .so conflict ────────────────────────────────────────
+          APP_BG="$ANDROID_DIR/app/build.gradle"
+          if [ -f "$APP_BG" ] && ! grep -q "pickFirst" "$APP_BG"; then
+            if grep -q "packagingOptions" "$APP_BG"; then
+              sed -i "s/packagingOptions\s*{/packagingOptions {\n        pickFirst 'lib\/**\/*.so'/" "$APP_BG" || true
+            else
+              sed -i "s/android\s*{/android {\n    packagingOptions {\n        pickFirst 'lib\/**\/*.so'\n    }/" "$APP_BG" || true
+            fi
+          fi
+
           cp /tmp/key.properties android/key.properties
           cp /tmp/release.keystore android/app/release.keystore
           cd android
           chmod +x gradlew
-          ./gradlew assemble$(echo "$BUILD_MODE" | sed 's/.*/\u&/') --no-daemon
+          ./gradlew assemble$(echo "$BUILD_MODE" | sed 's/.*/\u&/') \
+            -PreactNativeArchitectures=arm64-v8a,armeabi-v7a --no-daemon
           cd ..
           APK=$(find android/app/build/outputs/apk -name "*.apk" | head -1)
           echo "BUILD_OUTPUT=$APK" >> $GITHUB_ENV
@@ -280,23 +356,95 @@ jobs:
         if: steps.detect.outputs.type == 'android' || steps.detect.outputs.type == 'unknown' || steps.detect.outputs.type == 'expo'
         working-directory: /tmp/project
         run: |
-          # Patch outdated compile() → implementation() in any node_modules build.gradle
-          # (covers old RN packages like react-native-ssh-sftp that use removed Gradle DSL)
-          find . -path "*/node_modules/*" -name "build.gradle" -exec sed -i \
-            -e 's/\bcompile(\(.*\)$/implementation(\1/g' \
-            -e 's/\bcompile \(.*\)$/implementation \1/g' \
-            {} + 2>/dev/null || true
+          # ── Android compatibility patches (node_modules) ─────────────────────
+          echo "Patching node_modules build.gradle files..."
+          find . -path "*/node_modules/*" -name "build.gradle" ! -path "*/build/*" \
+            -exec sed -i -E \
+              -e 's/\btestCompile\b/testImplementation/g' \
+              -e 's/\bandroidTestCompile\b/androidTestImplementation/g' \
+              -e 's/\bcompile\b/implementation/g' \
+              -e 's/\bprovided\b/compileOnly/g' \
+              -e 's/\bapt\b/annotationProcessor/g' \
+              -e 's/compileSdkVersion [12][0-9]/compileSdkVersion 33/g' \
+              -e 's/targetSdkVersion [12][0-9]/targetSdkVersion 33/g' \
+            {} \; 2>/dev/null || true
 
-          # Find gradlew anywhere in the tree (excluding node_modules)
+          echo "Patching AndroidX imports in node_modules Java/Kotlin sources..."
+          find . -path "*/node_modules/*" -path "*/src/main/java/*" \
+            \( -name "*.java" -o -name "*.kt" \) ! -path "*/build/*" \
+            -exec sed -i \
+              -e 's|import android\.support\.annotation\.|import androidx.annotation.|g' \
+              -e 's|import android\.support\.v4\.app\.|import androidx.|g' \
+              -e 's|import android\.support\.v4\.content\.|import androidx.core.content.|g' \
+              -e 's|import android\.support\.v4\.util\.|import androidx.collection.|g' \
+              -e 's|import android\.support\.v4\.|import androidx.legacy.v4.|g' \
+              -e 's|import android\.support\.v7\.app\.|import androidx.appcompat.app.|g' \
+              -e 's|import android\.support\.v7\.|import androidx.appcompat.|g' \
+              -e 's|import android\.support\.design\.|import com.google.android.material.|g' \
+            {} \; 2>/dev/null || true
+
+          echo "Running jetifier..."
+          npx jetify 2>/dev/null || true
+
+          # ── Find gradlew anywhere in the tree (excluding node_modules) ────────
           GRADLEW_PATH=$(find . -name "gradlew" -not -path "*/node_modules/*" | head -1)
           if [ -z "$GRADLEW_PATH" ]; then
-            echo "ERROR: No gradlew found in project. Make sure your ZIP contains a valid Android project."
+            echo "ERROR: No gradlew found. Make sure your ZIP contains a valid Android project."
             exit 1
           fi
           GRADLE_DIR=$(dirname "$GRADLEW_PATH")
           echo "Found gradlew at: $GRADLEW_PATH (dir: $GRADLE_DIR)"
 
-          # Copy key.properties next to gradlew
+          # ── Strip AndroidIDE overrides + boost Gradle JVM ────────────────────
+          PROPS="$GRADLE_DIR/gradle.properties"
+          if [ -f "$PROPS" ]; then
+            sed -i '/org\.gradle\.java\.home\s*=/d' "$PROPS" 2>/dev/null || true
+            sed -i '/android\.aapt2FromMavenOverride\s*=/d' "$PROPS" 2>/dev/null || true
+            sed -i '/com\.itsaky\.androidide/d' "$PROPS" 2>/dev/null || true
+            sed -i '/\/data\/\(user\|data\)\/[0-9]/d' "$PROPS" 2>/dev/null || true
+          fi
+          for KEY_VAL in \
+            "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError" \
+            "org.gradle.daemon=false" \
+            "org.gradle.parallel=true" \
+            "android.useAndroidX=true" \
+            "android.enableJetifier=true"; do
+            KEY="${KEY_VAL%%=*}"
+            grep -q "^${KEY}=" "$PROPS" 2>/dev/null || echo "$KEY_VAL" >> "$PROPS"
+          done
+
+          # ── Restore missing gradle-wrapper.jar ───────────────────────────────
+          WRAPPER_JAR="$GRADLE_DIR/gradle/wrapper/gradle-wrapper.jar"
+          if [ ! -f "$WRAPPER_JAR" ]; then
+            echo "gradle-wrapper.jar missing — downloading..."
+            mkdir -p "$GRADLE_DIR/gradle/wrapper"
+            curl -fsSL -o "$WRAPPER_JAR" \
+              https://github.com/gradle/gradle/raw/v8.5.0/gradle/wrapper/gradle-wrapper.jar || true
+          fi
+
+          # ── Upgrade Gradle wrapper if too old for Java 17 (<7.3) ─────────────
+          WRAPPER_PROPS="$GRADLE_DIR/gradle/wrapper/gradle-wrapper.properties"
+          if [ -f "$WRAPPER_PROPS" ]; then
+            GRAD_VER=$(grep -oP 'gradle-\K[\d.]+(?=-(?:bin|all)\.zip)' "$WRAPPER_PROPS" | head -1)
+            GRAD_MAJOR=$(echo "$GRAD_VER" | cut -d. -f1)
+            GRAD_MINOR=$(echo "$GRAD_VER" | cut -d. -f2)
+            if [ -n "$GRAD_MAJOR" ] && { [ "$GRAD_MAJOR" -lt 7 ] || { [ "$GRAD_MAJOR" -eq 7 ] && [ "$GRAD_MINOR" -lt 3 ]; }; }; then
+              echo "Gradle $GRAD_VER too old for Java 17 — upgrading wrapper to 7.6.4"
+              sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-7.6.4-bin.zip|' "$WRAPPER_PROPS"
+            fi
+          fi
+
+          # ── Fix duplicate .so conflict ────────────────────────────────────────
+          APP_BG="$GRADLE_DIR/app/build.gradle"
+          if [ -f "$APP_BG" ] && ! grep -q "pickFirst" "$APP_BG"; then
+            if grep -q "packagingOptions" "$APP_BG"; then
+              sed -i "s/packagingOptions\s*{/packagingOptions {\n        pickFirst 'lib\/**\/*.so'/" "$APP_BG" || true
+            else
+              sed -i "s/android\s*{/android {\n    packagingOptions {\n        pickFirst 'lib\/**\/*.so'\n    }/" "$APP_BG" || true
+            fi
+          fi
+
+          # Copy key.properties
           cp /tmp/key.properties "$GRADLE_DIR/key.properties" 2>/dev/null || true
           cp /tmp/key.properties "$GRADLE_DIR/../key.properties" 2>/dev/null || true
 

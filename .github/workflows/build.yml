@@ -165,7 +165,7 @@ jobs:
         if: steps.detect.outputs.type == 'reactnative' || steps.detect.outputs.type == 'expo'
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
 
       # ── 6. Set up Android SDK ────────────────────────────────────────────────
       - name: Set up Android SDK

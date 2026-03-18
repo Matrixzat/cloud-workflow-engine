@@ -194,6 +194,7 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
+            ~/.gradle/build-cache
           key: gradle-${{ runner.os }}-v2
           restore-keys: |
             gradle-${{ runner.os }}-
@@ -337,6 +338,7 @@ jobs:
           for KEY_VAL in \
             "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError" \
             "org.gradle.daemon=false" \
+            "org.gradle.caching=true" \
             "android.useAndroidX=true" \
             "android.enableJetifier=true"; do
             KEY="${KEY_VAL%%=*}"
@@ -441,6 +443,7 @@ jobs:
           for KEY_VAL in \
             "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError" \
             "org.gradle.daemon=false" \
+            "org.gradle.caching=true" \
             "android.useAndroidX=true" \
             "android.enableJetifier=true"; do
             KEY="${KEY_VAL%%=*}"

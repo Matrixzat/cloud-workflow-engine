@@ -1,0 +1,286 @@
+name: Cloud Build Engine — Universal APK Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: 'App display name'
+        required: true
+        default: 'My App'
+      package_name:
+        description: 'Android package name (e.g. com.example.app)'
+        required: true
+        default: 'com.example.app'
+      source_url:
+        description: 'Source ZIP URL, GitHub repo URL, or Google Drive share link'
+        required: true
+      flutter_version:
+        description: 'Flutter version (only used for Flutter projects)'
+        required: false
+        default: '3.29.1'
+      build_mode:
+        description: 'Build mode: release | debug | profile'
+        required: false
+        default: 'release'
+      cleanup_url:
+        description: 'Secret delete URL — file is removed from host immediately after download'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    name: Build ${{ inputs.app_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      APP_NAME:     ${{ inputs.app_name }}
+      PACKAGE_NAME: ${{ inputs.package_name }}
+      SOURCE_URL:   ${{ inputs.source_url }}
+      FLUTTER_VER:  ${{ inputs.flutter_version }}
+      BUILD_MODE:   ${{ inputs.build_mode }}
+
+    steps:
+
+      # ── 1. System dependencies ───────────────────────────────────────────────
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            unzip wget curl jq python3 nodejs npm \
+            openjdk-17-jdk-headless apksigner zipalign
+          java -version
+
+      # ── 2. Download source ───────────────────────────────────────────────────
+      - name: Download source code
+        run: |
+          mkdir -p /tmp/source_raw /tmp/project
+          RAW_URL="${SOURCE_URL}"
+
+          # Google Drive share link
+          if echo "$RAW_URL" | grep -q "drive.google.com/file/d/"; then
+            FILE_ID=$(echo "$RAW_URL" | sed 's|.*drive.google.com/file/d/\([^/]*\).*|\1|')
+            RAW_URL="https://drive.google.com/uc?export=download&confirm=t&id=${FILE_ID}"
+            echo "Converted Drive link → $RAW_URL"
+          fi
+
+          # GitHub repo URL (not ending in .zip)
+          if echo "$RAW_URL" | grep -qE "^https://github.com/[^/]+/[^/]+(\.git)?$"; then
+            CLEAN=$(echo "$RAW_URL" | sed 's|\.git$||')
+            # try main then master
+            RAW_URL="${CLEAN}/archive/refs/heads/main.zip"
+            if ! wget --spider -q "$RAW_URL" 2>/dev/null; then
+              RAW_URL="${CLEAN}/archive/refs/heads/master.zip"
+            fi
+            echo "GitHub repo → $RAW_URL"
+          fi
+
+          echo "Downloading: $RAW_URL"
+          wget -q --content-disposition -O /tmp/source_raw/source.zip "$RAW_URL"
+          echo "Downloaded: $(du -sh /tmp/source_raw/source.zip | cut -f1)"
+
+      # ── Delete from temp host immediately after download ─────────────────────
+      - name: Delete source from temporary host
+        if: ${{ inputs.cleanup_url != '' }}
+        run: |
+          echo "Deleting source file from temporary host…"
+          curl -s -X DELETE "${{ inputs.cleanup_url }}" && echo "Deleted successfully" || echo "Delete skipped (may have already expired)"
+
+      # ── 3. Extract source ────────────────────────────────────────────────────
+      - name: Extract source code
+        run: |
+          unzip -q /tmp/source_raw/source.zip -d /tmp/source_raw/extracted
+          TOP=$(ls /tmp/source_raw/extracted/ | head -1)
+          if [ -d "/tmp/source_raw/extracted/$TOP" ] && [ "$(ls /tmp/source_raw/extracted/ | wc -l)" -eq 1 ]; then
+            mv "/tmp/source_raw/extracted/$TOP"/* /tmp/project/
+          else
+            mv /tmp/source_raw/extracted/* /tmp/project/
+          fi
+          echo "Project contents:"; ls /tmp/project/
+
+      # ── 4. Detect project type ───────────────────────────────────────────────
+      - name: Detect project type
+        id: detect
+        working-directory: /tmp/project
+        run: |
+          if [ -f "pubspec.yaml" ]; then
+            echo "type=flutter" >> $GITHUB_OUTPUT
+            echo "Project type: FLUTTER"
+          elif [ -f "package.json" ] && [ -d "android" ]; then
+            echo "type=reactnative" >> $GITHUB_OUTPUT
+            echo "Project type: REACT NATIVE"
+          elif [ -f "android/app/build.gradle" ] || [ -f "app/build.gradle" ]; then
+            echo "type=android" >> $GITHUB_OUTPUT
+            echo "Project type: NATIVE ANDROID (Java/Kotlin)"
+          elif [ -f "build.gradle" ]; then
+            echo "type=android" >> $GITHUB_OUTPUT
+            echo "Project type: NATIVE ANDROID (root gradle)"
+          else
+            echo "type=unknown" >> $GITHUB_OUTPUT
+            echo "WARNING: Could not detect project type, attempting generic Android build"
+          fi
+
+      # ── 5a. Set up Flutter (Flutter projects only) ───────────────────────────
+      - name: Set up Flutter
+        if: steps.detect.outputs.type == 'flutter'
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter_version }}
+          channel: stable
+          cache: true
+
+      # ── 5b. Set up Node.js (React Native projects only) ──────────────────────
+      - name: Set up Node.js for React Native
+        if: steps.detect.outputs.type == 'reactnative'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      # ── 6. Set up Android SDK ────────────────────────────────────────────────
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: latest
+          accept-android-sdk-licenses: true
+          packages: >
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
+
+      - name: Accept Android licenses
+        run: yes | flutter doctor --android-licenses 2>/dev/null || yes | sdkmanager --licenses 2>/dev/null || true
+
+      # ── 7. Patch package name & app name ─────────────────────────────────────
+      - name: Patch package name and app name
+        working-directory: /tmp/project
+        run: |
+          # Patch AndroidManifest
+          find . -name "AndroidManifest.xml" | while read f; do
+            OLD=$(grep -oP 'package="\K[^"]+' "$f" | head -1)
+            if [ -n "$OLD" ] && [ "$OLD" != "$PACKAGE_NAME" ]; then
+              sed -i "s|package=\"${OLD}\"|package=\"${PACKAGE_NAME}\"|g" "$f"
+              echo "Patched $f: $OLD → $PACKAGE_NAME"
+            fi
+          done
+          # Patch build.gradle applicationId
+          find . -name "build.gradle" | while read f; do
+            sed -i "s|applicationId \".*\"|applicationId \"${PACKAGE_NAME}\"|g" "$f"
+            sed -i "s|applicationId '.*'|applicationId '${PACKAGE_NAME}'|g" "$f"
+          done
+          # Patch app name in strings.xml
+          find . -name "strings.xml" | while read f; do
+            sed -i "s|<string name=\"app_name\">.*</string>|<string name=\"app_name\">${APP_NAME}</string>|g" "$f"
+          done
+          echo "Patching done ✓"
+
+      # ── 8. Set up keystore (embedded — no GitHub Secrets needed) ─────────────
+      - name: Set up signing keystore
+        run: |
+          KEYSTORE_B64="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"
+          echo "$KEYSTORE_B64" | base64 -d > /tmp/release.keystore
+          echo "storePassword=CloudBuild@Matrix2026" >  /tmp/key.properties
+          echo "keyPassword=CloudBuild@Matrix2026"   >> /tmp/key.properties
+          echo "keyAlias=cbe_release_key"            >> /tmp/key.properties
+          echo "storeFile=/tmp/release.keystore"     >> /tmp/key.properties
+          echo "Keystore ready ✓"
+
+      # ── 9. Fix common Gradle issues ──────────────────────────────────────────
+      - name: Auto-fix Gradle issues
+        working-directory: /tmp/project
+        run: |
+          find . -name "build.gradle" | xargs sed -i \
+            -e "s|compile '|implementation '|g" \
+            -e "s|testCompile '|testImplementation '|g" \
+            -e "s|provided '|compileOnly '|g" \
+            -e "s|compileSdkVersion [0-9]\{1,2\}|compileSdkVersion 35|g" \
+            -e "s|targetSdkVersion [0-9]\{1,2\}|targetSdkVersion 35|g" 2>/dev/null || true
+          echo "Gradle fixes applied ✓"
+
+      # ── 10a. BUILD: Flutter ──────────────────────────────────────────────────
+      - name: Build Flutter APK
+        if: steps.detect.outputs.type == 'flutter'
+        working-directory: /tmp/project
+        run: |
+          cp /tmp/key.properties android/key.properties
+          # Patch build.gradle for signing if needed
+          if ! grep -q "key.properties" android/app/build.gradle; then
+            sed -i '/^android {/i def kp = new Properties(); def kf = rootProject.file("key.properties"); if (kf.exists()) { kp.load(new FileInputStream(kf)) }' android/app/build.gradle
+            sed -i 's/buildTypes {/signingConfigs { release { keyAlias kp["keyAlias"]; keyPassword kp["keyPassword"]; storeFile kp["storeFile"] ? file(kp["storeFile"]) : null; storePassword kp["storePassword"] } }\n    buildTypes {/' android/app/build.gradle
+            sed -i '/release {/a\            signingConfig signingConfigs.release' android/app/build.gradle
+          fi
+          flutter pub get
+          flutter build apk --$BUILD_MODE --target-platform android-arm64 --no-pub
+          echo "BUILD_OUTPUT=/tmp/project/build/app/outputs/flutter-apk/app-${BUILD_MODE}.apk" >> $GITHUB_ENV
+
+      # ── 10b. BUILD: React Native ─────────────────────────────────────────────
+      - name: Build React Native APK
+        if: steps.detect.outputs.type == 'reactnative'
+        working-directory: /tmp/project
+        run: |
+          npm install
+          cp /tmp/key.properties android/key.properties
+          cp /tmp/release.keystore android/app/release.keystore
+          cd android
+          chmod +x gradlew
+          ./gradlew assemble$(echo "$BUILD_MODE" | sed 's/.*/\u&/')
+          cd ..
+          APK=$(find android/app/build/outputs/apk -name "*.apk" | head -1)
+          echo "BUILD_OUTPUT=$APK" >> $GITHUB_ENV
+
+      # ── 10c. BUILD: Native Android (Java/Kotlin) ─────────────────────────────
+      - name: Build Native Android APK
+        if: steps.detect.outputs.type == 'android' || steps.detect.outputs.type == 'unknown'
+        working-directory: /tmp/project
+        run: |
+          cp /tmp/key.properties android/key.properties 2>/dev/null || cp /tmp/key.properties key.properties || true
+          GRADLE_DIR="."
+          [ -f "android/gradlew" ] && GRADLE_DIR="android"
+          cd "$GRADLE_DIR"
+          chmod +x gradlew
+          ./gradlew assemble$(echo "$BUILD_MODE" | sed 's/.*/\u&/') --no-daemon
+          cd -
+          APK=$(find . -name "*.apk" -not -path "*/intermediates/*" | head -1)
+          echo "BUILD_OUTPUT=$(realpath $APK)" >> $GITHUB_ENV
+
+      # ── 11. Sign APK (if not already signed) ─────────────────────────────────
+      - name: Sign APK
+        run: |
+          INPUT="${BUILD_OUTPUT}"
+          ALIGNED="/tmp/aligned.apk"
+          SIGNED="/tmp/signed_final.apk"
+          zipalign -v -p 4 "$INPUT" "$ALIGNED" 2>/dev/null || cp "$INPUT" "$ALIGNED"
+          apksigner sign \
+            --ks /tmp/release.keystore \
+            --ks-pass pass:CloudBuild@Matrix2026 \
+            --key-pass pass:CloudBuild@Matrix2026 \
+            --ks-key-alias cbe_release_key \
+            --out "$SIGNED" \
+            "$ALIGNED"
+          apksigner verify "$SIGNED" && echo "APK signed and verified ✓"
+          SAFE_NAME=$(echo "$APP_NAME" | tr ' ' '_' | tr -dc '[:alnum:]_-')
+          FINAL="/tmp/${SAFE_NAME}_${BUILD_MODE}.apk"
+          mv "$SIGNED" "$FINAL"
+          echo "APK_PATH=$FINAL" >> $GITHUB_ENV
+          echo "APK_NAME=${SAFE_NAME}_${BUILD_MODE}.apk" >> $GITHUB_ENV
+          echo "Final APK: $(du -sh $FINAL | cut -f1)"
+
+      # ── 12. Upload artifact ───────────────────────────────────────────────────
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APK_NAME }}
+          path: ${{ env.APK_PATH }}
+          retention-days: 14
+
+      # ── 13. Build summary ─────────────────────────────────────────────────────
+      - name: Build summary
+        if: always()
+        run: |
+          echo "## Cloud Build Engine — Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| App | $APP_NAME |" >> $GITHUB_STEP_SUMMARY
+          echo "| Package | $PACKAGE_NAME |" >> $GITHUB_STEP_SUMMARY
+          echo "| Type | ${{ steps.detect.outputs.type }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Mode | $BUILD_MODE |" >> $GITHUB_STEP_SUMMARY
+          echo "| APK | $APK_NAME |" >> $GITHUB_STEP_SUMMARY

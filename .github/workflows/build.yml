@@ -367,10 +367,9 @@ jobs:
           cp /tmp/release.keystore android/app/release.keystore
           cd android
           chmod +x gradlew
-          ./gradlew assemble$(echo "$BUILD_MODE" | sed 's/.*/\\u&/') \
+          ./gradlew assemble$(echo "$BUILD_MODE" | sed 's/.*/\\\u&/') \
             -PreactNativeArchitectures=arm64-v8a \
-            -Dkotlin.compiler.execution.strategy=in-process \
-            --no-daemon --parallel
+            --no-daemon
           cd ..
           APK=$(find android/app/build/outputs/apk -name "*.apk" | head -1)
           echo "BUILD_OUTPUT=$APK" >> $GITHUB_ENV
@@ -477,8 +476,7 @@ jobs:
           chmod +x gradlew
           ./gradlew assemble$(echo "$BUILD_MODE" | sed 's/.*/\u&/') \
             -PreactNativeArchitectures=arm64-v8a \
-            -Dkotlin.compiler.execution.strategy=in-process \
-            --no-daemon --parallel
+            --no-daemon
           cd -
           APK=$(find . -name "*.apk" -not -path "*/intermediates/*" | head -1)
           echo "BUILD_OUTPUT=$(realpath $APK)" >> $GITHUB_ENV

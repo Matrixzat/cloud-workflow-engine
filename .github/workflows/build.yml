@@ -226,10 +226,13 @@ jobs:
           elif [ -f "package.json" ] && ([ -f "app.json" ] || [ -f "expo-env.d.ts" ] || grep -q '"expo"' package.json 2>/dev/null); then
             echo "type=expo" >> $GITHUB_OUTPUT
             echo "Project type: EXPO (React Native — needs prebuild)"
+          elif [ -d "unityLibrary" ] || [ -d "launcher" ] && grep -q "unityLibrary" settings.gradle 2>/dev/null || grep -q "unityLibrary" settings.gradle.kts 2>/dev/null; then
+            echo "type=android" >> $GITHUB_OUTPUT
+            echo "Project type: UNITY ANDROID EXPORT (built as native Gradle)"
           elif [ -f "android/app/build.gradle" ] || [ -f "app/build.gradle" ]; then
             echo "type=android" >> $GITHUB_OUTPUT
             echo "Project type: NATIVE ANDROID (Java/Kotlin)"
-          elif [ -f "build.gradle" ] || [ -f "settings.gradle" ]; then
+          elif [ -f "build.gradle" ] || [ -f "settings.gradle" ] || [ -f "build.gradle.kts" ] || [ -f "settings.gradle.kts" ]; then
             echo "type=android" >> $GITHUB_OUTPUT
             echo "Project type: NATIVE ANDROID (root gradle)"
           else

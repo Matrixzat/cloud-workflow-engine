@@ -1,6 +1,8 @@
 name: Cloud Build Engine — Universal APK Builder
 
 on:
+  repository_dispatch:
+    types: [build-request]
   workflow_dispatch:
     inputs:
       app_name:
@@ -38,10 +40,10 @@ jobs:
     timeout-minutes: 90
 
     env:
-      APP_NAME:     ${{ inputs.app_name }}
-      PACKAGE_NAME: ${{ inputs.package_name }}
-      FLUTTER_VER:  ${{ inputs.flutter_version }}
-      BUILD_MODE:   ${{ inputs.build_mode }}
+      APP_NAME:     ${{ inputs.app_name || github.event.client_payload.app_name }}
+      PACKAGE_NAME: ${{ inputs.package_name || github.event.client_payload.package_name }}
+      FLUTTER_VER:  ${{ inputs.flutter_version || github.event.client_payload.flutter_version }}
+      BUILD_MODE:   ${{ inputs.build_mode || github.event.client_payload.build_mode }}
 
     steps:
 
@@ -70,13 +72,13 @@ jobs:
           curl -L -s \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/octet-stream" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/assets/${{ inputs.asset_id }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/assets/${{ inputs.asset_id || github.event.client_payload.asset_id }}" \
             -o /tmp/source_raw/source.zip
           echo "Source downloaded: $(du -sh /tmp/source_raw/source.zip | cut -f1)"
 
       # ── Delete source asset, release, and tag immediately after download ───────
       - name: Delete source asset, release and tag from GitHub
-        if: ${{ inputs.asset_id != '' }}
+        if: ${{ inputs.asset_id != '' || github.event.client_payload.asset_id != '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -86,8 +88,8 @@ jobs:
           # 1. Delete the specific release asset
           CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
             -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.v3+json" \
-            "$API/releases/assets/${{ inputs.asset_id }}")
-          echo "Asset ${{ inputs.asset_id }} delete → $CODE"
+            "$API/releases/assets/${{ inputs.asset_id || github.event.client_payload.asset_id }}")
+          echo "Asset ${{ inputs.asset_id || github.event.client_payload.asset_id }} delete → $CODE"
 
           # 2. Find and delete the build-queue release
           RELEASE_ID=$(curl -s \
@@ -664,7 +666,7 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: apk-${{ inputs.job_id }}
+          name: apk-${{ inputs.job_id || github.event.client_payload.job_id }}
           path: ${{ env.APK_PATH }}
 
       # ── 13. Build summary ─────────────────────────────────────────────────────
@@ -695,7 +697,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_ID:   ${{ github.run_id }}
-          JOB_ID:   ${{ inputs.job_id }}
+          JOB_ID:   ${{ inputs.job_id || github.event.client_payload.job_id }}
           REPO:     ${{ github.repository }}
         run: |
           API="https://api.github.com/repos/${REPO}"

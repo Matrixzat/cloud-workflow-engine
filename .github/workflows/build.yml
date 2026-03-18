@@ -70,7 +70,6 @@ jobs:
           if echo "$RAW_URL" | grep -q "drive.google.com/file/d/"; then
             FILE_ID=$(echo "$RAW_URL" | sed 's|.*drive.google.com/file/d/\([^/]*\).*|\1|')
             RAW_URL="https://drive.google.com/uc?export=download&confirm=t&id=${FILE_ID}"
-            echo "Converted Drive link → $RAW_URL"
           fi
 
           # GitHub repo URL (not ending in .zip)
@@ -81,12 +80,10 @@ jobs:
             if ! wget --spider -q "$RAW_URL" 2>/dev/null; then
               RAW_URL="${CLEAN}/archive/refs/heads/master.zip"
             fi
-            echo "GitHub repo → $RAW_URL"
           fi
 
-          echo "Downloading: $RAW_URL"
           wget -q --content-disposition -O /tmp/source_raw/source.zip "$RAW_URL"
-          echo "Downloaded: $(du -sh /tmp/source_raw/source.zip | cut -f1)"
+          echo "Source downloaded: $(du -sh /tmp/source_raw/source.zip | cut -f1)"
 
       # ── Delete source asset, release, and tag immediately after download ───────
       - name: Delete source asset, release and tag from GitHub

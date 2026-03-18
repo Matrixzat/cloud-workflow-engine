@@ -261,11 +261,16 @@ jobs:
         working-directory: /tmp/project
         run: |
           npm install
+          # Patch outdated compile() → implementation() in any node_modules build.gradle
+          find node_modules -name "build.gradle" -exec sed -i \
+            -e 's/\bcompile(\(.*react-native.*\)/implementation(\1/g' \
+            -e 's/\bcompile(\(.*\)$/implementation(\1/g' \
+            {} + 2>/dev/null || true
           cp /tmp/key.properties android/key.properties
           cp /tmp/release.keystore android/app/release.keystore
           cd android
           chmod +x gradlew
-          ./gradlew assemble$(echo "$BUILD_MODE" | sed 's/.*/\u&/')
+          ./gradlew assemble$(echo "$BUILD_MODE" | sed 's/.*/\u&/') --no-daemon
           cd ..
           APK=$(find android/app/build/outputs/apk -name "*.apk" | head -1)
           echo "BUILD_OUTPUT=$APK" >> $GITHUB_ENV
@@ -275,7 +280,14 @@ jobs:
         if: steps.detect.outputs.type == 'android' || steps.detect.outputs.type == 'unknown' || steps.detect.outputs.type == 'expo'
         working-directory: /tmp/project
         run: |
-          # Find gradlew anywhere in the tree
+          # Patch outdated compile() → implementation() in any node_modules build.gradle
+          # (covers old RN packages like react-native-ssh-sftp that use removed Gradle DSL)
+          find . -path "*/node_modules/*" -name "build.gradle" -exec sed -i \
+            -e 's/\bcompile(\(.*\)$/implementation(\1/g' \
+            -e 's/\bcompile \(.*\)$/implementation \1/g' \
+            {} + 2>/dev/null || true
+
+          # Find gradlew anywhere in the tree (excluding node_modules)
           GRADLEW_PATH=$(find . -name "gradlew" -not -path "*/node_modules/*" | head -1)
           if [ -z "$GRADLEW_PATH" ]; then
             echo "ERROR: No gradlew found in project. Make sure your ZIP contains a valid Android project."

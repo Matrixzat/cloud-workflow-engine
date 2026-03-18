@@ -96,7 +96,26 @@ jobs:
           else
             mv /tmp/source_raw/extracted/* /tmp/project/
           fi
-          echo "Project contents:"; ls /tmp/project/
+
+          # Auto-relocate: if no project marker at root, search up to 3 levels deep
+          if [ ! -f "/tmp/project/pubspec.yaml" ] && \
+             [ ! -f "/tmp/project/build.gradle" ] && \
+             [ ! -f "/tmp/project/settings.gradle" ] && \
+             [ ! -f "/tmp/project/package.json" ]; then
+            MARKER=$(find /tmp/project -maxdepth 4 \
+              \( -name "pubspec.yaml" -o -name "settings.gradle" -o -name "gradlew" \) \
+              ! -path "*/node_modules/*" ! -path "*/.dart_tool/*" | head -1)
+            if [ -n "$MARKER" ]; then
+              REAL_ROOT=$(dirname "$MARKER")
+              echo "Relocating project root from /tmp/project → $REAL_ROOT"
+              mkdir -p /tmp/project_real
+              cp -r "$REAL_ROOT"/. /tmp/project_real/
+              rm -rf /tmp/project
+              mv /tmp/project_real /tmp/project
+            fi
+          fi
+
+          echo "Project root contents:"; ls /tmp/project/
 
       # ── 4. Detect project type ───────────────────────────────────────────────
       - name: Detect project type
@@ -112,12 +131,21 @@ jobs:
           elif [ -f "android/app/build.gradle" ] || [ -f "app/build.gradle" ]; then
             echo "type=android" >> $GITHUB_OUTPUT
             echo "Project type: NATIVE ANDROID (Java/Kotlin)"
-          elif [ -f "build.gradle" ]; then
+          elif [ -f "build.gradle" ] || [ -f "settings.gradle" ]; then
             echo "type=android" >> $GITHUB_OUTPUT
             echo "Project type: NATIVE ANDROID (root gradle)"
           else
-            echo "type=unknown" >> $GITHUB_OUTPUT
-            echo "WARNING: Could not detect project type, attempting generic Android build"
+            # Last resort: search for pubspec.yaml or gradlew anywhere in the tree
+            if find . -maxdepth 3 -name "pubspec.yaml" | grep -q .; then
+              echo "type=flutter" >> $GITHUB_OUTPUT
+              echo "Project type: FLUTTER (deep search)"
+            elif find . -maxdepth 3 -name "gradlew" | grep -q .; then
+              echo "type=android" >> $GITHUB_OUTPUT
+              echo "Project type: NATIVE ANDROID (deep search)"
+            else
+              echo "type=unknown" >> $GITHUB_OUTPUT
+              echo "WARNING: Could not detect project type"
+            fi
           fi
 
       # ── 5a. Set up Flutter (Flutter projects only) ───────────────────────────
@@ -232,9 +260,19 @@ jobs:
         if: steps.detect.outputs.type == 'android' || steps.detect.outputs.type == 'unknown'
         working-directory: /tmp/project
         run: |
-          cp /tmp/key.properties android/key.properties 2>/dev/null || cp /tmp/key.properties key.properties || true
-          GRADLE_DIR="."
-          [ -f "android/gradlew" ] && GRADLE_DIR="android"
+          # Find gradlew anywhere in the tree
+          GRADLEW_PATH=$(find . -name "gradlew" -not -path "*/node_modules/*" | head -1)
+          if [ -z "$GRADLEW_PATH" ]; then
+            echo "ERROR: No gradlew found in project. Make sure your ZIP contains a valid Android project."
+            exit 1
+          fi
+          GRADLE_DIR=$(dirname "$GRADLEW_PATH")
+          echo "Found gradlew at: $GRADLEW_PATH (dir: $GRADLE_DIR)"
+
+          # Copy key.properties next to gradlew
+          cp /tmp/key.properties "$GRADLE_DIR/key.properties" 2>/dev/null || true
+          cp /tmp/key.properties "$GRADLE_DIR/../key.properties" 2>/dev/null || true
+
           cd "$GRADLE_DIR"
           chmod +x gradlew
           ./gradlew assemble$(echo "$BUILD_MODE" | sed 's/.*/\u&/') --no-daemon

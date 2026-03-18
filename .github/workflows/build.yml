@@ -45,7 +45,7 @@ jobs:
 
     steps:
 
-      # ── 1. System dependencies ───────────────────────────────────────────────
+      # ── 1. System dependencies ──���────────────────────────────────────────────
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
@@ -489,7 +489,7 @@ jobs:
             grep -q "^${KEY}=" "$PROPS" 2>/dev/null || echo "$KEY_VAL" >> "$PROPS"
           done
 
-          # ── Restore missing gradle-wrapper.jar ───────────────────────────────
+          # ── Restore missing gradle-wrapper.jar ─────────���─────────────────────
           WRAPPER_JAR="$ANDROID_DIR/gradle/wrapper/gradle-wrapper.jar"
           if [ ! -f "$WRAPPER_JAR" ]; then
             echo "gradle-wrapper.jar missing — downloading..."
@@ -666,6 +666,7 @@ jobs:
         with:
           name: apk-${{ inputs.job_id }}
           path: ${{ env.APK_PATH }}
+          retention-days: 1
 
       # ── 13. Build summary ─────────────────────────────────────────────────────
       - name: Build summary

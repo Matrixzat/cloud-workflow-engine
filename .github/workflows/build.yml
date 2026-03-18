@@ -178,6 +178,40 @@ jobs:
             fi
           done
 
+          # ── Patch local.properties (Flutter / React Native / Expo / Native) ──
+          # AIDE / AndroidIDE / Termux write hardcoded device paths here.
+          # The workflow sets the real sdk.dir and flutter.sdk later, so we just
+          # wipe any stale device paths now so Gradle never sees them.
+          find /tmp/project -name "local.properties" | while read LP; do
+            echo "── Scanning: $LP"
+            CHANGED=0
+
+            # sdk.dir pointing to AIDE / Termux storage
+            if grep -q "^sdk\.dir\s*=" "$LP"; then
+              sed -i 's|^sdk\.dir\s*=.*|# sdk.dir — cleared by CI (set automatically)|' "$LP"
+              echo "  ✔ sdk.dir — cleared (AIDE/Termux path)"
+              CHANGED=1
+            fi
+
+            # flutter.sdk pointing to AIDE / Termux storage (Flutter projects)
+            if grep -q "^flutter\.sdk\s*=" "$LP"; then
+              sed -i 's|^flutter\.sdk\s*=.*|# flutter.sdk — cleared by CI (set automatically)|' "$LP"
+              echo "  ✔ flutter.sdk — cleared (AIDE path)"
+              CHANGED=1
+            fi
+
+            # ndk.dir pointing to AIDE / Termux storage
+            if grep -q "^ndk\.dir\s*=" "$LP"; then
+              sed -i 's|^ndk\.dir\s*=.*|# ndk.dir — cleared by CI (set automatically by sdkmanager)|' "$LP"
+              echo "  ✔ ndk.dir — cleared (AIDE path)"
+              CHANGED=1
+            fi
+
+            if [ "$CHANGED" -eq 0 ]; then
+              echo "  (no changes needed)"
+            fi
+          done
+
       # ── 4. Detect project type ───────────────────────────────────────────────
       - name: Detect project type
         id: detect

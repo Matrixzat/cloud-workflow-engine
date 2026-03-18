@@ -72,10 +72,10 @@ jobs:
             RAW_URL="https://drive.google.com/uc?export=download&confirm=t&id=${FILE_ID}"
           fi
 
-          # GitHub repo URL (not ending in .zip)
-          if echo "$RAW_URL" | grep -qE "^https://github.com/[^/]+/[^/]+(\.git)?$"; then
+          # Repo URL without .zip — convert to archive link
+          if echo "$RAW_URL" | grep -qE "^https://[^/]+/[^/]+/[^/]+(\.git)?$" && \
+             ! echo "$RAW_URL" | grep -q "\.zip$"; then
             CLEAN=$(echo "$RAW_URL" | sed 's|\.git$||')
-            # try main then master
             RAW_URL="${CLEAN}/archive/refs/heads/main.zip"
             if ! wget --spider -q "$RAW_URL" 2>/dev/null; then
               RAW_URL="${CLEAN}/archive/refs/heads/master.zip"

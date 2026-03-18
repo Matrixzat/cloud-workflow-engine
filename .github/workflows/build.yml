@@ -22,8 +22,8 @@ on:
         description: 'Build mode: release | debug | profile'
         required: false
         default: 'release'
-      cleanup_url:
-        description: 'Secret delete URL — file is removed from host immediately after download'
+      asset_id:
+        description: 'GitHub Release asset ID — deleted immediately after source is downloaded'
         required: false
         default: ''
 
@@ -85,12 +85,18 @@ jobs:
           wget -q --content-disposition -O /tmp/source_raw/source.zip "$RAW_URL"
           echo "Downloaded: $(du -sh /tmp/source_raw/source.zip | cut -f1)"
 
-      # ── Delete from temp host immediately after download ─────────────────────
-      - name: Delete source from temporary host
-        if: ${{ inputs.cleanup_url != '' }}
+      # ── Delete release asset immediately after download ──────────────────────
+      - name: Delete source asset from GitHub Releases
+        if: ${{ inputs.asset_id != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Deleting source file from temporary host…"
-          curl -s -X DELETE "${{ inputs.cleanup_url }}" && echo "Deleted successfully" || echo "Delete skipped (may have already expired)"
+          echo "Deleting release asset ${{ inputs.asset_id }}…"
+          curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/assets/${{ inputs.asset_id }}" \
+          | grep -q "204" && echo "Asset deleted ✓" || echo "Delete returned non-204 (may already be gone)"
 
       # ── 3. Extract source ────────────────────────────────────────────────────
       - name: Extract source code

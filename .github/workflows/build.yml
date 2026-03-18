@@ -303,15 +303,11 @@ jobs:
         run: |
           # ── Write correct local.properties (Gradle reads this before Flutter can update it)
           FLUTTER_SDK_PATH=$(dirname $(dirname $(which flutter)))
+          ANDROID_SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
           mkdir -p android
-          cat > android/local.properties << EOF
-sdk.dir=${ANDROID_SDK_ROOT:-$ANDROID_HOME}
-flutter.sdk=$FLUTTER_SDK_PATH
-flutter.buildMode=$BUILD_MODE
-flutter.versionName=1.0.0
-flutter.versionCode=1
-EOF
-          echo "local.properties written: sdk.dir=${ANDROID_SDK_ROOT}, flutter.sdk=$FLUTTER_SDK_PATH"
+          printf "sdk.dir=%s\nflutter.sdk=%s\nflutter.buildMode=%s\nflutter.versionName=1.0.0\nflutter.versionCode=1\n" \
+            "$ANDROID_SDK" "$FLUTTER_SDK_PATH" "$BUILD_MODE" > android/local.properties
+          echo "local.properties written — sdk.dir=$ANDROID_SDK  flutter.sdk=$FLUTTER_SDK_PATH"
 
           # ── Patch build.gradle for signing if project doesn't already have a keystore configured
           if ! grep -q "key.properties\|storeFile\|matrix_hbc\|release.keystore" android/app/build.gradle; then

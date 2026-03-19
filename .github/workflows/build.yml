@@ -560,24 +560,14 @@ jobs:
               echo "Layer 4: networkSecurityConfig wired into AndroidManifest.xml ✓"
             fi
             # ── ProGuard: inject Activity keep rules (R8 code-shrinking fix) ─────
-            # R8 can silently remove MainActivity when minifyEnabled=true because
-            # user project ProGuard files may be absent or incomplete.
-            # Write a guaranteed keep file directly into the app module, then
-            # patch build.gradle to include it — regardless of what's in the ZIP.
+            # R8 silently removes MainActivity when minifyEnabled=true and project
+            # ProGuard files are absent or incomplete. Write a guaranteed keep file
+            # via base64-decode (safe in YAML block scalars) then wire into build.gradle.
             ARMOR_PRO="android/app/cbe_armor.pro"
-            mkdir -p "$(dirname $ARMOR_PRO)"
-            cat > "$ARMOR_PRO" << 'PGEOF'
-# App Armor injected rules — keep all Activity entry points so R8 cannot remove them
--keep public class * extends android.app.Activity { *; }
--keep public class * extends android.app.Application { *; }
--keep public class * extends androidx.appcompat.app.AppCompatActivity { *; }
--keep public class * extends io.flutter.embedding.android.FlutterActivity { *; }
--keep public class * extends io.flutter.embedding.android.FlutterFragmentActivity { *; }
--keepclassmembers public class * extends android.app.Activity { *; }
-PGEOF
+            mkdir -p "$(dirname "$ARMOR_PRO")"
+            echo "IyBBcHAgQXJtb3IgaW5qZWN0ZWQgcnVsZXMg4oCUIGtlZXAgYWxsIEFjdGl2aXR5IGVudHJ5IHBvaW50cyBzbyBSOCBjYW5ub3QgcmVtb3ZlIHRoZW0KLWtlZXAgcHVibGljIGNsYXNzICogZXh0ZW5kcyBhbmRyb2lkLmFwcC5BY3Rpdml0eSB7ICo7IH0KLWtlZXAgcHVibGljIGNsYXNzICogZXh0ZW5kcyBhbmRyb2lkLmFwcC5BcHBsaWNhdGlvbiB7ICo7IH0KLWtlZXAgcHVibGljIGNsYXNzICogZXh0ZW5kcyBhbmRyb2lkeC5hcHBjb21wYXQuYXBwLkFwcENvbXBhdEFjdGl2aXR5IHsgKjsgfQota2VlcCBwdWJsaWMgY2xhc3MgKiBleHRlbmRzIGlvLmZsdXR0ZXIuZW1iZWRkaW5nLmFuZHJvaWQuRmx1dHRlckFjdGl2aXR5IHsgKjsgfQota2VlcCBwdWJsaWMgY2xhc3MgKiBleHRlbmRzIGlvLmZsdXR0ZXIuZW1iZWRkaW5nLmFuZHJvaWQuRmx1dHRlckZyYWdtZW50QWN0aXZpdHkgeyAqOyB9Ci1rZWVwY2xhc3NtZW1iZXJzIHB1YmxpYyBjbGFzcyAqIGV4dGVuZHMgYW5kcm9pZC5hcHAuQWN0aXZpdHkgeyAqOyB9Cgo=" | base64 -d > "$ARMOR_PRO"
             BUILD_GRADLE=$(find android -name "build.gradle" -path "*/app/build.gradle" | head -1)
             if [ -n "$BUILD_GRADLE" ]; then
-              # Prepend cbe_armor.pro to the proguardFiles list (before getDefaultProguardFile)
               sed -i "s|proguardFiles |proguardFiles 'cbe_armor.pro', |" "$BUILD_GRADLE" || true
               echo "App Armor: Activity keep rules injected into build.gradle ✓"
             fi

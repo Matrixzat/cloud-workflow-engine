@@ -371,15 +371,38 @@ jobs:
           done
           echo "Patching done ✓"
 
-      # ── 8. Set up keystore (embedded — no external secrets needed) ───────────
+      # ── 8. Set up signing keystore ───────────────────────────────────────────
+      # Priority: user's own GitHub Secrets → embedded default
+      # Supported secret names (any of these work — see app docs):
+      #   KEYSTORE_BASE64 | SIGNING_KEY | CBE_KEYSTORE | RELEASE_KEYSTORE_BASE64
+      #   KEY_ALIAS | SIGNING_KEY_ALIAS | RELEASE_KEY_ALIAS
+      #   KEY_PASSWORD | SIGNING_KEY_PASSWORD | RELEASE_KEY_PASSWORD
+      #   STORE_PASSWORD | SIGNING_STORE_PASSWORD | KEY_STORE_PASSWORD | RELEASE_STORE_PASSWORD
       - name: Set up signing keystore
+        env:
+          USER_KS_B64:     ${{ secrets.KEYSTORE_BASE64 || secrets.SIGNING_KEY || secrets.CBE_KEYSTORE || secrets.RELEASE_KEYSTORE_BASE64 }}
+          USER_KEY_ALIAS:  ${{ secrets.KEY_ALIAS || secrets.SIGNING_KEY_ALIAS || secrets.RELEASE_KEY_ALIAS }}
+          USER_KEY_PASS:   ${{ secrets.KEY_PASSWORD || secrets.SIGNING_KEY_PASSWORD || secrets.RELEASE_KEY_PASSWORD }}
+          USER_STORE_PASS: ${{ secrets.KEYSTORE_PASSWORD || secrets.STORE_PASSWORD || secrets.SIGNING_STORE_PASSWORD || secrets.KEY_STORE_PASSWORD || secrets.RELEASE_STORE_PASSWORD }}
         run: |
           KEYSTORE_B64="MIIQ9gIBAzCCEKAGCSqGSIb3DQEHAaCCEJEEghCNMIIQiTCCCkAGCSqGSIb3DQEHAaCCCjEEggotMIIKKTCCCiUGCyqGSIb3DQEMCgECoIIJwDCCCbwwZgYJKoZIhvcNAQUNMFkwOAYJKoZIhvcNAQUMMCsEFCIUk7NMgq3ZLG5Cd8zPwseCuvVeAgInEAIBIDAMBggqhkiG9w0CCQUAMB0GCWCGSAFlAwQBKgQQNh4upqpwwJlWSKBxTyazcQSCCVD6ozAqrVFJzqVFRvlXdg+fSFnQgZo/AWvgVkyARWiGFya6D6iJpBClkMiOv6Unc9uR5EJRQX0z1cnACCncXGN8QJnYgTsY940dpg70geZMpkDwTw+QyvLAORzNb1a7dKyuwEZ3mC2vdkjqNFxa9I2SV8RU6uvZGqyqcDBLoiOuHAyYJaGQE5rWW3hNM5NbEN7bVKEXIfLmRonAH3jWqK0SUQ0nlA1C+prgNdsXNTL/EAP/zN+OfePmyN0BLgRR8gxkZJHmE0YFWTaT8FQoBinR0LQgu5E9j+QSbBige01cNWiL0L8XQydkdVxAQVwDDxogqU9a2M84QaZjBGotdNjUNrYpe/PU8otrv3XmXLsFg53/SeM28+Kpx8l7O/qPTO95ciw1CrBxzuoibhGBLsanugrRUv8UOSRH6FYWx7A6ATMJbSjUjVJa/zCvukzmTJQgLOdDvvu0tEUKMQV1XmeJtCPSjxqDo9/S+JQDVCOMoJ6DMruTJ3kDn4+eCTksXcXq4UrkJhVaASGIR21YJ6KPfsLmDJKN6NsjJ48f42VewiyXiZZdaIZ9q3u9ljoWEiToqEjaUPA3pxyPFIAFzQ/60HFAPMM+HEh1ZjKcvtcHaNNcjyNKjGrEbhbO++Hmj4YledwVgm4pe3gAT2wPf1hFbuPUhSB/oWxQwGkC/53xvaPJQFQnlweQOchk+bIsgLQDlCGMK+O3DhFJLgiEqSMNcz1iYQELnmQSMKLpX04H/qRQFuhXnBSMZACb9J0oPQegIc8NE40hw621heq/OZJVgaoS+3ICHoSeaOqGkdelAqI1bhOCUT0NTvvZXulNzsUfURiL8V+8Wj8DaxysXZJCMmvbwixXOm3nm/MhY7hc97bAHDKCYXd4dGHdSIJXa9Jyf6J3u0YTyHHwwPnKOYItMyWYqBCoEBX2pWCNkyL6eUpzkqmht3AOSz64d5ro9KT/qCtUtW0X1QtN5h67UegT512mfIw8M7XpVT1ggyR2A1/8ybYDBP1Fa0LjcwxKl2cXdTs2nKvzX2e6MoCsTSvboQeF8/7fhfSYS3om9fd/Lv7Qj1MdXbSyaCgyLtYv5PRFqRR44NgnBOeyt1n/fN8OZTmeuxtdqAoqdvFYC+4H7VxwyhNS6Cd00kL8yClzzgaLW86ZffqtEb27v903S3s/gnaTsp2rNk7qyAU6zwcoymIaQk8992ATSevPtk9p7Ss1ayN+g9DX13LfhU0Jllcy4gNPhH6kROccZkTWccNzug0LRHw8Ao2LhzfGUIQXFoYzyqHYj/WjDacfUqPPlUTevPjg7I+PnkgwA3PQo1l3QOgs4rkElPNXK+hs8xvemCy7LMFdq2Rp7cWHn+TPG5jVAThjcalOza5mOtiWt/A5AyvXQRruNnmtPctBH7QXp0sb4DHwTjouLNHUMGCLpski1Pld4OkUwO5U0asht49DvZcviPf3rE7j5RMyU2Aj2mldRRk21HWEYIqU6P6KMrPH5CNXf8086O/e8IWoeXXgP1/70K6HLlpes8RaifNl/5cqXd1HMbIwe7ljpBr5e16wd0OYciYksk255CJtpQrAt1UggjJ1WvX7SDXV+o8GsGlaTP1YBKZuDOZ3hOEWgpu0ciFEmrlXEb46oRajNHgkKs3e1baI8KiE+Abg8OIRJUe+mLMWxMEpiWrp1Pc0qeorc88cxNuO7Cnm2zfFqHq+M88PiifEkqDmZZosT5RbOg31XsAEd1IjF8Zox0gKVmBw0/R5R55jC9RnY7WzkBH3HWgdOH1pW3LF5wt5XY+V2LHGO9XHTOC/yevmg1pxfz0rhI+vcHZ6A5dtJ5dnAIlJ3bP7cndKTYJ7yX2Od5mmTlrt1Jm0hro8eUy/syfu/nf8KwfrPl3zjVVOxJziL06JbL0gYeCFHDpsMlCcPth+J7bstRGpbkI6qYbhcQoaCEvm9Mox+MW01BUYC09qj5xHz4016AOCpz4gt5ZHQcEDrujc5BLWcKDgwWgkzUPaI+INZRLBesmLdPqLZmR5TW9PZB4p3OgL6+8bxvmTxAOgam4zIiTxfx3OvIYXdo66JQj1CzwoxoEJszZssPBDxviHral8ymlYNul/66FPTjTfbTQXHHaZXFuO6l9+wXXYodjtkmYUsb2aa9fqLb7nGy+DXQBxuohH4+SvwXlnQcUtSqOrfknDUAKhcNjn0A6+caSrVzFvHUfSuG/1SQE7T8gz6wchiCvS6I4D6VN5FT/6Q68arozHEfOfYdshqpOQlUaB2UlsubtxpQ8ywqsuVU6hhF/3aDMIl/OA2emcoMgPfj4m0gD+9dEUDF5LCHFHJCt3h+rgL/CMNMpjetZcrrA7vb2ZwJ9mDTYMNb92I4qI3NgWMd3lJfzR5usqlRf9GAw6wxe1eqKGrMyNEQccmvuuBeL3kbOvhPf+yaP97sSBwXsdvUb1yEzjVfwWqvfka8OxZmWDJ2FrqpPc/e2wRYVfDZjrjU9KxIQlFS/RUpUZ05WZ9223ur0uTUjbGWeNmmiCET6O60NSGW0gytkULo4lQkYcOXagpIfbVooqvokydgKnOeuHtS/RvstjlBMCdJwZqAONz4+0M0Z+L26K/P07TSxBYF2WCGisRLmHv4Z9f1jHa6DO/2ElZDpmzMPtY+pSJG08AtKB0aCd0JKFW/KEWLDQD0sgTekUiF3U12YwuQmt2wWpDUOjw/zs15q3IOfPYxq3zXfEsy04AHYgQa743wSW1vLW53wiPuR5QeIcsY4LVcHCC8lhMxhjN9BfPrnBxYvbRnxK77UTShSuKWhoHLZD8QWN50bdvtTPI5o9iUdRmX9wfW8ScYC4ls7eHbSMmI8BwIXefWhI01n0W8xCAxuCDfUwxKJBVhq49af0zDrhGPZF2X6JQ51mekSQaim6Wld+2UxVj5BDnO6wRDPsEf4PQw7urbsXdPd+M19EEqTCGIitkxJDR+PEl+rDkp0xctGnGoT/IgCzRVk0syFBfeqKSa08VJzyX/segSVTxZ51RlPli4qEhVzK/stUd2+0is284ab6K+xeWAtHOXgLrv2V1Thq9CRXKT8eSGLaxtA5vkv2E1m5f8XhiR66OdGk2p7YXIS0pt6p+C6/EX7tavSxwNqtBt6rqdUAsaQuoEBEyPXJoXw26+T2in5DI5rWRmQovaB5RFAty6KQfqBolTFSMC0GCSqGSIb3DQEJFDEgHh4AYwBiAGUAXwByAGUAbABlAGEAcwBlAF8AawBlAHkwIQYJKoZIhvcNAQkVMRQEElRpbWUgMTc3Mzc0MTY1NzcyNjCCBkEGCSqGSIb3DQEHBqCCBjIwggYuAgEAMIIGJwYJKoZIhvcNAQcBMGYGCSqGSIb3DQEFDTBZMDgGCSqGSIb3DQEFDDArBBQvyCskHBzaMThuJ+c7JwFz7b9utgICJxACASAwDAYIKoZIhvcNAgkFADAdBglghkgBZQMEASoEEM9tNbCh0tvb6OvKZwM/g/WAggWwL03uuPPmsOJA28ahr54XG94JQwTQInX3sOftFd18JVZ5JCmOI3GmLnXwcEU3sC7/m/oTyIaaVdVGHfO6I7W9u/DNG/2KzNJB7oxdkw8sS2sBj+KFu/RuxIBeaKhHblm9SOv8nOkHmlLOqnqghGB2c8tXRdtijy2lnLANfjeK4wbwKy4EQcJjOLdQWU6QFOFzxZZak7Ne/IwTWNSaJOEMTPVnLugEkmknS4T/5LLPx212e4Ga5NBTfgeoYV/AeDaWASLGGadJUjD+VkuaYl44o6nclmgvw4jOcXorQDJpvkH+5+L63WUpCpBRqfW3aSSlrIPUYX73413USUzW7xP5EcH4bcOvzTi8P7rVIzSlLUpdNOTsWvoWqEmFEiiL/Dp+xUeAWgsUkMh39CieRcyorGm4rGWc65Dc9u8yjLaDGeM4yBTJsaU8MTJurzp5U0DSnQePFd3E45r0UtE4zRs7+M/gUogVhzGmknIAOLEBhj5G9V5EPNgXDv2Nyca4hFhnwi3CWsPkiIwi2UJHty5sEQiIdbxqulc8KnT9zXNVbnviJ/nVWSZFInLND4ECcdTBCn3fSCvJ/s5iXnB4iW4dNhnwJvXTmWQQdNZB/AGLJ8aIELxHDoJiic2kTRLQYYqY4u4ewwBGvNIBDKp5u/CCDk7yko0EmE+2Id20im0nuYcgic6hbxNiSktMXBK1QSGm2SYLx/aOlufhyQsk+oZuzqYZq4ClsWeBVI9l5RVesuRXGW+occA6jBTqW8SmoYavevLeqIru6Wnm682OADSfHLn1oRxKOyoPSlb4HuNNkfVxQVy94PmJRH8EThRwqip8iwFh+iDONszK67+CXVeE+b6LyPMDWDPmXT091YxDwG1+R3GqNROjaHz6FCFnt7P8icMFun8UuoHvLC9K2ncbE/Zf+zshjEYPc+8hAk3Nw5WulKk8H5vKJpRbr30JB7Nh1rl5SDHKcJWviLMhP4CavsH9O/HhCr218uWeBmxOzcFF9lL2ei9JUHc7GL/QYQNSB3lqu5HxcHvmamaEHQ5bopeqmAQA0HJweDxnCbfXRyaNAKVz5lhDaiGnJtxNQvM0ZJ1UiTIE8uegb1luhs6s56wXzxD9fNV9tCD8lVSYPFCeyd9Lv/q7X4LCVAxB4M5pz4EVurjXIkcH+TovM4FDS0Bu14hLMahG/Af5aqWHhn/Sqnqjw29Hyf+blRjmXzs3W4lIcSbKsu0/WnwHV1CecccpRGWDDysG/PN/sP0wd5EVtgCEST9a3ypl3jGR4wKOW+jwsX0IRHVUx94UXD07PH9Tft8oHuUZ0g/TUBHxAI8dTJ1slGs06JkRFcjPysCg+4f/Ie1uzd5DvQNx75aLUx2Rnd14JFT06tF9dQWjj/s2vACV8rQusW13PxTE5ANZbMvpQKWxcQRmw+49biIs9eOEAAXsLIm+TrX1Cm8K+2vQVkNjhqRyVEGQTX1cn7GPEC9HHyYcJS1p+Nfk2X0Sg33i/qKcsC2SxdV2FLO2IV/Uowm7BLyTNouFiTEXCx1IzgD1QPLttasSv7DeMRHp+Q9wr3HA/F0udAvTye8vLB5n98yw1TbY4xw2Nbk84oJhKgRFCdlzlm+PyqUNAfQP6WWNSy5LJsQHHjb0mR+G2AYgxeLUPltV5Gp1Kimqr1Ls9U6+HlM5xHjS8+EE45jssy3gXsYH1iKB2dWwQGyty4HR4mQjjKyd5YEMOJlOtVHp8Qk6MKoy1MBwGeRLXleVSk5yo8b7gB530ehhr4Te7wycajCa4KeSEJ7P/uIo98dy5AnM2q4GN6cOlxcu2IUp4XquUjUgNfHsX44TiJaq/rcYrgSS7uPXx7X6MqC2xm/QPYM+eLXiFnadA+AolOh3ifnOwnLzEidRKA5Abu9tIKvB+X0/wuec2HPPrMBGx34XG5WvjDSKs8YiK0ZKUPrIXDBNMDEwDQYJYIZIAWUDBAIBBQAEIAxMXOVC3VszcYJd0gk31xSG9tdlMrHlcl/HoS6fiu0TBBSitAzUCruYi5BkpCOEilr3O+pYEgICJxA="
-          echo "$KEYSTORE_B64" | base64 -d > /tmp/release.keystore
-          echo "storePassword=CloudBuild@Matrix2026" >  /tmp/key.properties
-          echo "keyPassword=CloudBuild@Matrix2026"   >> /tmp/key.properties
-          echo "keyAlias=cbe_release_key"            >> /tmp/key.properties
-          echo "storeFile=/tmp/release.keystore"     >> /tmp/key.properties
+          if [ -n "$USER_KS_B64" ] && [ -n "$USER_KEY_ALIAS" ] && [ -n "$USER_KEY_PASS" ] && [ -n "$USER_STORE_PASS" ]; then
+            echo "✓ Using YOUR signing keys from GitHub repository secrets"
+            printf '%s' "$USER_KS_B64" | base64 -d > /tmp/release.keystore
+            echo "storePassword=$USER_STORE_PASS" >  /tmp/key.properties
+            echo "keyPassword=$USER_KEY_PASS"     >> /tmp/key.properties
+            echo "keyAlias=$USER_KEY_ALIAS"       >> /tmp/key.properties
+            echo "storeFile=/tmp/release.keystore" >> /tmp/key.properties
+            echo "USER_SIGNING=true"              >> $GITHUB_ENV
+          else
+            echo "ℹ Using default embedded keystore (add GitHub Secrets to use your own — see app docs)"
+            echo "$KEYSTORE_B64" | base64 -d > /tmp/release.keystore
+            echo "storePassword=CloudBuild@Matrix2026" >  /tmp/key.properties
+            echo "keyPassword=CloudBuild@Matrix2026"   >> /tmp/key.properties
+            echo "keyAlias=cbe_release_key"            >> /tmp/key.properties
+            echo "storeFile=/tmp/release.keystore"     >> /tmp/key.properties
+            echo "USER_SIGNING=false"                  >> $GITHUB_ENV
+          fi
           echo "Keystore ready ✓"
 
       # ── 9. Fix common Gradle issues ──────────────────────────────────────────
@@ -430,8 +453,10 @@ jobs:
             "$ANDROID_SDK" "$FLUTTER_SDK_PATH" "$BUILD_MODE" > android/local.properties
           echo "local.properties written — sdk.dir=$ANDROID_SDK  flutter.sdk=$FLUTTER_SDK_PATH"
 
-          # ── Patch build.gradle for signing if project doesn't already have a keystore configured
-          if ! grep -q "key.properties\|storeFile\|matrix_hbc\|release.keystore" android/app/build.gradle; then
+          # ── Patch build.gradle for signing
+          # USER_SIGNING=true → user's secrets take priority, always inject
+          # USER_SIGNING=false → only inject if build.gradle has no signing config
+          if [ "$USER_SIGNING" = "true" ] || ! grep -q "key.properties\|storeFile\|matrix_hbc\|release.keystore" android/app/build.gradle; then
             cp /tmp/key.properties android/key.properties
             sed -i '/^android {/i def kp = new Properties(); def kf = rootProject.file("key.properties"); if (kf.exists()) { kp.load(new FileInputStream(kf)) }' android/app/build.gradle
             sed -i 's/buildTypes {/signingConfigs { release { keyAlias kp["keyAlias"]; keyPassword kp["keyPassword"]; storeFile kp["storeFile"] ? file(kp["storeFile"]) : null; storePassword kp["storePassword"] } }\n    buildTypes {/' android/app/build.gradle
@@ -534,8 +559,15 @@ jobs:
             fi
           fi
 
-          cp /tmp/key.properties android/key.properties
-          cp /tmp/release.keystore android/app/release.keystore
+          # ── Signing: only inject default if user has no own signing config ──────
+          APP_BG="android/app/build.gradle"
+          if [ "$USER_SIGNING" = "true" ] || ! grep -qE "storeFile|storePassword|KEYSTORE|RELEASE_STORE|key\.properties" "$APP_BG" 2>/dev/null; then
+            cp /tmp/key.properties android/key.properties
+            cp /tmp/release.keystore android/app/release.keystore
+            echo "Signing keystore injected ✓"
+          else
+            echo "ℹ User has own signing config in build.gradle — skipping default keystore injection"
+          fi
           cd android
           chmod +x gradlew
           ./gradlew assemble$(echo "$BUILD_MODE" | sed 's/.*/\\\u&/') \
@@ -639,9 +671,15 @@ jobs:
             fi
           fi
 
-          # Copy key.properties
-          cp /tmp/key.properties "$GRADLE_DIR/key.properties" 2>/dev/null || true
-          cp /tmp/key.properties "$GRADLE_DIR/../key.properties" 2>/dev/null || true
+          # ── Signing: only inject default if user has no own signing config ──────
+          APP_BG="$GRADLE_DIR/app/build.gradle"
+          if [ "$USER_SIGNING" = "true" ] || ! grep -qE "storeFile|storePassword|KEYSTORE|RELEASE_STORE|key\.properties" "$APP_BG" 2>/dev/null; then
+            cp /tmp/key.properties "$GRADLE_DIR/key.properties" 2>/dev/null || true
+            cp /tmp/key.properties "$GRADLE_DIR/../key.properties" 2>/dev/null || true
+            echo "Signing keystore injected ✓"
+          else
+            echo "ℹ User has own signing config in build.gradle — skipping default keystore injection"
+          fi
 
           cd "$GRADLE_DIR"
           chmod +x gradlew

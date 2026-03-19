@@ -23,10 +23,6 @@ on:
         description: 'Build mode: release | debug | profile'
         required: false
         default: 'release'
-      harden:
-        description: 'Apply 11-layer binary hardening to libapp.so (Flutter only). true | false'
-        required: false
-        default: 'false'
       asset_id:
         description: 'Staging asset ID — deleted immediately after source is downloaded'
         required: false
@@ -46,7 +42,6 @@ jobs:
       PACKAGE_NAME: ${{ inputs.package_name }}
       FLUTTER_VER:  ${{ inputs.flutter_version }}
       BUILD_MODE:   ${{ inputs.build_mode }}
-      HARDEN:       ${{ inputs.harden }}
 
     steps:
 
@@ -371,39 +366,129 @@ jobs:
           done
           echo "Patching done ✓"
 
-      # ── 8. Set up signing keystore ───────────────────────────────────────────
-      # Priority: user's own GitHub Secrets → embedded default
-      # Supported secret names (any of these work — see app docs):
-      #   KEYSTORE_BASE64 | SIGNING_KEY | CBE_KEYSTORE | RELEASE_KEYSTORE_BASE64
-      #   KEY_ALIAS | SIGNING_KEY_ALIAS | RELEASE_KEY_ALIAS
-      #   KEY_PASSWORD | SIGNING_KEY_PASSWORD | RELEASE_KEY_PASSWORD
-      #   STORE_PASSWORD | SIGNING_STORE_PASSWORD | KEY_STORE_PASSWORD | RELEASE_STORE_PASSWORD
+      # ── 8. Set up keystore ────────────────────────────────────────────────────
+      # PRIORITY 1: KEYSTORE_BASE64 repo secret  (user added it to their GitHub repo)
+      # PRIORITY 2: key.properties + keystore file found inside the uploaded project ZIP
+      # PRIORITY 3: CBE embedded default keystore  →  zero-config fallback
       - name: Set up signing keystore
         env:
-          USER_KS_B64:     ${{ secrets.KEYSTORE_BASE64 || secrets.SIGNING_KEY || secrets.CBE_KEYSTORE || secrets.RELEASE_KEYSTORE_BASE64 }}
-          USER_KEY_ALIAS:  ${{ secrets.KEY_ALIAS || secrets.SIGNING_KEY_ALIAS || secrets.RELEASE_KEY_ALIAS }}
-          USER_KEY_PASS:   ${{ secrets.KEY_PASSWORD || secrets.SIGNING_KEY_PASSWORD || secrets.RELEASE_KEY_PASSWORD }}
-          USER_STORE_PASS: ${{ secrets.KEYSTORE_PASSWORD || secrets.STORE_PASSWORD || secrets.SIGNING_STORE_PASSWORD || secrets.KEY_STORE_PASSWORD || secrets.RELEASE_STORE_PASSWORD }}
+          # ── Primary secret names (recommended) ─────────────────────────────────
+          _USER_KS_B64:   ${{ secrets.KEYSTORE_BASE64 }}
+          _USER_ALIAS:    ${{ secrets.KEY_ALIAS }}
+          _USER_KEY_PASS: ${{ secrets.KEY_PASSWORD }}
+          _USER_STR_PASS: ${{ secrets.STORE_PASSWORD }}
+          # ── Alternate secret names also accepted ─────────────────────────────────
+          _USER_KS_B64_A: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          _USER_KS_B64_B: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          _USER_ALIAS_A:  ${{ secrets.SIGNING_KEY_ALIAS }}
+          _USER_ALIAS_B:  ${{ secrets.RELEASE_KEY_ALIAS }}
+          _USER_KP_A:     ${{ secrets.SIGNING_KEY_PASSWORD }}
+          _USER_KP_B:     ${{ secrets.RELEASE_KEY_PASSWORD }}
+          _USER_SP_A:     ${{ secrets.SIGNING_STORE_PASSWORD }}
+          _USER_SP_B:     ${{ secrets.RELEASE_STORE_PASSWORD }}
         run: |
-          KEYSTORE_B64="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"
-          if [ -n "$USER_KS_B64" ] && [ -n "$USER_KEY_ALIAS" ] && [ -n "$USER_KEY_PASS" ] && [ -n "$USER_STORE_PASS" ]; then
-            echo "✓ Using YOUR signing keys from GitHub repository secrets"
-            printf '%s' "$USER_KS_B64" | base64 -d > /tmp/release.keystore
-            echo "storePassword=$USER_STORE_PASS" >  /tmp/key.properties
-            echo "keyPassword=$USER_KEY_PASS"     >> /tmp/key.properties
-            echo "keyAlias=$USER_KEY_ALIAS"       >> /tmp/key.properties
+          # Resolve secrets: first non-empty value wins
+          KS_B64="${_USER_KS_B64:-${_USER_KS_B64_A:-$_USER_KS_B64_B}}"
+          U_ALIAS="${_USER_ALIAS:-${_USER_ALIAS_A:-$_USER_ALIAS_B}}"
+          U_KEY_PASS="${_USER_KEY_PASS:-${_USER_KP_A:-$_USER_KP_B}}"
+          U_STR_PASS="${_USER_STR_PASS:-${_USER_SP_A:-${_USER_SP_B:-$U_KEY_PASS}}}"
+
+          # ── PRIORITY 1: GitHub repo secret ────────────────────────────────────────
+          if [ -n "$KS_B64" ]; then
+            echo "PRIORITY 1: User keystore via repo secret (KEYSTORE_BASE64)"
+            echo "$KS_B64" | base64 -d > /tmp/release.keystore
+            echo "storePassword=$U_STR_PASS" >  /tmp/key.properties
+            echo "keyPassword=$U_KEY_PASS"   >> /tmp/key.properties
+            echo "keyAlias=$U_ALIAS"         >> /tmp/key.properties
             echo "storeFile=/tmp/release.keystore" >> /tmp/key.properties
-            echo "USER_SIGNING=true"              >> $GITHUB_ENV
+            echo "SIGNING_SOURCE=user-secret ($U_ALIAS)" >> $GITHUB_ENV
+            echo "User keystore (secret) configured ✓  alias: $U_ALIAS"
+
           else
-            echo "ℹ Using default embedded keystore (add GitHub Secrets to use your own — see app docs)"
-            echo "$KEYSTORE_B64" | base64 -d > /tmp/release.keystore
-            echo "storePassword=CloudBuild@Matrix2026" >  /tmp/key.properties
-            echo "keyPassword=CloudBuild@Matrix2026"   >> /tmp/key.properties
-            echo "keyAlias=cbe_release_key"            >> /tmp/key.properties
-            echo "storeFile=/tmp/release.keystore"     >> /tmp/key.properties
-            echo "USER_SIGNING=false"                  >> $GITHUB_ENV
+            # ── PRIORITY 2: Scan project ZIP for key.properties + keystore file ─────
+            echo "No KEYSTORE_BASE64 secret — scanning uploaded project for signing config..."
+            FOUND_KS=""
+
+            PROJECT_KP=$(find /tmp/project -name "key.properties" \
+              -not -path "*/build/*" -not -path "*/node_modules/*" 2>/dev/null | head -1)
+
+            if [ -n "$PROJECT_KP" ]; then
+              echo "Found key.properties: $PROJECT_KP"
+
+              # Read all four fields (strip whitespace, quotes, and file() wrapper)
+              P_STORE_FILE=$(grep -E "^storeFile\s*=" "$PROJECT_KP" | cut -d= -f2- | \
+                sed "s/^[[:space:]]*//;s/[[:space:]]*$//;s/^file(//;s/)$//;s/['\"]//g")
+              P_STORE_PASS=$(grep -E "^storePassword\s*=" "$PROJECT_KP" | cut -d= -f2- | \
+                sed "s/^[[:space:]]*//;s/[[:space:]]*$//")
+              P_KEY_ALIAS=$(grep  -E "^keyAlias\s*="    "$PROJECT_KP" | cut -d= -f2- | \
+                sed "s/^[[:space:]]*//;s/[[:space:]]*$//")
+              P_KEY_PASS=$(grep   -E "^keyPassword\s*=" "$PROJECT_KP" | cut -d= -f2- | \
+                sed "s/^[[:space:]]*//;s/[[:space:]]*$//")
+
+              echo "  storeFile:  $P_STORE_FILE"
+              echo "  keyAlias:   $P_KEY_ALIAS"
+              echo "  passwords:  $([ -n "$P_KEY_PASS" ] && echo 'set' || echo 'MISSING')"
+
+              if [ -n "$P_STORE_FILE" ] && [ -n "$P_KEY_ALIAS" ] && [ -n "$P_KEY_PASS" ]; then
+                KP_DIR=$(dirname "$PROJECT_KP")
+                RESOLVED=""
+
+                # 1. Relative to key.properties directory
+                if [ -f "$KP_DIR/$P_STORE_FILE" ]; then
+                  RESOLVED="$KP_DIR/$P_STORE_FILE"
+                # 2. Relative to project root
+                elif [ -f "/tmp/project/$P_STORE_FILE" ]; then
+                  RESOLVED="/tmp/project/$P_STORE_FILE"
+                # 3. Search by filename anywhere in project
+                else
+                  KS_NAME=$(basename "$P_STORE_FILE")
+                  RESOLVED=$(find /tmp/project -name "$KS_NAME" \
+                    -not -path "*/build/*" -not -path "*/node_modules/*" 2>/dev/null | head -1)
+                fi
+
+                if [ -n "$RESOLVED" ] && [ -f "$RESOLVED" ]; then
+                  echo "PRIORITY 2: Project keystore found → $RESOLVED"
+                  cp "$RESOLVED" /tmp/release.keystore
+                  FINAL_STORE_PASS="${P_STORE_PASS:-$P_KEY_PASS}"
+                  echo "storePassword=$FINAL_STORE_PASS" >  /tmp/key.properties
+                  echo "keyPassword=$P_KEY_PASS"         >> /tmp/key.properties
+                  echo "keyAlias=$P_KEY_ALIAS"           >> /tmp/key.properties
+                  echo "storeFile=/tmp/release.keystore"  >> /tmp/key.properties
+                  echo "SIGNING_SOURCE=project-zip ($P_KEY_ALIAS)" >> $GITHUB_ENV
+                  FOUND_KS="yes"
+                  echo "Project keystore configured ✓  alias: $P_KEY_ALIAS"
+                else
+                  echo "  key.properties found but keystore file not inside ZIP — falling through to CBE default"
+                fi
+              else
+                echo "  key.properties incomplete (missing alias/password) — falling through"
+              fi
+            else
+              echo "No key.properties found in project"
+            fi
+
+            # Also scan for any standalone .keystore / .jks files (info only — credentials unknown)
+            if [ -z "$FOUND_KS" ]; then
+              STANDALONE=$(find /tmp/project -name "*.keystore" -o -name "*.jks" 2>/dev/null | \
+                grep -v "/build/" | grep -v "node_modules" | head -1)
+              if [ -n "$STANDALONE" ]; then
+                echo "Note: standalone keystore found ($STANDALONE) but no key.properties with credentials — CBE default will be used. Include key.properties in your ZIP to use this file."
+              fi
+            fi
+
+            if [ -z "$FOUND_KS" ]; then
+              # ── PRIORITY 3: CBE embedded default ────────────────────────────────────
+              echo "PRIORITY 3: No user keystore detected — using CBE default keystore"
+              KEYSTORE_B64="MIIQ9gIBAzCCEKAGCSqGSIb3DQEHAaCCEJEEghCNMIIQiTCCCkAGCSqGSIb3DQEHAaCCCjEEggotMIIKKTCCCiUGCyqGSIb3DQEMCgECoIIJwDCCCbwwZgYJKoZIhvcNAQUNMFkwOAYJKoZIhvcNAQUMMCsEFCIUk7NMgq3ZLG5Cd8zPwseCuvVeAgInEAIBIDAMBggqhkiG9w0CCQUAMB0GCWCGSAFlAwQBKgQQNh4upqpwwJlWSKBxTyazcQSCCVD6ozAqrVFJzqVFRvlXdg+fSFnQgZo/AWvgVkyARWiGFya6D6iJpBClkMiOv6Unc9uR5EJRQX0z1cnACCncXGN8QJnYgTsY940dpg70geZMpkDwTw+QyvLAORzNb1a7dKyuwEZ3mC2vdkjqNFxa9I2SV8RU6uvZGqyqcDBLoiOuHAyYJaGQE5rWW3hNM5NbEN7bVKEXIfLmRonAH3jWqK0SUQ0nlA1C+prgNdsXNTL/EAP/zN+OfePmyN0BLgRR8gxkZJHmE0YFWTaT8FQoBinR0LQgu5E9j+QSbBige01cNWiL0L8XQydkdVxAQVwDDxogqU9a2M84QaZjBGotdNjUNrYpe/PU8otrv3XmXLsFg53/SeM28+Kpx8l7O/qPTO95ciw1CrBxzuoibhGBLsanugrRUv8UOSRH6FYWx7A6ATMJbSjUjVJa/zCvukzmTJQgLOdDvvu0tEUKMQV1XmeJtCPSjxqDo9/S+JQDVCOMoJ6DMruTJ3kDn4+eCTksXcXq4UrkJhVaASGIR21YJ6KPfsLmDJKN6NsjJ48f42VewiyXiZZdaIZ9q3u9ljoWEiToqEjaUPA3pxyPFIAFzQ/60HFAPMM+HEh1ZjKcvtcHaNNcjyNKjGrEbhbO++Hmj4YledwVgm4pe3gAT2wPf1hFbuPUhSB/oWxQwGkC/53xvaPJQFQnlweQOchk+bIsgLQDlCGMK+O3DhFJLgiEqSMNcz1iYQELnmQSMKLpX04H/qRQFuhXnBSMZACb9J0oPQegIc8NE40hw621heq/OZJVgaoS+3ICHoSeaOqGkdelAqI1bhOCUT0NTvvZXulNzsUfURiL8V+8Wj8DaxysXZJCMmvbwixXOm3nm/MhY7hc97bAHDKCYXd4dGHdSIJXa9Jyf6J3u0YTyHHwwPnKOYItMyWYqBCoEBX2pWCNkyL6eUpzkqmht3AOSz64d5ro9KT/qCtUtW0X1QtN5h67UegT512mfIw8M7XpVT1ggyR2A1/8ybYDBP1Fa0LjcwxKl2cXdTs2nKvzX2e6MoCsTSvboQeF8/7fhfSYS3om9fd/Lv7Qj1MdXbSyaCgyLtYv5PRFqRR44NgnBOeyt1n/fN8OZTmeuxtdqAoqdvFYC+4H7VxwyhNS6Cd00kL8yClzzgaLW86ZffqtEb27v903S3s/gnaTsp2rNk7qyAU6zwcoymIaQk8992ATSevPtk9p7Ss1ayN+g9DX13LfhU0Jllcy4gNPhH6kROccZkTWccNzug0LRHw8Ao2LhzfGUIQXFoYzyqHYj/WjDacfUqPPlUTevPjg7I+PnkgwA3PQo1l3QOgs4rkElPNXK+hs8xvemCy7LMFdq2Rp7cWHn+TPG5jVAThjcalOza5mOtiWt/A5AyvXQRruNnmtPctBH7QXp0sb4DHwTjouLNHUMGCLpski1Pld4OkUwO5U0asht49DvZcviPf3rE7j5RMyU2Aj2mldRRk21HWEYIqU6P6KMrPH5CNXf8086O/e8IWoeXXgP1/70K6HLlpes8RaifNl/5cqXd1HMbIwe7ljpBr5e16wd0OYciYksk255CJtpQrAt1UggjJ1WvX7SDXV+o8GsGlaTP1YBKZuDOZ3hOEWgpu0ciFEmrlXEb46oRajNHgkKs3e1baI8KiE+Abg8OIRJUe+mLMWxMEpiWrp1Pc0qeorc88cxNuO7Cnm2zfFqHq+M88PiifEkqDmZZosT5RbOg31XsAEd1IjF8Zox0gKVmBw0/R5R55jC9RnY7WzkBH3HWgdOH1pW3LF5wt5XY+V2LHGO9XHTOC/yevmg1pxfz0rhI+vcHZ6A5dtJ5dnAIlJ3bP7cndKTYJ7yX2Od5mmTlrt1Jm0hro8eUy/syfu/nf8KwfrPl3zjVVOxJziL06JbL0gYeCFHDpsMlCcPth+J7bstRGpbkI6qYbhcQoaCEvm9Mox+MW01BUYC09qj5xHz4016AOCpz4gt5ZHQcEDrujc5BLWcKDgwWgkzUPaI+INZRLBesmLdPqLZmR5TW9PZB4p3OgL6+8bxvmTxAOgam4zIiTxfx3OvIYXdo66JQj1CzwoxoEJszZssPBDxviHral8ymlYNul/66FPTjTfbTQXHHaZXFuO6l9+wXXYodjtkmYUsb2aa9fqLb7nGy+DXQBxuohH4+SvwXlnQcUtSqOrfknDUAKhcNjn0A6+caSrVzFvHUfSuG/1SQE7T8gz6wchiCvS6I4D6VN5FT/6Q68arozHEfOfYdshqpOQlUaB2UlsubtxpQ8ywqsuVU6hhF/3aDMIl/OA2emcoMgPfj4m0gD+9dEUDF5LCHFHJCt3h+rgL/CMNMpjetZcrrA7vb2ZwJ9mDTYMNb92I4qI3NgWMd3lJfzR5usqlRf9GAw6wxe1eqKGrMyNEQccmvuuBeL3kbOvhPf+yaP97sSBwXsdvUb1yEzjVfwWqvfka8OxZmWDJ2FrqpPc/e2wRYVfDZjrjU9KxIQlFS/RUpUZ05WZ9223ur0uTUjbGWeNmmiCET6O60NSGW0gytkULo4lQkYcOXagpIfbVooqvokydgKnOeuHtS/RvstjlBMCdJwZqAONz4+0M0Z+L26K/P07TSxBYF2WCGisRLmHv4Z9f1jHa6DO/2ElZDpmzMPtY+pSJG08AtKB0aCd0JKFW/KEWLDQD0sgTekUiF3U12YwuQmt2wWpDUOjw/zs15q3IOfPYxq3zXfEsy04AHYgQa743wSW1vLW53wiPuR5QeIcsY4LVcHCC8lhMxhjN9BfPrnBxYvbRnxK77UTShSuKWhoHLZD8QWN50bdvtTPI5o9iUdRmX9wfW8ScYC4ls7eHbSMmI8BwIXefWhI01n0W8xCAxuCDfUwxKJBVhq49af0zDrhGPZF2X6JQ51mekSQaim6Wld+2UxVj5BDnO6wRDPsEf4PQw7urbsXdPd+M19EEqTCGIitkxJDR+PEl+rDkp0xctGnGoT/IgCzRVk0syFBfeqKSa08VJzyX/segSVTxZ51RlPli4qEhVzK/stUd2+0is284ab6K+xeWAtHOXgLrv2V1Thq9CRXKT8eSGLaxtA5vkv2E1m5f8XhiR66OdGk2p7YXIS0pt6p+C6/EX7tavSxwNqtBt6rqdUAsaQuoEBEyPXJoXw26+T2in5DI5rWRmQovaB5RFAty6KQfqBolTFSMC0GCSqGSIb3DQEJFDEgHh4AYwBiAGUAXwByAGUAbABlAGEAcwBlAF8AawBlAHkwIQYJKoZIhvcNAQkVMRQEElRpbWUgMTc3Mzc0MTY1NzcyNjCCBkEGCSqGSIb3DQEHBqCCBjIwggYuAgEAMIIGJwYJKoZIhvcNAQcBMGYGCSqGSIb3DQEFDTBZMDgGCSqGSIb3DQEFDDArBBQvyCskHBzaMThuJ+c7JwFz7b9utgICJxACASAwDAYIKoZIhvcNAgkFADAdBglghkgBZQMEASoEEM9tNbCh0tvb6OvKZwM/g/WAggWwL03uuPPmsOJA28ahr54XG94JQwTQInX3sOftFd18JVZ5JCmOI3GmLnXwcEU3sC7/m/oTyIaaVdVGHfO6I7W9u/DNG/2KzNJB7oxdkw8sS2sBj+KFu/RuxIBeaKhHblm9SOv8nOkHmlLOqnqghGB2c8tXRdtijy2lnLANfjeK4wbwKy4EQcJjOLdQWU6QFOFzxZZak7Ne/IwTWNSaJOEMTPVnLugEkmknS4T/5LLPx212e4Ga5NBTfgeoYV/AeDaWASLGGadJUjD+VkuaYl44o6nclmgvw4jOcXorQDJpvkH+5+L63WUpCpBRqfW3aSSlrIPUYX73413USUzW7xP5EcH4bcOvzTi8P7rVIzSlLUpdNOTsWvoWqEmFEiiL/Dp+xUeAWgsUkMh39CieRcyorGm4rGWc65Dc9u8yjLaDGeM4yBTJsaU8MTJurzp5U0DSnQePFd3E45r0UtE4zRs7+M/gUogVhzGmknIAOLEBhj5G9V5EPNgXDv2Nyca4hFhnwi3CWsPkiIwi2UJHty5sEQiIdbxqulc8KnT9zXNVbnviJ/nVWSZFInLND4ECcdTBCn3fSCvJ/s5iXnB4iW4dNhnwJvXTmWQQdNZB/AGLJ8aIELxHDoJiic2kTRLQYYqY4u4ewwBGvNIBDKp5u/CCDk7yko0EmE+2Id20im0nuYcgic6hbxNiSktMXBK1QSGm2SYLx/aOlufhyQsk+oZuzqYZq4ClsWeBVI9l5RVesuRXGW+occA6jBTqW8SmoYavevLeqIru6Wnm682OADSfHLn1oRxKOyoPSlb4HuNNkfVxQVy94PmJRH8EThRwqip8iwFh+iDONszK67+CXVeE+b6LyPMDWDPmXT091YxDwG1+R3GqNROjaHz6FCFnt7P8icMFun8UuoHvLC9K2ncbE/Zf+zshjEYPc+8hAk3Nw5WulKk8H5vKJpRbr30JB7Nh1rl5SDHKcJWviLMhP4CavsH9O/HhCr218uWeBmxOzcFF9lL2ei9JUHc7GL/QYQNSB3lqu5HxcHvmamaEHQ5bopeqmAQA0HJweDxnCbfXRyaNAKVz5lhDaiGnJtxNQvM0ZJ1UiTIE8uegb1luhs6s56wXzxD9fNV9tCD8lVSYPFCeyd9Lv/q7X4LCVAxB4M5pz4EVurjXIkcH+TovM4FDS0Bu14hLMahG/Af5aqWHhn/Sqnqjw29Hyf+blRjmXzs3W4lIcSbKsu0/WnwHV1CecccpRGWDDysG/PN/sP0wd5EVtgCEST9a3ypl3jGR4wKOW+jwsX0IRHVUx94UXD07PH9Tft8oHuUZ0g/TUBHxAI8dTJ1slGs06JkRFcjPysCg+4f/Ie1uzd5DvQNx75aLUx2Rnd14JFT06tF9dQWjj/s2vACV8rQusW13PxTE5ANZbMvpQKWxcQRmw+49biIs9eOEAAXsLIm+TrX1Cm8K+2vQVkNjhqRyVEGQTX1cn7GPEC9HHyYcJS1p+Nfk2X0Sg33i/qKcsC2SxdV2FLO2IV/Uowm7BLyTNouFiTEXCx1IzgD1QPLttasSv7DeMRHp+Q9wr3HA/F0udAvTye8vLB5n98yw1TbY4xw2Nbk84oJhKgRFCdlzlm+PyqUNAfQP6WWNSy5LJsQHHjb0mR+G2AYgxeLUPltV5Gp1Kimqr1Ls9U6+HlM5xHjS8+EE45jssy3gXsYH1iKB2dWwQGyty4HR4mQjjKyd5YEMOJlOtVHp8Qk6MKoy1MBwGeRLXleVSk5yo8b7gB530ehhr4Te7wycajCa4KeSEJ7P/uIo98dy5AnM2q4GN6cOlxcu2IUp4XquUjUgNfHsX44TiJaq/rcYrgSS7uPXx7X6MqC2xm/QPYM+eLXiFnadA+AolOh3ifnOwnLzEidRKA5Abu9tIKvB+X0/wuec2HPPrMBGx34XG5WvjDSKs8YiK0ZKUPrIXDBNMDEwDQYJYIZIAWUDBAIBBQAEIAxMXOVC3VszcYJd0gk31xSG9tdlMrHlcl/HoS6fiu0TBBSitAzUCruYi5BkpCOEilr3O+pYEgICJxA="
+              echo "$KEYSTORE_B64" | base64 -d > /tmp/release.keystore
+              echo "storePassword=CloudBuild@Matrix2026" >  /tmp/key.properties
+              echo "keyPassword=CloudBuild@Matrix2026"   >> /tmp/key.properties
+              echo "keyAlias=cbe_release_key"            >> /tmp/key.properties
+              echo "storeFile=/tmp/release.keystore"     >> /tmp/key.properties
+              echo "SIGNING_SOURCE=CBE default (cbe_release_key)" >> $GITHUB_ENV
+              echo "CBE keystore ready ✓"
+            fi
           fi
-          echo "Keystore ready ✓"
 
       # ── 9. Fix common Gradle issues ──────────────────────────────────────────
       - name: Auto-fix Gradle issues
@@ -416,13 +501,6 @@ jobs:
             -e "s|compileSdkVersion [0-9]\{1,2\}|compileSdkVersion 35|g" \
             -e "s|targetSdkVersion [0-9]\{1,2\}|targetSdkVersion 35|g" 2>/dev/null || true
           echo "Gradle fixes applied ✓"
-
-      # ── (R8/ProGuard rules live in the user's own source project — not injected here) ──
-
-      # ── 10a-pre-placeholder (keeping step numbering clean) ──────────────────
-      # Users add minifyEnabled, shrinkResources, and proguard-rules.pro
-      # permanently to their android/app/build.gradle and proguard-rules.pro
-      # inside their own project source. See Settings → Binary Hardening docs.
 
       # ── 10a-pre. EXPO: install deps + prebuild → generates android/ folder ───
       - name: Expo prebuild (generate Android project)
@@ -453,10 +531,8 @@ jobs:
             "$ANDROID_SDK" "$FLUTTER_SDK_PATH" "$BUILD_MODE" > android/local.properties
           echo "local.properties written — sdk.dir=$ANDROID_SDK  flutter.sdk=$FLUTTER_SDK_PATH"
 
-          # ── Patch build.gradle for signing
-          # USER_SIGNING=true → user's secrets take priority, always inject
-          # USER_SIGNING=false → only inject if build.gradle has no signing config
-          if [ "$USER_SIGNING" = "true" ] || ! grep -q "key.properties\|storeFile\|matrix_hbc\|release.keystore" android/app/build.gradle; then
+          # ── Patch build.gradle for signing if project doesn't already have a keystore configured
+          if ! grep -q "key.properties\|storeFile\|matrix_hbc\|release.keystore" android/app/build.gradle; then
             cp /tmp/key.properties android/key.properties
             sed -i '/^android {/i def kp = new Properties(); def kf = rootProject.file("key.properties"); if (kf.exists()) { kp.load(new FileInputStream(kf)) }' android/app/build.gradle
             sed -i 's/buildTypes {/signingConfigs { release { keyAlias kp["keyAlias"]; keyPassword kp["keyPassword"]; storeFile kp["storeFile"] ? file(kp["storeFile"]) : null; storePassword kp["storePassword"] } }\n    buildTypes {/' android/app/build.gradle
@@ -464,9 +540,7 @@ jobs:
           fi
 
           flutter pub get
-          mkdir -p /tmp/debug-info
-          flutter build apk --$BUILD_MODE --target-platform android-arm64 --no-pub \
-            --obfuscate --split-debug-info=/tmp/debug-info
+          flutter build apk --$BUILD_MODE --target-platform android-arm64 --no-pub
           echo "BUILD_OUTPUT=/tmp/project/build/app/outputs/flutter-apk/app-${BUILD_MODE}.apk" >> $GITHUB_ENV
 
       # ── 10b. BUILD: React Native ─────────────────────────────────────────────
@@ -559,15 +633,8 @@ jobs:
             fi
           fi
 
-          # ── Signing: only inject default if user has no own signing config ──────
-          APP_BG="android/app/build.gradle"
-          if [ "$USER_SIGNING" = "true" ] || ! grep -qE "storeFile|storePassword|KEYSTORE|RELEASE_STORE|key\.properties" "$APP_BG" 2>/dev/null; then
-            cp /tmp/key.properties android/key.properties
-            cp /tmp/release.keystore android/app/release.keystore
-            echo "Signing keystore injected ✓"
-          else
-            echo "ℹ User has own signing config in build.gradle — skipping default keystore injection"
-          fi
+          cp /tmp/key.properties android/key.properties
+          cp /tmp/release.keystore android/app/release.keystore
           cd android
           chmod +x gradlew
           ./gradlew assemble$(echo "$BUILD_MODE" | sed 's/.*/\\\u&/') \
@@ -671,15 +738,9 @@ jobs:
             fi
           fi
 
-          # ── Signing: only inject default if user has no own signing config ──────
-          APP_BG="$GRADLE_DIR/app/build.gradle"
-          if [ "$USER_SIGNING" = "true" ] || ! grep -qE "storeFile|storePassword|KEYSTORE|RELEASE_STORE|key\.properties" "$APP_BG" 2>/dev/null; then
-            cp /tmp/key.properties "$GRADLE_DIR/key.properties" 2>/dev/null || true
-            cp /tmp/key.properties "$GRADLE_DIR/../key.properties" 2>/dev/null || true
-            echo "Signing keystore injected ✓"
-          else
-            echo "ℹ User has own signing config in build.gradle — skipping default keystore injection"
-          fi
+          # Copy key.properties
+          cp /tmp/key.properties "$GRADLE_DIR/key.properties" 2>/dev/null || true
+          cp /tmp/key.properties "$GRADLE_DIR/../key.properties" 2>/dev/null || true
 
           cd "$GRADLE_DIR"
           chmod +x gradlew
@@ -690,86 +751,27 @@ jobs:
           APK=$(find . -name "*.apk" -not -path "*/intermediates/*" | head -1)
           echo "BUILD_OUTPUT=$(realpath $APK)" >> $GITHUB_ENV
 
-      # ── 11a. Harden APK — deep binary hardening (optional, harden=true) ────────
-      - name: Harden APK
-        if: env.HARDEN == 'true'
-        run: |
-          INPUT="${BUILD_OUTPUT}"
-          if [ -z "$INPUT" ] || [ ! -f "$INPUT" ]; then
-            echo "No APK to harden — skipping"
-            exit 0
-          fi
-
-          WORKDIR="/tmp/apk_harden"
-          mkdir -p "$WORKDIR"
-
-          if ! unzip -l "$INPUT" | grep -q 'lib/arm64-v8a/libapp.so'; then
-            echo "No libapp.so — not a Flutter APK, skipping hardening"
-            exit 0
-          fi
-
-          unzip -o "$INPUT" 'lib/arm64-v8a/libapp.so' -d "$WORKDIR"
-          LIBAPP="$WORKDIR/lib/arm64-v8a/libapp.so"
-          echo "Original size: $(du -sh $LIBAPP | cut -f1)"
-
-          # ── Layer 1: Strip DWARF debug info, build-id and compiler comments ──
-          # Removes all debug sections; safe — Android loads via program headers
-          if command -v llvm-strip > /dev/null 2>&1; then
-            llvm-strip --strip-debug "$LIBAPP" && echo "[L1] llvm-strip --strip-debug done"
-          elif command -v strip > /dev/null 2>&1; then
-            strip --strip-debug "$LIBAPP" && echo "[L1] strip --strip-debug done"
-          fi
-
-          # Also nuke .comment and .note.gnu.build-id via objcopy if available
-          if command -v objcopy > /dev/null 2>&1; then
-            objcopy \
-              --remove-section=.comment \
-              --remove-section=.note.gnu.build-id \
-              --remove-section=.gnu.build.attributes \
-              "$LIBAPP" "$LIBAPP.tmp" 2>/dev/null && mv "$LIBAPP.tmp" "$LIBAPP" || true
-            echo "[L1] objcopy sections removed"
-          fi
-
-          # ── Layer 2–5: Python binary patcher ─────────────────────────────────
-          echo 'aW1wb3J0IHN0cnVjdCwgc3lzLCBvcywgcmFuZG9tCgpwYXRoID0gJy90bXAvYXBrX2hhcmRlbi9saWIvYXJtNjQtdjhhL2xpYmFwcC5zbycKCndpdGggb3BlbihwYXRoLCAncmInKSBhcyBmOgogICAgZGF0YSA9IGJ5dGVhcnJheShmLnJlYWQoKSkKCiMg4pSAIExheWVyIDI6IFplcm8gRGFydCBzbmFwc2hvdCBoYXNoZXMg4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSACiMgRGFydCBWTSAvIGlzb2xhdGUgc25hcHNob3QgZGF0YSBzdGFydHMgd2l0aCAweGRjZGNmNWY1LgojIFRoZSA2NCBieXRlcyBhZnRlciB0aGUgbWFnaWMgY292ZXI6IGtpbmQoNCkgKyByZXNlcnZlZCg4KSArIGhhc2goMzIpICsgZXh0cmEuCiMgQmx1dHRlciAoYW5kIERvbGRydW1zKSB1c2UgdGhpcyBoYXNoIHRvIGlkZW50aWZ5IHRoZSBlbmdpbmUgdmVyc2lvbi4KREFSVF9NQUdJQyA9IGJ5dGVzKFsweGRjLCAweGRjLCAweGY1LCAweGY1XSkKU05BUF9DT1VOVCA9IDAKcG9zID0gMAp3aGlsZSBUcnVlOgogICAgaWR4ID0gZGF0YS5maW5kKERBUlRfTUFHSUMsIHBvcykKICAgIGlmIGlkeCA9PSAtMToKICAgICAgICBicmVhawogICAgcGF0Y2hfcyA9IGlkeCArIGxlbihEQVJUX01BR0lDKQogICAgcGF0Y2hfZSA9IHBhdGNoX3MgKyA2NAogICAgZGF0YVtwYXRjaF9zOnBhdGNoX2VdID0gYidceDAwJyAqIDY0CiAgICBwcmludChmJ1tMMl0gU25hcHNob3QgaGVhZGVyIHplcm9lZCBAIDB4e2lkeDowOHh9JykKICAgIFNOQVBfQ09VTlQgKz0gMQogICAgcG9zID0gaWR4ICsgMQpwcmludChmJ1tMMl0ge1NOQVBfQ09VTlR9IHNuYXBzaG90IGhlYWRlcihzKSBwYXRjaGVkJykKCiMg4pSAIExheWVyIDM6IFJlbW92ZSBFTEYgc2VjdGlvbiBoZWFkZXIgdGFibGUg4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSACiMgQW5kcm9pZCBvbmx5IHVzZXMgcHJvZ3JhbSBoZWFkZXJzIChQVF9MT0FEKSB0byBsb2FkIC5zbyBmaWxlcy4KIyBTZWN0aW9uIGhlYWRlcnMgYXJlIG9ubHkgdXNlZCBieSBkZWJ1Z2dlcnMgYW5kIHJldmVyc2UgZW5naW5lZXJpbmcgdG9vbHMuCiMgU2V0dGluZyBlX3Nob2ZmPTAsIGVfc2hudW09MCwgZV9zaHN0cm5keD0wIGJyZWFrcyBHaGlkcmEvSURBIHNlY3Rpb24gdmlldy4KRUxGX01BR0lDID0gYidceDdmRUxGJwppZiBkYXRhWzo0XSA9PSBFTEZfTUFHSUMgYW5kIGRhdGFbNF0gPT0gMjogICMgNjQtYml0IEVMRgogICAgIyBlX3Nob2ZmICBAIG9mZnNldCA0MCAoOCBieXRlcykg4oCUIHNlY3Rpb24gaGVhZGVyIHRhYmxlIGZpbGUgb2Zmc2V0CiAgICAjIGVfc2hudW0gIEAgb2Zmc2V0IDYwICgyIGJ5dGVzKSDigJQgbnVtYmVyIG9mIHNlY3Rpb24gaGVhZGVycwogICAgIyBlX3Noc3RybmR4IEAgb2Zmc2V0IDYyICgyIGJ5dGVzKSDigJQgc2VjdGlvbiBuYW1lIHN0cmluZyB0YWJsZSBpbmRleAogICAgc3RydWN0LnBhY2tfaW50bygnPFEnLCBkYXRhLCA0MCwgMCkgICAjIGVfc2hvZmYgID0gMAogICAgc3RydWN0LnBhY2tfaW50bygnPEgnLCBkYXRhLCA2MCwgMCkgICAjIGVfc2hudW0gID0gMAogICAgc3RydWN0LnBhY2tfaW50bygnPEgnLCBkYXRhLCA2MiwgMCkgICAjIGVfc2hzdHJuZHggPSBTSE5fVU5ERUYKICAgIHByaW50KCdbTDNdIEVMRiBzZWN0aW9uIGhlYWRlciB0YWJsZSByZWZlcmVuY2UgcmVtb3ZlZCAoZV9zaG9mZi9lX3NobnVtL2Vfc2hzdHJuZHggemVyb2VkKScpCmVsc2U6CiAgICBwcmludCgnW0wzXSBTa2lwcGVkIOKAlCBub3QgYSA2NC1iaXQgRUxGIG9yIG1hZ2ljIG1pc21hdGNoJykKCiMg4pSAIExheWVyIDQ6IFplcm8gR05VIEJ1aWxkLUlEIG5vdGUg4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSACiMgVGhlIGJ1aWxkLWlkIGlzIGEgdW5pcXVlIFNIQTEvTUQ1IGZpbmdlcnByaW50IGVtYmVkZGVkIGJ5IHRoZSBsaW5rZXIuCiMgSXQgY2FuIGJlIHVzZWQgdG8gY29ycmVsYXRlIHRoZSBiaW5hcnkgdG8gYnVpbGQgc3lzdGVtcyBvciBzeW1ib2wgc2VydmVycy4KR05VX05BTUUgPSBiJ0dOVVx4MDAnCkJVSUxEX0lEX1RZUEUgPSAzICAgIyBOVF9HTlVfQlVJTERfSUQKYmlkX2NvdW50ID0gMApwb3MgPSAwCndoaWxlIFRydWU6CiAgICBpZHggPSBkYXRhLmZpbmQoR05VX05BTUUsIHBvcykKICAgIGlmIGlkeCA9PSAtMToKICAgICAgICBicmVhawogICAgIyBBIEdOVSBub3RlIGhhczogbmFtZXN6KDQpK2Rlc2Nzeig0KSt0eXBlKDQpK25hbWUoNCBieXRlcyAiR05VXDAiKStkZXNjCiAgICBub3RlX3N0YXJ0ID0gaWR4IC0gMTIKICAgIGlmIG5vdGVfc3RhcnQgPj0gMDoKICAgICAgICB0cnk6CiAgICAgICAgICAgIG5hbWVzeiwgZGVzY3N6LCBudHlwZSA9IHN0cnVjdC51bnBhY2tfZnJvbSgnPElJSScsIGRhdGEsIG5vdGVfc3RhcnQpCiAgICAgICAgICAgIGlmIG5hbWVzeiA9PSA0IGFuZCBudHlwZSA9PSBCVUlMRF9JRF9UWVBFIGFuZCA4IDw9IGRlc2NzeiA8PSA0MDoKICAgICAgICAgICAgICAgIGRlc2Nfb2ZmID0gaWR4ICsgNAogICAgICAgICAgICAgICAgZGF0YVtkZXNjX29mZjpkZXNjX29mZiArIGRlc2Nzel0gPSBiJ1x4MDAnICogZGVzY3N6CiAgICAgICAgICAgICAgICBwcmludChmJ1tMNF0gR05VIEJ1aWxkLUlEICh7ZGVzY3N6fSBieXRlcykgemVyb2VkIEAgMHh7ZGVzY19vZmY6MDh4fScpCiAgICAgICAgICAgICAgICBiaWRfY291bnQgKz0gMQogICAgICAgIGV4Y2VwdCBFeGNlcHRpb246CiAgICAgICAgICAgIHBhc3MKICAgIHBvcyA9IGlkeCArIDEKaWYgYmlkX2NvdW50ID09IDA6CiAgICBwcmludCgnW0w0XSBObyBHTlUgQnVpbGQtSUQgZm91bmQgKG1heSBoYXZlIGJlZW4gcmVtb3ZlZCBieSBzdHJpcCBhbHJlYWR5KScpCgojIOKUgCBMYXllciA1OiBTY3JhbWJsZSBleHBvcnRlZCBzeW1ib2wgbmFtZSBzdHJpbmdzIGluIC5keW5zdHIg4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSACiMgRXZlbiB3aXRoIC0tb2JmdXNjYXRlLCBhIGZldyBpbnRlcm5hbCBsaW5rZXIgc3ltYm9scyBtYXkgcmVtYWluIHZpc2libGUuCiMgV2UgbG9jYXRlIHRoZSBkeW5hbWljIHN0cmluZyB0YWJsZSB2aWEgUFRfRFlOQU1JQyBhbmQgb3ZlcndyaXRlIHN5bWJvbAojIG5hbWUgc3RyaW5ncyB3aXRoIG51bGwgYnl0ZXMsIHByZXNlcnZpbmcgbGVuZ3RocyBzbyB0aGUgbGlicmFyeSBsb2FkcyBmaW5lLgojIE9ubHkgc2NyYW1ibGVzIG5vbi1lc3NlbnRpYWwgbmFtZXMgKHNraXBzIHNvbmFtZSBhbmQgbmVlZGVkIGVudHJpZXMpLgpTS0lQX1BSRUZJWEVTID0gKGInXHgwMCcsIGInbGliZmx1dHRlcicsIGInbGliYW5kcm9pZCcsIGInbGliYycsIGInbGlibScsCiAgICAgICAgICAgICAgICAgYidsaWJkbCcsIGInbGlic3RkYycsIGInQW5kcm9pZCcsIGInX19jeGEnLCBiJ19fc3RhY2snKQoKZGVmIGZpbmRfZHluc3RyKGJ1Zik6CiAgICAiIiJMb2NhdGUgdGhlIERUX1NUUlRBQiB2YWx1ZSBmcm9tIFBUX0RZTkFNSUMgc2VnbWVudC4iIiIKICAgIGlmIGxlbihidWYpIDwgNjQ6CiAgICAgICAgcmV0dXJuIE5vbmUsIDAKICAgIGVfcGhvZmYgID0gc3RydWN0LnVucGFja19mcm9tKCc8UScsIGJ1ZiwgMzIpWzBdCiAgICBlX3BobnVtICA9IHN0cnVjdC51bnBhY2tfZnJvbSgnPEgnLCBidWYsIDU2KVswXQogICAgZV9waGVudHNpemUgPSBzdHJ1Y3QudW5wYWNrX2Zyb20oJzxIJywgYnVmLCA1NClbMF0KICAgIGZvciBpIGluIHJhbmdlKGVfcGhudW0pOgogICAgICAgIG9mZiA9IGVfcGhvZmYgKyBpICogZV9waGVudHNpemUKICAgICAgICBpZiBvZmYgKyBlX3BoZW50c2l6ZSA+IGxlbihidWYpOgogICAgICAgICAgICBicmVhawogICAgICAgIHBfdHlwZSA9IHN0cnVjdC51bnBhY2tfZnJvbSgnPEknLCBidWYsIG9mZilbMF0KICAgICAgICBpZiBwX3R5cGUgPT0gMjogICMgUFRfRFlOQU1JQwogICAgICAgICAgICBwX29mZnNldCA9IHN0cnVjdC51bnBhY2tfZnJvbSgnPFEnLCBidWYsIG9mZiArIDgpWzBdCiAgICAgICAgICAgIHBfZmlsZXN6ID0gc3RydWN0LnVucGFja19mcm9tKCc8UScsIGJ1Ziwgb2ZmICsgMzIpWzBdCiAgICAgICAgICAgIHN0cnRhYl9vZmYgPSBOb25lCiAgICAgICAgICAgIHN0cnN6ID0gMAogICAgICAgICAgICBwb3MyID0gcF9vZmZzZXQKICAgICAgICAgICAgd2hpbGUgcG9zMiArIDE2IDw9IHBfb2Zmc2V0ICsgcF9maWxlc3ogYW5kIHBvczIgKyAxNiA8PSBsZW4oYnVmKToKICAgICAgICAgICAgICAgIGRfdGFnID0gc3RydWN0LnVucGFja19mcm9tKCc8cScsIGJ1ZiwgcG9zMilbMF0KICAgICAgICAgICAgICAgIGRfdmFsID0gc3RydWN0LnVucGFja19mcm9tKCc8UScsIGJ1ZiwgcG9zMiArIDgpWzBdCiAgICAgICAgICAgICAgICBpZiBkX3RhZyA9PSA1OiAgICMgRFRfU1RSVEFCCiAgICAgICAgICAgICAgICAgICAgc3RydGFiX29mZiA9IGRfdmFsCiAgICAgICAgICAgICAgICBlbGlmIGRfdGFnID09IDEwOiAjIERUX1NUUlNaCiAgICAgICAgICAgICAgICAgICAgc3Ryc3ogPSBkX3ZhbAogICAgICAgICAgICAgICAgZWxpZiBkX3RhZyA9PSAwOiAgIyBEVF9OVUxMCiAgICAgICAgICAgICAgICAgICAgYnJlYWsKICAgICAgICAgICAgICAgIHBvczIgKz0gMTYKICAgICAgICAgICAgcmV0dXJuIHN0cnRhYl9vZmYsIHN0cnN6CiAgICByZXR1cm4gTm9uZSwgMAoKc3RydGFiX3ZhZGRyLCBzdHJzeiA9IGZpbmRfZHluc3RyKGRhdGEpCmlmIHN0cnRhYl92YWRkciBhbmQgc3Ryc3o6CiAgICAjIE1hcCB2aXJ0dWFsIGFkZHJlc3MgdG8gZmlsZSBvZmZzZXQgdmlhIFBUX0xPQUQgc2VnbWVudHMKICAgIGVfcGhvZmYgPSBzdHJ1Y3QudW5wYWNrX2Zyb20oJzxRJywgZGF0YSwgMzIpWzBdCiAgICBlX3BobnVtID0gc3RydWN0LnVucGFja19mcm9tKCc8SCcsIGRhdGEsIDU2KVswXQogICAgZV9waGVudHNpemUgPSBzdHJ1Y3QudW5wYWNrX2Zyb20oJzxIJywgZGF0YSwgNTQpWzBdCiAgICBmaWxlX29mZiA9IE5vbmUKICAgIGZvciBpIGluIHJhbmdlKGVfcGhudW0pOgogICAgICAgIG9mZiA9IGVfcGhvZmYgKyBpICogZV9waGVudHNpemUKICAgICAgICBwX3R5cGUgPSBzdHJ1Y3QudW5wYWNrX2Zyb20oJzxJJywgZGF0YSwgb2ZmKVswXQogICAgICAgIGlmIHBfdHlwZSA9PSAxOiAgIyBQVF9MT0FECiAgICAgICAgICAgIHBfdmFkZHIgICA9IHN0cnVjdC51bnBhY2tfZnJvbSgnPFEnLCBkYXRhLCBvZmYgKyAxNilbMF0KICAgICAgICAgICAgcF9maWxlc3ogID0gc3RydWN0LnVucGFja19mcm9tKCc8UScsIGRhdGEsIG9mZiArIDMyKVswXQogICAgICAgICAgICBwX29mZnNldDIgPSBzdHJ1Y3QudW5wYWNrX2Zyb20oJzxRJywgZGF0YSwgb2ZmICsgOClbMF0KICAgICAgICAgICAgaWYgcF92YWRkciA8PSBzdHJ0YWJfdmFkZHIgPCBwX3ZhZGRyICsgcF9maWxlc3o6CiAgICAgICAgICAgICAgICBmaWxlX29mZiA9IHBfb2Zmc2V0MiArIChzdHJ0YWJfdmFkZHIgLSBwX3ZhZGRyKQogICAgICAgICAgICAgICAgYnJlYWsKICAgIGlmIGZpbGVfb2ZmOgogICAgICAgIHNjcmFtX2NvdW50ID0gMAogICAgICAgIHBvczMgPSBmaWxlX29mZiArIDEKICAgICAgICBlbmQzID0gZmlsZV9vZmYgKyBzdHJzegogICAgICAgIHdoaWxlIHBvczMgPCBlbmQzOgogICAgICAgICAgICBudWxsID0gZGF0YS5pbmRleChiJ1x4MDAnLCBwb3MzKSBpZiBiJ1x4MDAnIGluIGRhdGFbcG9zMzplbmQzXSBlbHNlIGVuZDMKICAgICAgICAgICAgc3ltICA9IGRhdGFbcG9zMzpudWxsXQogICAgICAgICAgICBpZiBzeW0gYW5kIG5vdCBhbnkoc3ltLnN0YXJ0c3dpdGgocCkgZm9yIHAgaW4gU0tJUF9QUkVGSVhFUyk6CiAgICAgICAgICAgICAgICBkYXRhW3BvczM6bnVsbF0gPSBiJ1x4MDAnICogbGVuKHN5bSkKICAgICAgICAgICAgICAgIHNjcmFtX2NvdW50ICs9IDEKICAgICAgICAgICAgcG9zMyA9IG51bGwgKyAxCiAgICAgICAgcHJpbnQoZidbTDVdIHtzY3JhbV9jb3VudH0gZHluYW1pYyBzeW1ib2wgbmFtZShzKSB3aXBlZCBmcm9tIC5keW5zdHInKQogICAgZWxzZToKICAgICAgICBwcmludCgnW0w1XSBDb3VsZCBub3QgbWFwIERUX1NUUlRBQiB2YWRkciB0byBmaWxlIG9mZnNldCDigJQgc2tpcHBpbmcnKQplbHNlOgogICAgcHJpbnQoJ1tMNV0gTm8gUFRfRFlOQU1JQyAvIERUX1NUUlRBQiBmb3VuZCDigJQgc2tpcHBpbmcnKQoKIyDilIAgTGF5ZXIgNjogQ29udmVydCBQVF9OT1RFIHNlZ21lbnRzIHRvIFBUX05VTEwg4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSACiMgUFRfTk9URSBwcm9ncmFtIGhlYWRlcnMgY2FycnkgT1MgQUJJIG5vdGVzLCBidWlsZCB2ZXJzaW9uIG5vdGVzLCBhbmQKIyBHTlUgcHJvcGVydHkgbm90ZXMgdGhhdCB0b29scyBsaWtlIHJlYWRlbGYsIHB3bnRvb2xzLCBhbmQgR2hpZHJhIHJlbHkgb24KIyB0byBpZGVudGlmeSB0aGUgdGFyZ2V0IEFCSSBhbmQgYXJjaGl0ZWN0dXJlIGZlYXR1cmVzLgojIENoYW5naW5nIHRoZWlyIHBfdHlwZSB0byBQVF9OVUxMICgwKSBtYWtlcyBsb2FkZXJzIGlnbm9yZSB0aGVtIGhhcm1sZXNzbHkKIyB3aGlsZSBzdHJpcHBpbmcgdGhhdCBtZXRhZGF0YSBlbnRpcmVseSBmcm9tIGFuYWx5c2lzIHRvb2xzLgplX3Bob2ZmNiAgICA9IHN0cnVjdC51bnBhY2tfZnJvbSgnPFEnLCBkYXRhLCAzMilbMF0KZV9waG51bTYgICAgPSBzdHJ1Y3QudW5wYWNrX2Zyb20oJzxIJywgZGF0YSwgNTYpWzBdCmVfcGhlbnRzaXplNiA9IHN0cnVjdC51bnBhY2tfZnJvbSgnPEgnLCBkYXRhLCA1NClbMF0Kbm90ZV9jb3VudCA9IDAKZm9yIGkgaW4gcmFuZ2UoZV9waG51bTYpOgogICAgb2ZmID0gZV9waG9mZjYgKyBpICogZV9waGVudHNpemU2CiAgICBwX3R5cGUgPSBzdHJ1Y3QudW5wYWNrX2Zyb20oJzxJJywgZGF0YSwgb2ZmKVswXQogICAgaWYgcF90eXBlID09IDQ6ICAjIFBUX05PVEUKICAgICAgICBzdHJ1Y3QucGFja19pbnRvKCc8SScsIGRhdGEsIG9mZiwgMCkgICMg4oaSIFBUX05VTEwKICAgICAgICBub3RlX2NvdW50ICs9IDEKICAgICAgICBwcmludChmJ1tMNl0gUFRfTk9URSDihpIgUFRfTlVMTCBhdCBwaGRyW3tpfV0nKQpwcmludChmJ1tMNl0ge25vdGVfY291bnR9IFBUX05PVEUgc2VnbWVudChzKSBuZXV0cmFsaXNlZCcpCgojIOKUgCBMYXllciA3OiBaZXJvIEVMRiBlbnRyeSBwb2ludCDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAKIyBTaGFyZWQgbGlicmFyaWVzIGRvIG5vdCB1c2UgZV9lbnRyeSAoaXQgc2hvdWxkIGJlIDApLCBidXQgdGhlIGxpbmtlcgojIHNvbWV0aW1lcyBzZXRzIGl0IHRvIHRoZSBhZGRyZXNzIG9mIF9pbml0IG9yIGEgUExUIHN0dWIuCiMgU29tZSBhdXRvbWF0ZWQgYW5hbHlzaXMgcGlwZWxpbmVzIHN0YXJ0IGRpc2Fzc2VtYmx5IGZyb20gZV9lbnRyeTsgemVyb2luZwojIGl0IHNlbmRzIHRoZW0gdG8gYWRkcmVzcyAweDAgd2hpY2ggaXMgdW5tYXBwZWQgYW5kIGNyYXNoZXMgdGhlaXIgYW5hbHlzaXMuCmlmIGRhdGFbOjRdID09IEVMRl9NQUdJQyBhbmQgZGF0YVs0XSA9PSAyOgogICAgb2xkX2VudHJ5ID0gc3RydWN0LnVucGFja19mcm9tKCc8UScsIGRhdGEsIDI0KVswXQogICAgc3RydWN0LnBhY2tfaW50bygnPFEnLCBkYXRhLCAyNCwgMCkKICAgIHByaW50KGYnW0w3XSBlX2VudHJ5IDB4e29sZF9lbnRyeTowMTZ4fSDihpIgMHgwMDAwMDAwMDAwMDAwMDAwJykKZWxzZToKICAgIHByaW50KCdbTDddIFNraXBwZWQg4oCUIG5vdCA2NC1iaXQgRUxGJykKCiMg4pSAIExheWVyIDg6IFplcm8gRFRfU09OQU1FIGluIGR5bmFtaWMgc3RyaW5nIHRhYmxlIOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgAojIERUX1NPTkFNRSBpcyB0aGUgbGlicmFyeSdzIG93biBkZWNsYXJlZCBuYW1lIChlLmcuICJsaWJhcHAuc28iKS4KIyBUaGUgZHluYW1pYyBsaW5rZXIgZG9lc24ndCBuZWVkIGl0IGZvciBsb2FkaW5nIChpdCB1c2VzIHRoZSBmaWxlbmFtZSBmcm9tCiMgRFRfTkVFREVEIGluIHRoZSBwYXJlbnQpLiBUb29scyBsaWtlIGxkZCwgcmVhZGVsZiAtZCwgYW5kIEZyaWRhJ3MKIyBNb2R1bGUuZmluZEV4cG9ydEJ5TmFtZSgpIHVzZSBpdCB0byBpZGVudGlmeSBhbmQgYXR0YWNoIHRvIHRoZSBsaWJyYXJ5LgojIFplcm9pbmcgdGhlIHN0cmluZyBicmVha3MgdGhhdCBpZGVudGlmaWNhdGlvbiB3aXRob3V0IGFmZmVjdGluZyBsb2FkaW5nLgpkZWYgZmluZF9keW5hbWljX3NlY3Rpb24oYnVmKToKICAgIGVfcGggPSBzdHJ1Y3QudW5wYWNrX2Zyb20oJzxRJywgYnVmLCAzMilbMF0KICAgIGVfcG4gPSBzdHJ1Y3QudW5wYWNrX2Zyb20oJzxIJywgYnVmLCA1NilbMF0KICAgIGVfcHMgPSBzdHJ1Y3QudW5wYWNrX2Zyb20oJzxIJywgYnVmLCA1NClbMF0KICAgIGZvciBpIGluIHJhbmdlKGVfcG4pOgogICAgICAgIG8gPSBlX3BoICsgaSAqIGVfcHMKICAgICAgICBpZiBzdHJ1Y3QudW5wYWNrX2Zyb20oJzxJJywgYnVmLCBvKVswXSA9PSAyOiAgIyBQVF9EWU5BTUlDCiAgICAgICAgICAgIHJldHVybiBzdHJ1Y3QudW5wYWNrX2Zyb20oJzxRJywgYnVmLCBvICsgOClbMF0sIHN0cnVjdC51bnBhY2tfZnJvbSgnPFEnLCBidWYsIG8gKyAzMilbMF0KICAgIHJldHVybiAwLCAwCgpkZWYgdmFkZHJfdG9fZm9mZihidWYsIHZhZGRyKToKICAgIGVfcGggPSBzdHJ1Y3QudW5wYWNrX2Zyb20oJzxRJywgYnVmLCAzMilbMF0KICAgIGVfcG4gPSBzdHJ1Y3QudW5wYWNrX2Zyb20oJzxIJywgYnVmLCA1NilbMF0KICAgIGVfcHMgPSBzdHJ1Y3QudW5wYWNrX2Zyb20oJzxIJywgYnVmLCA1NClbMF0KICAgIGZvciBpIGluIHJhbmdlKGVfcG4pOgogICAgICAgIG8gPSBlX3BoICsgaSAqIGVfcHMKICAgICAgICBpZiBzdHJ1Y3QudW5wYWNrX2Zyb20oJzxJJywgYnVmLCBvKVswXSA9PSAxOiAgIyBQVF9MT0FECiAgICAgICAgICAgIHB2ID0gc3RydWN0LnVucGFja19mcm9tKCc8UScsIGJ1ZiwgbyArIDE2KVswXQogICAgICAgICAgICBwZiA9IHN0cnVjdC51bnBhY2tfZnJvbSgnPFEnLCBidWYsIG8gKyAzMilbMF0KICAgICAgICAgICAgcG8gPSBzdHJ1Y3QudW5wYWNrX2Zyb20oJzxRJywgYnVmLCBvICsgOClbMF0KICAgICAgICAgICAgaWYgcHYgPD0gdmFkZHIgPCBwdiArIHBmOgogICAgICAgICAgICAgICAgcmV0dXJuIHBvICsgKHZhZGRyIC0gcHYpCiAgICByZXR1cm4gTm9uZQoKZHluX2ZvZmYsIGR5bl9mc3ogPSBmaW5kX2R5bmFtaWNfc2VjdGlvbihkYXRhKQpzdHJ0YWJfdmEyLCBzdHJzejIgPSBmaW5kX2R5bnN0cihkYXRhKQpzdHJ0YWJfZm9mZjIgPSB2YWRkcl90b19mb2ZmKGRhdGEsIHN0cnRhYl92YTIpIGlmIHN0cnRhYl92YTIgZWxzZSBOb25lCnNvbmFtZV9mb3VuZCA9IEZhbHNlCmlmIGR5bl9mb2ZmIGFuZCBzdHJ0YWJfZm9mZjI6CiAgICBwb3M4ID0gZHluX2ZvZmYKICAgIHdoaWxlIHBvczggKyAxNiA8PSBkeW5fZm9mZiArIGR5bl9mc3ogYW5kIHBvczggKyAxNiA8PSBsZW4oZGF0YSk6CiAgICAgICAgZF90YWcgPSBzdHJ1Y3QudW5wYWNrX2Zyb20oJzxxJywgZGF0YSwgcG9zOClbMF0KICAgICAgICBkX3ZhbCA9IHN0cnVjdC51bnBhY2tfZnJvbSgnPFEnLCBkYXRhLCBwb3M4ICsgOClbMF0KICAgICAgICBpZiBkX3RhZyA9PSAxNDogICMgRFRfU09OQU1FCiAgICAgICAgICAgIG5hbWVfb2ZmID0gc3RydGFiX2ZvZmYyICsgZF92YWwKICAgICAgICAgICAgZW5kX29mZiA9IGRhdGEuaW5kZXgoYidceDAwJywgbmFtZV9vZmYpCiAgICAgICAgICAgIHNvbmFtZSA9IGRhdGFbbmFtZV9vZmY6ZW5kX29mZl0KICAgICAgICAgICAgZGF0YVtuYW1lX29mZjplbmRfb2ZmXSA9IGInXHgwMCcgKiBsZW4oc29uYW1lKQogICAgICAgICAgICBwcmludChmJ1tMOF0gRFRfU09OQU1FICJ7c29uYW1lLmRlY29kZShlcnJvcnM9InJlcGxhY2UiKX0iIHplcm9lZCcpCiAgICAgICAgICAgIHNvbmFtZV9mb3VuZCA9IFRydWUKICAgICAgICAgICAgYnJlYWsKICAgICAgICBpZiBkX3RhZyA9PSAwOgogICAgICAgICAgICBicmVhawogICAgICAgIHBvczggKz0gMTYKaWYgbm90IHNvbmFtZV9mb3VuZDoKICAgIHByaW50KCdbTDhdIERUX1NPTkFNRSBub3QgZm91bmQgb3IgYWxyZWFkeSBhYnNlbnQnKQoKIyDilIAgTGF5ZXIgOTogWmVybyBEVF9ERUJVRyBpbiBkeW5hbWljIHNlY3Rpb24gKGFudGktZGVidWdnZXIpIOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgAojIFRoZSBkeW5hbWljIGxpbmtlciBmaWxscyBEVF9ERUJVRyBhdCBydW50aW1lIHdpdGggYSBwb2ludGVyIHRvIGl0cwojIGludGVybmFsIHJfZGVidWcgc3RydWN0LiBHREIsIExMREIsIGFuZCBGcmlkYSByZWFkIHRoaXMgdG8gd2FsayB0aGUKIyBsb2FkZWQgbGlicmFyeSBsaXN0IGFuZCByZXNvbHZlIHN5bWJvbHMuIFplcm9pbmcgdGhlIGRfdmFsIHByZXZlbnRzIHRoZQojIGxpbmtlciBmcm9tIHdyaXRpbmcgdGhlIHBvaW50ZXIgKHNvbWUgbGlua2VyIHZlcnNpb25zIGNoZWNrIGZvciAwIGFuZCBza2lwKS4KIyBFdmVuIHdoZW4gbGlua2VycyBpZ25vcmUgaXQsIHJlbW92aW5nIHRoZSB0YWcgY29uZnVzZXMgdG9vbHMgdGhhdCBzY2FuIGZvcgojIGl0IGFzIGEgZGVidWdnYWJpbGl0eSBtYXJrZXIuCmRlYnVnX2NvdW50ID0gMAppZiBkeW5fZm9mZjoKICAgIHBvczkgPSBkeW5fZm9mZgogICAgd2hpbGUgcG9zOSArIDE2IDw9IGR5bl9mb2ZmICsgZHluX2ZzeiBhbmQgcG9zOSArIDE2IDw9IGxlbihkYXRhKToKICAgICAgICBkX3RhZyA9IHN0cnVjdC51bnBhY2tfZnJvbSgnPHEnLCBkYXRhLCBwb3M5KVswXQogICAgICAgIGlmIGRfdGFnID09IDIxOiAgIyBEVF9ERUJVRwogICAgICAgICAgICBzdHJ1Y3QucGFja19pbnRvKCc8UScsIGRhdGEsIHBvczkgKyA4LCAwKQogICAgICAgICAgICBzdHJ1Y3QucGFja19pbnRvKCc8cScsIGRhdGEsIHBvczksIDApICAjIGFsc28gemVybyB0aGUgdGFnIOKGkiBEVF9OVUxMCiAgICAgICAgICAgIHByaW50KGYnW0w5XSBEVF9ERUJVRyBlbnRyeSB6ZXJvZWQgYW5kIHRhZyDihpIgRFRfTlVMTCcpCiAgICAgICAgICAgIGRlYnVnX2NvdW50ICs9IDEKICAgICAgICBpZiBkX3RhZyA9PSAwOgogICAgICAgICAgICBicmVhawogICAgICAgIHBvczkgKz0gMTYKaWYgZGVidWdfY291bnQgPT0gMDoKICAgIHByaW50KCdbTDldIERUX0RFQlVHIG5vdCBmb3VuZCDigJQgc3RyaXBwZWQgYnVpbGQgb3IgYWxyZWFkeSBhYnNlbnQnKQoKIyDilIAgTGF5ZXIgMTA6IFdpcGUgaWRlbnRpZmllciBzdHJpbmdzIGZyb20gZGF0YSByZWdpb25zIOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgAojIC0tb2JmdXNjYXRlIHJlbmFtZXMgRGFydCBjbGFzcy9tZXRob2QgbmFtZXMgYnV0IGNhbm5vdCByZW1vdmUgaGFyZGNvZGVkCiMgc3RyaW5nIGxpdGVyYWxzIGJha2VkIGludG8gdGhlIHNuYXBzaG90IG9yIHJ1bnRpbWUgKGRhcnQ6IHNjaGVtZSBwcmVmaXhlcywKIyBwYWNrYWdlOiBVUklzLCBmaWxlIHBhdGhzLCBlcnJvciB0ZW1wbGF0ZXMsIFNESyB2ZXJzaW9uIHN0cmluZ3MpLgojIFdlIHNjYW4gZm9yIHByaW50YWJsZSBBU0NJSSBydW5zID49IDEwIGNoYXJzIHRoYXQgbWF0Y2gga25vd24gaWRlbnRpZmllcgojIHBhdHRlcm5zIGFuZCB6ZXJvIHRoZW0uIFRoZSBEYXJ0IHJ1bnRpbWUgbmV2ZXIgcmVhZHMgdGhlc2UgYXQgcnVudGltZSDigJQKIyB0aGV5IGFyZSBvbmx5IHByZXNlbnQgZm9yIHN0YWNrLXRyYWNlIGZvcm1hdHRpbmcgYW5kIGFyZSBhbHJlYWR5IHN0cmlwcGVkCiMgYnkgdGhlIHNuYXBzaG90IG9iZnVzY2F0aW9uIGZsYWcuCmltcG9ydCByZQpJRF9QQVRURVJOUyA9IHJlLmNvbXBpbGUoCiAgICByYicoPzonCiAgICByYidkYXJ0OlthLXpfL117Myx9JyAgICAgICAgIyBkYXJ0OmNvcmUsIGRhcnQ6YXN5bmMsIGRhcnQ6aW8g4oCmCiAgICByYid8cGFja2FnZTpbYS16Xy4vXXs0LH0nICAgIyBwYWNrYWdlOmZsdXR0ZXIv4oCmCiAgICByYid8Y29tXC5bYS16XVthLXowLTlfLl17NCx9JyAgIyBjb20uZXhhbXBsZS5mb28KICAgIHJiJ3xmbHV0dGVyWy9fXVthLXpdezMsfScgICAjIGZsdXR0ZXIvc3JjL+KApgogICAgcmInfC9kYXRhL1thLXpfLi9dezYsfScgICAgICMgL2RhdGEvdXNlci8wL+KApgogICAgcmInfGZpbGU6Ly8vW2Etel8uL117Nix9JyAgICMgZmlsZTovLy9wYXRoL+KApgogICAgcmInfGh0dHBzPzovL1thLXpBLVowLTkuXy8tXXs2LH0nICAjIFVSTHMKICAgIHJiJyknCikKaWRfY291bnQgPSAwCmZvciBtIGluIElEX1BBVFRFUk5TLmZpbmRpdGVyKGRhdGEpOgogICAgcywgZSA9IG0uc3RhcnQoKSwgbS5lbmQoKQogICAgZGF0YVtzOmVdID0gYidceDAwJyAqIChlIC0gcykKICAgIGlkX2NvdW50ICs9IDEKcHJpbnQoZidbTDEwXSB7aWRfY291bnR9IGlkZW50aWZpZXIgc3RyaW5nKHMpIHdpcGVkIGZyb20gYmluYXJ5IGRhdGEnKQoKIyDilIAgTGF5ZXIgMTE6IFBvaXNvbiBFTEYgaWRlbnQgcGFkZGluZyBieXRlcyDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAKIyBCeXRlcyA5LTE1IG9mIHRoZSBFTEYgaGVhZGVyIChFSV9BQklWRVJTSU9OICsgRUlfUEFEKSBhcmUgb2ZmaWNpYWxseQojIGRlZmluZWQgYXMgcGFkZGluZyBhbmQgbXVzdCBiZSB6ZXJvIHBlciB0aGUgQUJJIHNwZWMuIEJlY2F1c2UgdGhleSBhcmUKIyAiZG9uJ3QgY2FyZSIgZm9yIHRoZSBsb2FkZXIsIHRvb2xzIHNvbWV0aW1lcyB1c2UgdGhlbSBhcyBhIGZpbmdlcnByaW50aW5nCiMgYW5jaG9yIG9yIHN0b3JlIG1ldGFkYXRhIHRoZXJlIChzb21lIHBhY2tlcnMsIHNvbWUgc2VjdXJpdHkgc2Nhbm5lcnMpLgojIEZpbGxpbmcgdGhlbSB3aXRoIGEgcmVwZWF0aW5nIG1hcmtlciB2YWx1ZSBicmVha3MgYW55IHRvb2wgdGhhdCByZWxpZXMgb24KIyB0aGVzZSBieXRlcyBiZWluZyB6ZXJvLCB3aGlsZSB0aGUgQW5kcm9pZCBsb2FkZXIgaWdub3JlcyB0aGVtIGVudGlyZWx5LgppZiBsZW4oZGF0YSkgPj0gMTY6CiAgICAjIFVzZSBhIHJlY29nbmlzYWJsZS10by11cyBidXQgdG9vbC1jb25mdXNpbmcgbWFya2VyOiAweENCIHJlcGVhdGVkCiAgICBQT0lTT04gPSBiJ1x4Y2JceGNiXHhjYlx4Y2JceGNiXHhjYlx4Y2InCiAgICBkYXRhWzk6MTZdID0gUE9JU09OCiAgICBwcmludChmJ1tMMTFdIEVMRiBpZGVudCBwYWRkaW5nIGJ5dGVzIFs5LTE1XSBwb2lzb25lZCB3aXRoIDB4Y2IgbWFya2VyJykKZWxzZToKICAgIHByaW50KCdbTDExXSBTa2lwcGVkIOKAlCBmaWxlIHRvbyBzbWFsbCcpCgp3aXRoIG9wZW4ocGF0aCwgJ3diJykgYXMgZjoKICAgIGYud3JpdGUoZGF0YSkKCnByaW50KCdBbGwgaGFyZGVuaW5nIGxheWVycyBhcHBsaWVkIOKckycp' | base64 -d > /tmp/harden.py
-          python3 /tmp/harden.py
-
-          echo "Hardened size: $(du -sh $LIBAPP | cut -f1)"
-
-          # ── Repack patched libapp.so into APK ─────────────────────────────
-          # -0 = store without compression (required for .so files in APKs)
-          # Flutter stores native libs uncompressed for zipalign + direct mmap.
-          # Using default deflate compression here would break zipalign alignment
-          # and cause Android to reject the APK with "package appears to be invalid".
-          PATCHED="$WORKDIR/patched.apk"
-          cp "$INPUT" "$PATCHED"
-          cd "$WORKDIR"
-          zip -u -0 "$PATCHED" lib/arm64-v8a/libapp.so
-          echo "BUILD_OUTPUT=$PATCHED" >> $GITHUB_ENV
-          echo "libapp.so hardened and APK repacked ✓"
-
+      # ── 11. Sign APK ──────────────────────────────────────────────────────────
       - name: Sign APK
         run: |
+          # Read signing credentials from key.properties (set in step 8)
+          STORE_PASS=$(grep "^storePassword=" /tmp/key.properties | cut -d= -f2-)
+          KEY_PASS=$(grep "^keyPassword="    /tmp/key.properties | cut -d= -f2-)
+          KEY_ALIAS_VAL=$(grep "^keyAlias="  /tmp/key.properties | cut -d= -f2-)
+
           INPUT="${BUILD_OUTPUT}"
           ALIGNED="/tmp/aligned.apk"
           SIGNED="/tmp/signed_final.apk"
           zipalign -v -p 4 "$INPUT" "$ALIGNED" 2>/dev/null || cp "$INPUT" "$ALIGNED"
-
-          # Read credentials from /tmp/key.properties (set by "Set up signing keystore")
-          # This handles both USER_SIGNING=true (user's keys) and false (default keys)
-          KP="/tmp/key.properties"
-          KS_PASS=$(grep  '^storePassword=' "$KP" | cut -d= -f2-)
-          KEY_PASS=$(grep '^keyPassword='   "$KP" | cut -d= -f2-)
-          KEY_ALIAS=$(grep '^keyAlias='     "$KP" | cut -d= -f2-)
-
           apksigner sign \
             --ks /tmp/release.keystore \
-            --ks-pass  "pass:${KS_PASS}" \
-            --key-pass "pass:${KEY_PASS}" \
-            --ks-key-alias "${KEY_ALIAS}" \
+            --ks-pass "pass:$STORE_PASS" \
+            --key-pass "pass:$KEY_PASS" \
+            --ks-key-alias "$KEY_ALIAS_VAL" \
             --out "$SIGNED" \
             "$ALIGNED"
           apksigner verify "$SIGNED" && echo "APK signed and verified ✓"
+          echo "Signed with alias: $KEY_ALIAS_VAL  |  source: $SIGNING_SOURCE"
           SAFE_NAME=$(echo "$APP_NAME" | tr ' ' '_' | tr -dc '[:alnum:]_-')
           FINAL="/tmp/${SAFE_NAME}_${BUILD_MODE}.apk"
           mv "$SIGNED" "$FINAL"
@@ -796,3 +798,4 @@ jobs:
           echo "| Type | ${{ steps.detect.outputs.type }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Mode | $BUILD_MODE |" >> $GITHUB_STEP_SUMMARY
           echo "| APK | $APK_NAME |" >> $GITHUB_STEP_SUMMARY
+          echo "| Signing | ${SIGNING_SOURCE:-CBE default (cbe_release_key)} |" >> $GITHUB_STEP_SUMMARY

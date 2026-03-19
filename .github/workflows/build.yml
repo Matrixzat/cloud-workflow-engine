@@ -49,6 +49,10 @@ jobs:
 
     steps:
 
+      # ── 0. Checkout repo so $GITHUB_WORKSPACE has .github/scripts/ available ─
+      - name: Checkout workflow repo
+        uses: actions/checkout@v4
+
       # ── 1. System dependencies ───────────────────────────────────────────────
       - name: Install system dependencies
         run: |

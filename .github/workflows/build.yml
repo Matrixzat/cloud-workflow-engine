@@ -551,82 +551,12 @@ jobs:
             PKG_PATH=$(echo "$PACKAGE_NAME" | tr '.' '/')
 
             # Layers 4-7: Runtime guards (root / anti-debug / anti-hook / emulator)
+            # Kotlin template is base64-encoded to avoid YAML colon-parsing issues
             GUARD_DIR="android/app/src/main/kotlin/${PKG_PATH}"
             mkdir -p "$GUARD_DIR"
-            cat > "$GUARD_DIR/AppGuardProvider.kt" << 'KOTLIN_EOF'
-package PLACEHOLDER_PACKAGE
-
-import android.content.ContentProvider
-import android.content.ContentValues
-import android.database.Cursor
-import android.net.Uri
-import android.os.Process
-import java.io.File
-
-class AppGuardProvider : ContentProvider() {
-    override fun onCreate(): Boolean {
-        checkRoot()
-        checkDebugger()
-        checkHooks()
-        checkEmulator()
-        return true
-    }
-
-    // Layer 6: Root Detection
-    private fun checkRoot() {
-        val rootPaths = listOf(
-            "/system/app/Superuser.apk", "/sbin/su", "/system/bin/su",
-            "/system/xbin/su", "/data/local/xbin/su", "/data/local/bin/su",
-            "/system/sd/xbin/su", "/system/bin/failsafe/su", "/data/local/su", "/su/bin/su"
-        )
-        if (rootPaths.any { File(it).exists() }) Process.killProcess(Process.myPid())
-        try {
-            val p = Runtime.getRuntime().exec(arrayOf("/system/xbin/which", "su"))
-            if (p.inputStream.read() != -1) Process.killProcess(Process.myPid())
-        } catch (_: Exception) {}
-    }
-
-    // Layer 7: Anti-Debug
-    private fun checkDebugger() {
-        if (android.os.Debug.isDebuggerConnected()) Process.killProcess(Process.myPid())
-        try {
-            val tracerPid = File("/proc/self/status").readLines()
-                .firstOrNull { it.startsWith("TracerPid:") }
-                ?.trim()?.split("\\s+".toRegex())?.lastOrNull()?.trim()
-            if (tracerPid != null && tracerPid != "0") Process.killProcess(Process.myPid())
-        } catch (_: Exception) {}
-    }
-
-    // Layer 8: Anti-Hooking (Frida / Xposed / Substrate / LSPosed)
-    private fun checkHooks() {
-        val hooking = listOf("frida", "xposed", "lsposed", "substrate", "edxposed", "magisk")
-        try {
-            val maps = File("/proc/self/maps").readText().lowercase()
-            if (hooking.any { maps.contains(it) }) Process.killProcess(Process.myPid())
-        } catch (_: Exception) {}
-    }
-
-    // Layer 9: Emulator / VM Detection
-    private fun checkEmulator() {
-        val build = android.os.Build
-        val markers = listOf("generic", "unknown", "google_sdk", "emulator", "sdk_gphone",
-            "bluestacks", "genymotion", "vbox", "nox", "memu")
-        val fields = listOf(
-            build.FINGERPRINT, build.MODEL, build.MANUFACTURER,
-            build.HARDWARE, build.PRODUCT, build.BOARD
-        ).map { it.lowercase() }
-        if (markers.any { m -> fields.any { it.contains(m) } }) Process.killProcess(Process.myPid())
-    }
-
-    override fun query(uri: Uri, proj: Array<String>?, sel: String?, args: Array<String>?, sort: String?): Cursor? = null
-    override fun getType(uri: Uri): String? = null
-    override fun insert(uri: Uri, values: ContentValues?): Uri? = null
-    override fun delete(uri: Uri, sel: String?, args: Array<String>?): Int = 0
-    override fun update(uri: Uri, values: ContentValues?, sel: String?, args: Array<String>?): Int = 0
-}
-KOTLIN_EOF
-            sed -i "s/package PLACEHOLDER_PACKAGE/package $PACKAGE_NAME/" "$GUARD_DIR/AppGuardProvider.kt"
-            echo "Layers 6-9: AppGuardProvider.kt → $GUARD_DIR ✓"
+            echo "cGFja2FnZSBQTEFDRUhPTERFUl9QQUNLQUdFCgppbXBvcnQgYW5kcm9pZC5jb250ZW50LkNvbnRlbnRQcm92aWRlcgppbXBvcnQgYW5kcm9pZC5jb250ZW50LkNvbnRlbnRWYWx1ZXMKaW1wb3J0IGFuZHJvaWQuZGF0YWJhc2UuQ3Vyc29yCmltcG9ydCBhbmRyb2lkLm5ldC5VcmkKaW1wb3J0IGFuZHJvaWQub3MuUHJvY2VzcwppbXBvcnQgamF2YS5pby5GaWxlCgpjbGFzcyBBcHBHdWFyZFByb3ZpZGVyIDogQ29udGVudFByb3ZpZGVyKCkgewogICAgb3ZlcnJpZGUgZnVuIG9uQ3JlYXRlKCk6IEJvb2xlYW4gewogICAgICAgIGNoZWNrUm9vdCgpCiAgICAgICAgY2hlY2tEZWJ1Z2dlcigpCiAgICAgICAgY2hlY2tIb29rcygpCiAgICAgICAgY2hlY2tFbXVsYXRvcigpCiAgICAgICAgcmV0dXJuIHRydWUKICAgIH0KCiAgICBwcml2YXRlIGZ1biBjaGVja1Jvb3QoKSB7CiAgICAgICAgdmFsIHJvb3RQYXRocyA9IGxpc3RPZigKICAgICAgICAgICAgIi9zeXN0ZW0vYXBwL1N1cGVydXNlci5hcGsiLCAiL3NiaW4vc3UiLCAiL3N5c3RlbS9iaW4vc3UiLAogICAgICAgICAgICAiL3N5c3RlbS94YmluL3N1IiwgIi9kYXRhL2xvY2FsL3hiaW4vc3UiLCAiL2RhdGEvbG9jYWwvYmluL3N1IiwKICAgICAgICAgICAgIi9zeXN0ZW0vc2QveGJpbi9zdSIsICIvc3lzdGVtL2Jpbi9mYWlsc2FmZS9zdSIsCiAgICAgICAgICAgICIvZGF0YS9sb2NhbC9zdSIsICIvc3UvYmluL3N1IgogICAgICAgICkKICAgICAgICBpZiAocm9vdFBhdGhzLmFueSB7IEZpbGUoaXQpLmV4aXN0cygpIH0pIFByb2Nlc3Mua2lsbFByb2Nlc3MoUHJvY2Vzcy5teVBpZCgpKQogICAgICAgIHRyeSB7CiAgICAgICAgICAgIHZhbCBwID0gUnVudGltZS5nZXRSdW50aW1lKCkuZXhlYyhhcnJheU9mKCIvc3lzdGVtL3hiaW4vd2hpY2giLCAic3UiKSkKICAgICAgICAgICAgaWYgKHAuaW5wdXRTdHJlYW0ucmVhZCgpICE9IC0xKSBQcm9jZXNzLmtpbGxQcm9jZXNzKFByb2Nlc3MubXlQaWQoKSkKICAgICAgICB9IGNhdGNoIChfOiBFeGNlcHRpb24pIHt9CiAgICB9CgogICAgcHJpdmF0ZSBmdW4gY2hlY2tEZWJ1Z2dlcigpIHsKICAgICAgICBpZiAoYW5kcm9pZC5vcy5EZWJ1Zy5pc0RlYnVnZ2VyQ29ubmVjdGVkKCkpIFByb2Nlc3Mua2lsbFByb2Nlc3MoUHJvY2Vzcy5teVBpZCgpKQogICAgICAgIHRyeSB7CiAgICAgICAgICAgIHZhbCB0cmFjZXJQaWQgPSBGaWxlKCIvcHJvYy9zZWxmL3N0YXR1cyIpLnJlYWRMaW5lcygpCiAgICAgICAgICAgICAgICAuZmlyc3RPck51bGwgeyBpdC5zdGFydHNXaXRoKCJUcmFjZXJQaWQ6IikgfQogICAgICAgICAgICAgICAgPy50cmltKCk/LnNwbGl0KCJcXHMrIi50b1JlZ2V4KCkpPy5sYXN0T3JOdWxsKCk/LnRyaW0oKQogICAgICAgICAgICBpZiAodHJhY2VyUGlkICE9IG51bGwgJiYgdHJhY2VyUGlkICE9ICIwIikgUHJvY2Vzcy5raWxsUHJvY2VzcyhQcm9jZXNzLm15UGlkKCkpCiAgICAgICAgfSBjYXRjaCAoXzogRXhjZXB0aW9uKSB7fQogICAgfQoKICAgIHByaXZhdGUgZnVuIGNoZWNrSG9va3MoKSB7CiAgICAgICAgdmFsIGhvb2tpbmcgPSBsaXN0T2YoImZyaWRhIiwgInhwb3NlZCIsICJsc3Bvc2VkIiwgInN1YnN0cmF0ZSIsICJlZHhwb3NlZCIsICJtYWdpc2siKQogICAgICAgIHRyeSB7CiAgICAgICAgICAgIHZhbCBtYXBzID0gRmlsZSgiL3Byb2Mvc2VsZi9tYXBzIikucmVhZFRleHQoKS5sb3dlcmNhc2UoKQogICAgICAgICAgICBpZiAoaG9va2luZy5hbnkgeyBtYXBzLmNvbnRhaW5zKGl0KSB9KSBQcm9jZXNzLmtpbGxQcm9jZXNzKFByb2Nlc3MubXlQaWQoKSkKICAgICAgICB9IGNhdGNoIChfOiBFeGNlcHRpb24pIHt9CiAgICB9CgogICAgcHJpdmF0ZSBmdW4gY2hlY2tFbXVsYXRvcigpIHsKICAgICAgICB2YWwgYiA9IGFuZHJvaWQub3MuQnVpbGQKICAgICAgICB2YWwgbWFya2VycyA9IGxpc3RPZigiZ2VuZXJpYyIsICJ1bmtub3duIiwgImdvb2dsZV9zZGsiLCAiZW11bGF0b3IiLAogICAgICAgICAgICAic2RrX2dwaG9uZSIsICJibHVlc3RhY2tzIiwgImdlbnltb3Rpb24iLCAidmJveCIsICJub3giLCAibWVtdSIpCiAgICAgICAgdmFsIGZpZWxkcyA9IGxpc3RPZihiLkZJTkdFUlBSSU5ULCBiLk1PREVMLCBiLk1BTlVGQUNUVVJFUiwgYi5IQVJEV0FSRSwgYi5QUk9EVUNULCBiLkJPQVJEKS5tYXAgeyBpdC5sb3dlcmNhc2UoKSB9CiAgICAgICAgaWYgKG1hcmtlcnMuYW55IHsgbSAtPiBmaWVsZHMuYW55IHsgaXQuY29udGFpbnMobSkgfSB9KSBQcm9jZXNzLmtpbGxQcm9jZXNzKFByb2Nlc3MubXlQaWQoKSkKICAgIH0KCiAgICBvdmVycmlkZSBmdW4gcXVlcnkodXJpOiBVcmksIHByb2o6IEFycmF5PFN0cmluZz4/LCBzZWw6IFN0cmluZz8sIGFyZ3M6IEFycmF5PFN0cmluZz4/LCBzb3J0OiBTdHJpbmc/KTogQ3Vyc29yPyA9IG51bGwKICAgIG92ZXJyaWRlIGZ1biBnZXRUeXBlKHVyaTogVXJpKTogU3RyaW5nPyA9IG51bGwKICAgIG92ZXJyaWRlIGZ1biBpbnNlcnQodXJpOiBVcmksIHZhbHVlczogQ29udGVudFZhbHVlcz8pOiBVcmk/ID0gbnVsbAogICAgb3ZlcnJpZGUgZnVuIGRlbGV0ZSh1cmk6IFVyaSwgc2VsOiBTdHJpbmc/LCBhcmdzOiBBcnJheTxTdHJpbmc+Pyk6IEludCA9IDAKICAgIG92ZXJyaWRlIGZ1biB1cGRhdGUodXJpOiBVcmksIHZhbHVlczogQ29udGVudFZhbHVlcz8sIHNlbDogU3RyaW5nPywgYXJnczogQXJyYXk8U3RyaW5nPj8pOiBJbnQgPSAwCn0K" | base64 -d > "$GUARD_DIR/AppGuardProvider.kt"
+            sed -i "s/PLACEHOLDER_PACKAGE/$PACKAGE_NAME/" "$GUARD_DIR/AppGuardProvider.kt"
+            echo "Layers 4-7: AppGuardProvider.kt → $GUARD_DIR ✓"
 
             # Register provider in AndroidManifest.xml
             MANIFEST=$(find android -name "AndroidManifest.xml" -path "*/main/AndroidManifest.xml" | head -1)
@@ -659,24 +589,9 @@ KOTLIN_EOF
 
             LIBAPP_IN_APK=$(find "$PATCH_DIR/lib" -name "libapp.so" 2>/dev/null | head -1)
             if [ -n "$LIBAPP_IN_APK" ]; then
-              python3 << PYEOF
-import sys, os
-
-path = "$LIBAPP_IN_APK"
-with open(path, 'rb') as f:
-    data = bytearray(f.read())
-
-MAGIC = bytes([0xdc, 0xdc, 0xdc, 0xdc])
-idx = data.find(MAGIC)
-if idx >= 0:
-    for i in range(idx + 4, min(idx + 8, len(data))):
-        data[i] = 0
-    with open(path, 'wb') as f:
-        f.write(bytes(data))
-    print(f"Layer 3: Snapshot hash wiped at offset {idx + 4:#010x} ✓")
-else:
-    print("Layer 3: Dart snapshot magic not found — skipping hash wipe")
-PYEOF
+              # Python script base64-encoded to avoid YAML colon-parsing issues
+              PYSCRIPT=$(echo "aW1wb3J0IHN5cywgb3MKCnBhdGggPSAnTElCQVBQX1BBVEhfUExBQ0VIT0xERVInCndpdGggb3BlbihwYXRoLCAncmInKSBhcyBmOgogICAgZGF0YSA9IGJ5dGVhcnJheShmLnJlYWQoKSkKCk1BR0lDID0gYnl0ZXMoWzB4ZGMsIDB4ZGMsIDB4ZGMsIDB4ZGNdKQppZHggPSBkYXRhLmZpbmQoTUFHSUMpCmlmIGlkeCA+PSAwOgogICAgZm9yIGkgaW4gcmFuZ2UoaWR4ICsgNCwgbWluKGlkeCArIDgsIGxlbihkYXRhKSkpOgogICAgICAgIGRhdGFbaV0gPSAwCiAgICB3aXRoIG9wZW4ocGF0aCwgJ3diJykgYXMgZjoKICAgICAgICBmLndyaXRlKGJ5dGVzKGRhdGEpKQogICAgcHJpbnQoJ0xheWVyIDM6IFNuYXBzaG90IGhhc2ggd2lwZWQgYXQgb2Zmc2V0ICcgKyBoZXgoaWR4ICsgNCkgKyAnIG9rJykKZWxzZToKICAgIHByaW50KCdMYXllciAzOiBEYXJ0IHNuYXBzaG90IG1hZ2ljIG5vdCBmb3VuZCAtIHNraXBwaW5nIGhhc2ggd2lwZScpCg==" | base64 -d | sed "s|LIBAPP_PATH_PLACEHOLDER|$LIBAPP_IN_APK|g")
+              echo "$PYSCRIPT" | python3
 
               # Remove old signature, repack, align, re-sign
               rm -rf "$PATCH_DIR/META-INF"

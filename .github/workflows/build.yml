@@ -823,6 +823,155 @@ if strtab_vaddr and strsz:
 else:
     print('[L5] No PT_DYNAMIC / DT_STRTAB found — skipping')
 
+# ─ Layer 6: Convert PT_NOTE segments to PT_NULL ───────────────────────────
+# PT_NOTE program headers carry OS ABI notes, build version notes, and
+# GNU property notes that tools like readelf, pwntools, and Ghidra rely on
+# to identify the target ABI and architecture features.
+# Changing their p_type to PT_NULL (0) makes loaders ignore them harmlessly
+# while stripping that metadata entirely from analysis tools.
+e_phoff6    = struct.unpack_from('<Q', data, 32)[0]
+e_phnum6    = struct.unpack_from('<H', data, 56)[0]
+e_phentsize6 = struct.unpack_from('<H', data, 54)[0]
+note_count = 0
+for i in range(e_phnum6):
+    off = e_phoff6 + i * e_phentsize6
+    p_type = struct.unpack_from('<I', data, off)[0]
+    if p_type == 4:  # PT_NOTE
+        struct.pack_into('<I', data, off, 0)  # → PT_NULL
+        note_count += 1
+        print(f'[L6] PT_NOTE → PT_NULL at phdr[{i}]')
+print(f'[L6] {note_count} PT_NOTE segment(s) neutralised')
+
+# ─ Layer 7: Zero ELF entry point ──────────────────────────────────────────
+# Shared libraries do not use e_entry (it should be 0), but the linker
+# sometimes sets it to the address of _init or a PLT stub.
+# Some automated analysis pipelines start disassembly from e_entry; zeroing
+# it sends them to address 0x0 which is unmapped and crashes their analysis.
+if data[:4] == ELF_MAGIC and data[4] == 2:
+    old_entry = struct.unpack_from('<Q', data, 24)[0]
+    struct.pack_into('<Q', data, 24, 0)
+    print(f'[L7] e_entry 0x{old_entry:016x} → 0x0000000000000000')
+else:
+    print('[L7] Skipped — not 64-bit ELF')
+
+# ─ Layer 8: Zero DT_SONAME in dynamic string table ────────────────────────
+# DT_SONAME is the library's own declared name (e.g. "libapp.so").
+# The dynamic linker doesn't need it for loading (it uses the filename from
+# DT_NEEDED in the parent). Tools like ldd, readelf -d, and Frida's
+# Module.findExportByName() use it to identify and attach to the library.
+# Zeroing the string breaks that identification without affecting loading.
+def find_dynamic_section(buf):
+    e_ph = struct.unpack_from('<Q', buf, 32)[0]
+    e_pn = struct.unpack_from('<H', buf, 56)[0]
+    e_ps = struct.unpack_from('<H', buf, 54)[0]
+    for i in range(e_pn):
+        o = e_ph + i * e_ps
+        if struct.unpack_from('<I', buf, o)[0] == 2:  # PT_DYNAMIC
+            return struct.unpack_from('<Q', buf, o + 8)[0], struct.unpack_from('<Q', buf, o + 32)[0]
+    return 0, 0
+
+def vaddr_to_foff(buf, vaddr):
+    e_ph = struct.unpack_from('<Q', buf, 32)[0]
+    e_pn = struct.unpack_from('<H', buf, 56)[0]
+    e_ps = struct.unpack_from('<H', buf, 54)[0]
+    for i in range(e_pn):
+        o = e_ph + i * e_ps
+        if struct.unpack_from('<I', buf, o)[0] == 1:  # PT_LOAD
+            pv = struct.unpack_from('<Q', buf, o + 16)[0]
+            pf = struct.unpack_from('<Q', buf, o + 32)[0]
+            po = struct.unpack_from('<Q', buf, o + 8)[0]
+            if pv <= vaddr < pv + pf:
+                return po + (vaddr - pv)
+    return None
+
+dyn_foff, dyn_fsz = find_dynamic_section(data)
+strtab_va2, strsz2 = find_dynstr(data)
+strtab_foff2 = vaddr_to_foff(data, strtab_va2) if strtab_va2 else None
+soname_found = False
+if dyn_foff and strtab_foff2:
+    pos8 = dyn_foff
+    while pos8 + 16 <= dyn_foff + dyn_fsz and pos8 + 16 <= len(data):
+        d_tag = struct.unpack_from('<q', data, pos8)[0]
+        d_val = struct.unpack_from('<Q', data, pos8 + 8)[0]
+        if d_tag == 14:  # DT_SONAME
+            name_off = strtab_foff2 + d_val
+            end_off = data.index(b'\x00', name_off)
+            soname = data[name_off:end_off]
+            data[name_off:end_off] = b'\x00' * len(soname)
+            print(f'[L8] DT_SONAME "{soname.decode(errors="replace")}" zeroed')
+            soname_found = True
+            break
+        if d_tag == 0:
+            break
+        pos8 += 16
+if not soname_found:
+    print('[L8] DT_SONAME not found or already absent')
+
+# ─ Layer 9: Zero DT_DEBUG in dynamic section (anti-debugger) ──────────────
+# The dynamic linker fills DT_DEBUG at runtime with a pointer to its
+# internal r_debug struct. GDB, LLDB, and Frida read this to walk the
+# loaded library list and resolve symbols. Zeroing the d_val prevents the
+# linker from writing the pointer (some linker versions check for 0 and skip).
+# Even when linkers ignore it, removing the tag confuses tools that scan for
+# it as a debuggability marker.
+debug_count = 0
+if dyn_foff:
+    pos9 = dyn_foff
+    while pos9 + 16 <= dyn_foff + dyn_fsz and pos9 + 16 <= len(data):
+        d_tag = struct.unpack_from('<q', data, pos9)[0]
+        if d_tag == 21:  # DT_DEBUG
+            struct.pack_into('<Q', data, pos9 + 8, 0)
+            struct.pack_into('<q', data, pos9, 0)  # also zero the tag → DT_NULL
+            print(f'[L9] DT_DEBUG entry zeroed and tag → DT_NULL')
+            debug_count += 1
+        if d_tag == 0:
+            break
+        pos9 += 16
+if debug_count == 0:
+    print('[L9] DT_DEBUG not found — stripped build or already absent')
+
+# ─ Layer 10: Wipe identifier strings from data regions ────────────────────
+# --obfuscate renames Dart class/method names but cannot remove hardcoded
+# string literals baked into the snapshot or runtime (dart: scheme prefixes,
+# package: URIs, file paths, error templates, SDK version strings).
+# We scan for printable ASCII runs >= 10 chars that match known identifier
+# patterns and zero them. The Dart runtime never reads these at runtime —
+# they are only present for stack-trace formatting and are already stripped
+# by the snapshot obfuscation flag.
+import re
+ID_PATTERNS = re.compile(
+    rb'(?:'
+    rb'dart:[a-z_/]{3,}'        # dart:core, dart:async, dart:io …
+    rb'|package:[a-z_./]{4,}'   # package:flutter/…
+    rb'|com\.[a-z][a-z0-9_.]{4,}'  # com.example.foo
+    rb'|flutter[/_][a-z]{3,}'   # flutter/src/…
+    rb'|/data/[a-z_./]{6,}'     # /data/user/0/…
+    rb'|file:///[a-z_./]{6,}'   # file:///path/…
+    rb'|https?://[a-zA-Z0-9._/-]{6,}'  # URLs
+    rb')'
+)
+id_count = 0
+for m in ID_PATTERNS.finditer(data):
+    s, e = m.start(), m.end()
+    data[s:e] = b'\x00' * (e - s)
+    id_count += 1
+print(f'[L10] {id_count} identifier string(s) wiped from binary data')
+
+# ─ Layer 11: Poison ELF ident padding bytes ───────────────────────────────
+# Bytes 9-15 of the ELF header (EI_ABIVERSION + EI_PAD) are officially
+# defined as padding and must be zero per the ABI spec. Because they are
+# "don't care" for the loader, tools sometimes use them as a fingerprinting
+# anchor or store metadata there (some packers, some security scanners).
+# Filling them with a repeating marker value breaks any tool that relies on
+# these bytes being zero, while the Android loader ignores them entirely.
+if len(data) >= 16:
+    # Use a recognisable-to-us but tool-confusing marker: 0xCB repeated
+    POISON = b'\xcb\xcb\xcb\xcb\xcb\xcb\xcb'
+    data[9:16] = POISON
+    print(f'[L11] ELF ident padding bytes [9-15] poisoned with 0xcb marker')
+else:
+    print('[L11] Skipped — file too small')
+
 with open(path, 'wb') as f:
     f.write(data)
 

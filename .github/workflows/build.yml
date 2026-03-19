@@ -597,7 +597,12 @@ jobs:
               rm -rf "$PATCH_DIR/META-INF"
               UNSIGNED_APK="/tmp/apk_armor_unsigned.apk"
               ALIGNED_APK="/tmp/apk_armor_aligned.apk"
-              (cd "$PATCH_DIR" && zip -q -r "$UNSIGNED_APK" .)
+              rm -f "$UNSIGNED_APK" "$ALIGNED_APK"
+              # .so files MUST be stored uncompressed — Android rejects APKs where native
+              # libs are deflated because it cannot page-align them for direct loading.
+              (cd "$PATCH_DIR" && \
+                find . -name "*.so" | zip -q -0 "$UNSIGNED_APK" -@ && \
+                zip -q -r "$UNSIGNED_APK" . -x "*.so")
               zipalign -f 4 "$UNSIGNED_APK" "$ALIGNED_APK"
 
               KS_FILE=$(grep "^storeFile=" /tmp/key.properties | cut -d= -f2-)

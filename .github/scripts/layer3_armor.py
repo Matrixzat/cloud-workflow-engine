@@ -199,17 +199,25 @@ def step_encrypt_payload(data, payload_off, pay_len, has_native, key, iv):
     print(f'  [D] XOR + AES-256-CTR encrypted {pay_len} bytes ✓', flush=True)
     return pay_len
 
-def step_patch_native_sentinel(libnative_data, pay_len):
+def step_patch_native_sentinel(libnative_data, pay_len, key, iv):
     """Step E: Patch _cbe_armor block (52 bytes: pay_len+key+iv) in libcbe_native.so."""
-    pos = bytes(libnative_data).find(SENTINEL)
+    pos = bytes(libnative_data).find(ARMOR_SENTINEL)
+    if pos == -1:
+        # Fallback: search for just the 4-byte pay_len sentinel
+        pos = bytes(libnative_data).find(struct.pack('<I', 0xDEADBEEF))
     if pos == -1:
         sym_off = find_sym(libnative_data, '_cbe_armor')
         if sym_off is not None: pos = sym_off
     if pos == -1:
-        print(f'  [E] WARNING: sentinel 0xDEADBEEF not found in libcbe_native.so', flush=True)
+        print(f'  [E] WARNING: armor sentinel not found in libcbe_native.so', flush=True)
         return
+    # Patch pay_len (4 bytes at pos+0)
     struct.pack_into('<I', libnative_data, pos, pay_len)
-    print(f'  [E] Armor block patched: pay_len={pay_len}, AES key+IV injected at 0x{pos:x} ✓', flush=True)
+    # Patch AES-256-CTR key (32 bytes at pos+4)
+    libnative_data[pos + 4 : pos + 36] = key
+    # Patch AES-256-CTR IV (16 bytes at pos+36)
+    libnative_data[pos + 36 : pos + 52] = iv
+    print(f'  [E] Armor block patched: pay_len={pay_len}, key+IV @ 0x{pos:x} ✓', flush=True)
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 DART_MAGIC = bytes([0xF5, 0xF5, 0xDC, 0xDC])

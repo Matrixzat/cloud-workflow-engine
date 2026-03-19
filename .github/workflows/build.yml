@@ -427,7 +427,9 @@ jobs:
           fi
 
           flutter pub get
-          flutter build apk --$BUILD_MODE --target-platform android-arm64 --no-pub
+          mkdir -p /tmp/debug-info
+          flutter build apk --$BUILD_MODE --target-platform android-arm64 --no-pub \
+            --obfuscate --split-debug-info=/tmp/debug-info
           echo "BUILD_OUTPUT=/tmp/project/build/app/outputs/flutter-apk/app-${BUILD_MODE}.apk" >> $GITHUB_ENV
 
       # ── 10b. BUILD: React Native ─────────────────────────────────────────────
@@ -638,7 +640,69 @@ jobs:
           APK=$(find . -name "*.apk" -not -path "*/intermediates/*" | head -1)
           echo "BUILD_OUTPUT=$(realpath $APK)" >> $GITHUB_ENV
 
-      # ── 11. Sign APK (if not already signed) ─────────────────────────────────
+      # ── 11a. Harden APK — strip Dart snapshot hash ───────────────────────────
+      - name: Harden APK
+        run: |
+          INPUT="${BUILD_OUTPUT}"
+          if [ -z "$INPUT" ] || [ ! -f "$INPUT" ]; then
+            echo "No APK to harden — skipping"
+            exit 0
+          fi
+
+          WORKDIR="/tmp/apk_harden"
+          mkdir -p "$WORKDIR"
+
+          # Extract libapp.so (Flutter only — other project types won't have it)
+          if unzip -l "$INPUT" | grep -q 'lib/arm64-v8a/libapp.so'; then
+            unzip -o "$INPUT" 'lib/arm64-v8a/libapp.so' -d "$WORKDIR"
+            LIBAPP="$WORKDIR/lib/arm64-v8a/libapp.so"
+
+            # Zero the Dart snapshot hash (64 bytes after each Dart magic marker)
+            python3 << 'PYEOF'
+import sys, os
+
+path = os.environ.get('LIBAPP', '/tmp/apk_harden/lib/arm64-v8a/libapp.so')
+
+# Dart VM snapshot magic — appears in _kDartVmSnapshotData and _kDartIsolateSnapshotData
+DART_MAGIC = bytes([0xdc, 0xdc, 0xf5, 0xf5])
+# Number of bytes to zero after the magic (covers kind + reserved + hash fields)
+PATCH_SIZE = 64
+
+with open(path, 'r+b') as f:
+    data = bytearray(f.read())
+
+count = 0
+pos = 0
+while True:
+    idx = data.find(DART_MAGIC, pos)
+    if idx == -1:
+        break
+    patch_start = idx + len(DART_MAGIC)
+    patch_end   = patch_start + PATCH_SIZE
+    data[patch_start:patch_end] = b'\x00' * PATCH_SIZE
+    print(f'  Snapshot header zeroed at offset 0x{idx:08x}')
+    count += 1
+    pos = idx + 1
+
+with open(path, 'wb') as f:
+    f.write(data)
+
+print(f'Hardening done — {count} snapshot header(s) patched')
+if count == 0:
+    print('  (No Dart magic found — Flutter obfuscation may have already removed it)')
+PYEOF
+
+            # Repack patched libapp.so back into the APK
+            PATCHED="$WORKDIR/patched.apk"
+            cp "$INPUT" "$PATCHED"
+            cd "$WORKDIR"
+            zip -u "$PATCHED" lib/arm64-v8a/libapp.so
+            echo "BUILD_OUTPUT=$PATCHED" >> $GITHUB_ENV
+            echo "Snapshot hash stripped and APK repacked ✓"
+          else
+            echo "No libapp.so found — not a Flutter APK, skipping hardening"
+          fi
+
       - name: Sign APK
         run: |
           INPUT="${BUILD_OUTPUT}"

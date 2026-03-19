@@ -394,6 +394,215 @@ jobs:
             -e "s|targetSdkVersion [0-9]\{1,2\}|targetSdkVersion 35|g" 2>/dev/null || true
           echo "Gradle fixes applied ✓"
 
+      # ── 9b. Inject hardening config (Flutter, harden=true) ─────────────────────
+      # Checks every rule/flag before injecting — never overwrites existing config.
+      - name: Inject R8 and ProGuard hardening rules
+        if: env.HARDEN == 'true' && steps.detect.outputs.type == 'flutter'
+        working-directory: /tmp/project
+        run: |
+          python3 << 'PYEOF'
+import os, re, sys
+
+ROOT = '/tmp/project'
+
+# ── Locate build.gradle (Groovy or Kotlin DSL) ────────────────────────────
+BG_PATHS = [
+    os.path.join(ROOT, 'android/app/build.gradle'),
+    os.path.join(ROOT, 'android/app/build.gradle.kts'),
+]
+bg_path = next((p for p in BG_PATHS if os.path.exists(p)), None)
+is_kts  = bg_path and bg_path.endswith('.kts')
+
+PR_PATH = os.path.join(ROOT, 'android/app/proguard-rules.pro')
+
+# ─────────────────────────────────────────────────────────────────────────
+# PART 1 — build.gradle: enable R8 + proguard in the release block
+# ─────────────────────────────────────────────────────────────────────────
+if not bg_path:
+    print('[build.gradle] Not found — skipping')
+else:
+    bg = open(bg_path).read()
+
+    # Detect Kotlin DSL vs Groovy for correct syntax
+    def kts(groovy_val, kotlin_val):
+        return kotlin_val if is_kts else groovy_val
+
+    # ── Find the release { ... } block boundaries ────────────────────────
+    # Regex: matches "release {" or "release{" and tracks brace depth
+    m = re.search(r'release\s*\{', bg)
+    if not m:
+        print('[build.gradle] No release{} block found — skipping build.gradle')
+    else:
+        # Walk from release { to its closing brace
+        start = m.start()
+        brace_open = bg.index('{', m.start())
+        depth = 0
+        end = brace_open
+        for i in range(brace_open, len(bg)):
+            if bg[i] == '{': depth += 1
+            elif bg[i] == '}':
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        release_block = bg[brace_open:end+1]
+
+        injected = []
+
+        # ── minifyEnabled ────────────────────────────────────────────────
+        if 'minifyEnabled' not in release_block and 'isMinifyEnabled' not in release_block:
+            line = '        isMinifyEnabled = true' if is_kts else '        minifyEnabled true'
+            bg = bg[:brace_open+1] + '\n' + line + release_block[1:]
+            injected.append('minifyEnabled true')
+        elif re.search(r'(isMinifyEnabled\s*=\s*false|minifyEnabled\s+false)', release_block):
+            # It's set to false — flip it to true
+            bg = re.sub(r'(isMinifyEnabled\s*=\s*)false', r'\1true', bg)
+            bg = re.sub(r'(minifyEnabled\s+)false', r'\1true', bg)
+            injected.append('minifyEnabled false → true')
+
+        # Re-read block after potential change
+        m2 = re.search(r'release\s*\{', bg)
+        brace_open2 = bg.index('{', m2.start())
+        depth2, end2 = 0, brace_open2
+        for i in range(brace_open2, len(bg)):
+            if bg[i] == '{': depth2 += 1
+            elif bg[i] == '}':
+                depth2 -= 1
+                if depth2 == 0: end2 = i; break
+        release_block = bg[brace_open2:end2+1]
+
+        # ── shrinkResources ──────────────────────────────────────────────
+        if 'shrinkResources' not in release_block and 'isShrinkResources' not in release_block:
+            line = '        isShrinkResources = true' if is_kts else '        shrinkResources true'
+            bg = bg[:brace_open2+1] + '\n' + line + release_block[1:]
+            injected.append('shrinkResources true')
+        elif re.search(r'(isShrinkResources\s*=\s*false|shrinkResources\s+false)', release_block):
+            bg = re.sub(r'(isShrinkResources\s*=\s*)false', r'\1true', bg)
+            bg = re.sub(r'(shrinkResources\s+)false', r'\1true', bg)
+            injected.append('shrinkResources false → true')
+
+        # Re-read block again
+        m3 = re.search(r'release\s*\{', bg)
+        brace_open3 = bg.index('{', m3.start())
+        depth3, end3 = 0, brace_open3
+        for i in range(brace_open3, len(bg)):
+            if bg[i] == '{': depth3 += 1
+            elif bg[i] == '}':
+                depth3 -= 1
+                if depth3 == 0: end3 = i; break
+        release_block = bg[brace_open3:end3+1]
+
+        # ── proguardFiles ────────────────────────────────────────────────
+        if 'proguard-android-optimize' not in release_block and 'proguardFiles' not in release_block:
+            if is_kts:
+                line = '        proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")'
+            else:
+                line = '        proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"'
+            bg = bg[:brace_open3+1] + '\n' + line + release_block[1:]
+            injected.append('proguardFiles line')
+        elif 'proguard-rules.pro' not in release_block and 'proguardFiles' in release_block:
+            # proguardFiles exists but doesn't reference proguard-rules.pro — append it
+            bg = re.sub(
+                r'(proguardFiles\s*[^)\n]+)',
+                r'\1, "proguard-rules.pro"',
+                bg, count=1
+            )
+            injected.append('added proguard-rules.pro reference')
+
+        with open(bg_path, 'w') as f:
+            f.write(bg)
+
+        if injected:
+            print(f'[build.gradle] Injected: {", ".join(injected)}')
+        else:
+            print('[build.gradle] All R8/minify settings already present — nothing changed')
+
+# ─────────────────────────────────────────────────────────────────────────
+# PART 2 — proguard-rules.pro: inject only missing rules
+# ─────────────────────────────────────────────────────────────────────────
+existing = open(PR_PATH).read() if os.path.exists(PR_PATH) else ''
+
+# Each tuple: (marker_to_detect, full_rule_line_to_inject)
+# marker = distinctive substring that confirms the rule already exists
+RULES = [
+    # Flutter engine
+    ('io.flutter.** { *; }',           '-keep class io.flutter.** { *; }'),
+    ('io.flutter.embedding.**',        '-keep class io.flutter.embedding.** { *; }'),
+    ('io.flutter.plugin.**',           '-keep class io.flutter.plugin.** { *; }'),
+    ('io.flutter.util.**',             '-keep class io.flutter.util.** { *; }'),
+    ('io.flutter.view.**',             '-keep class io.flutter.view.** { *; }'),
+    ('io.flutter.app.**',              '-keep class io.flutter.app.** { *; }'),
+    ('dontwarn io.flutter',            '-dontwarn io.flutter.**'),
+    # JNI / FlutterEngine
+    ('extends io.flutter.embedding.engine.FlutterEngine',
+     '-keep class * extends io.flutter.embedding.engine.FlutterEngine { *; }'),
+    ('JavascriptInterface <methods>',
+     '-keepclassmembers class * {\n    @android.webkit.JavascriptInterface <methods>;\n}'),
+    ('native <methods>',
+     '-keepclasseswithmembernames class * {\n    native <methods>;\n}'),
+    # AndroidX
+    ('keep class androidx.**',         '-keep class androidx.** { *; }'),
+    ('keep interface androidx.**',     '-keep interface androidx.** { *; }'),
+    ('dontwarn androidx',              '-dontwarn androidx.**'),
+    # Kotlin
+    ('keep class kotlin.**',           '-keep class kotlin.** { *; }'),
+    ('keep class kotlinx.**',          '-keep class kotlinx.** { *; }'),
+    ('dontwarn kotlin.**',             '-dontwarn kotlin.**'),
+    ('dontwarn kotlinx.**',            '-dontwarn kotlinx.**'),
+    # Network
+    ('dontwarn okhttp3',               '-dontwarn okhttp3.**'),
+    ('dontwarn okio',                  '-dontwarn okio.**'),
+    ('dontwarn javax.annotation',      '-dontwarn javax.annotation.**'),
+    ('dontwarn org.conscrypt',         '-dontwarn org.conscrypt.**'),
+    # Attributes
+    ('keepattributes *Annotation*',    '-keepattributes *Annotation*'),
+    ('keepattributes Signature',       '-keepattributes Signature'),
+    ('keepattributes EnclosingMethod', '-keepattributes EnclosingMethod'),
+    ('keepattributes InnerClasses',    '-keepattributes InnerClasses'),
+    # R8 full-mode
+    ('allowaccessmodification',        '-allowaccessmodification'),
+    ('repackageclasses',               '-repackageclasses "x"'),
+    # Log stripping
+    ('assumenosideeffects class android.util.Log',
+     '-assumenosideeffects class android.util.Log {\n'
+     '    public static *** v(...);\n'
+     '    public static *** d(...);\n'
+     '    public static *** i(...);\n'
+     '    public static *** w(...);\n'
+     '    public static *** e(...);\n'
+     '    public static *** wtf(...);\n'
+     '}'),
+    # Aggressive obfuscation
+    ('overloadaggressively',           '-overloadaggressively'),
+    ('useuniqueclassmembernames',      '-useuniqueclassmembernames'),
+    ('ignorewarnings',                 '-ignorewarnings'),
+]
+
+to_inject  = []
+already_ok = []
+
+for marker, rule in RULES:
+    if marker in existing:
+        already_ok.append(marker.split()[0] if ' ' in marker else marker)
+    else:
+        to_inject.append(rule)
+
+if to_inject:
+    header = '\n# ── CBE hardening rules (auto-injected — safe to keep) ──────────────────\n'
+    with open(PR_PATH, 'a') as f:
+        f.write(header)
+        for rule in to_inject:
+            f.write(rule + '\n')
+    print(f'[proguard-rules.pro] Injected {len(to_inject)} missing rule(s)')
+else:
+    print(f'[proguard-rules.pro] All {len(already_ok)} rules already present — nothing injected')
+
+if already_ok:
+    print(f'[proguard-rules.pro] Already had: {len(already_ok)} rule(s) — left untouched')
+
+print('R8 / ProGuard hardening injection complete ✓')
+PYEOF
+
       # ── 10a-pre. EXPO: install deps + prebuild → generates android/ folder ───
       - name: Expo prebuild (generate Android project)
         if: steps.detect.outputs.type == 'expo'

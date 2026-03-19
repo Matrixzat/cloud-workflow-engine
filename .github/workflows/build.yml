@@ -737,10 +737,14 @@ jobs:
           echo "Hardened size: $(du -sh $LIBAPP | cut -f1)"
 
           # ── Repack patched libapp.so into APK ─────────────────────────────
+          # -0 = store without compression (required for .so files in APKs)
+          # Flutter stores native libs uncompressed for zipalign + direct mmap.
+          # Using default deflate compression here would break zipalign alignment
+          # and cause Android to reject the APK with "package appears to be invalid".
           PATCHED="$WORKDIR/patched.apk"
           cp "$INPUT" "$PATCHED"
           cd "$WORKDIR"
-          zip -u "$PATCHED" lib/arm64-v8a/libapp.so
+          zip -u -0 "$PATCHED" lib/arm64-v8a/libapp.so
           echo "BUILD_OUTPUT=$PATCHED" >> $GITHUB_ENV
           echo "libapp.so hardened and APK repacked ✓"
 
@@ -750,11 +754,19 @@ jobs:
           ALIGNED="/tmp/aligned.apk"
           SIGNED="/tmp/signed_final.apk"
           zipalign -v -p 4 "$INPUT" "$ALIGNED" 2>/dev/null || cp "$INPUT" "$ALIGNED"
+
+          # Read credentials from /tmp/key.properties (set by "Set up signing keystore")
+          # This handles both USER_SIGNING=true (user's keys) and false (default keys)
+          KP="/tmp/key.properties"
+          KS_PASS=$(grep  '^storePassword=' "$KP" | cut -d= -f2-)
+          KEY_PASS=$(grep '^keyPassword='   "$KP" | cut -d= -f2-)
+          KEY_ALIAS=$(grep '^keyAlias='     "$KP" | cut -d= -f2-)
+
           apksigner sign \
             --ks /tmp/release.keystore \
-            --ks-pass pass:CloudBuild@Matrix2026 \
-            --key-pass pass:CloudBuild@Matrix2026 \
-            --ks-key-alias cbe_release_key \
+            --ks-pass  "pass:${KS_PASS}" \
+            --key-pass "pass:${KEY_PASS}" \
+            --ks-key-alias "${KEY_ALIAS}" \
             --out "$SIGNED" \
             "$ALIGNED"
           apksigner verify "$SIGNED" && echo "APK signed and verified ✓"

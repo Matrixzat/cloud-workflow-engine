@@ -23,6 +23,10 @@ on:
         description: 'Build mode: release | debug | profile'
         required: false
         default: 'release'
+      harden:
+        description: 'Apply 11-layer binary hardening to libapp.so (Flutter only). true | false'
+        required: false
+        default: 'false'
       asset_id:
         description: 'Staging asset ID — deleted immediately after source is downloaded'
         required: false
@@ -42,6 +46,7 @@ jobs:
       PACKAGE_NAME: ${{ inputs.package_name }}
       FLUTTER_VER:  ${{ inputs.flutter_version }}
       BUILD_MODE:   ${{ inputs.build_mode }}
+      HARDEN:       ${{ inputs.harden }}
 
     steps:
 
@@ -640,8 +645,9 @@ jobs:
           APK=$(find . -name "*.apk" -not -path "*/intermediates/*" | head -1)
           echo "BUILD_OUTPUT=$(realpath $APK)" >> $GITHUB_ENV
 
-      # ── 11a. Harden APK — deep binary hardening ──────────────────────────────
+      # ── 11a. Harden APK — deep binary hardening (optional, harden=true) ────────
       - name: Harden APK
+        if: env.HARDEN == 'true'
         run: |
           INPUT="${BUILD_OUTPUT}"
           if [ -z "$INPUT" ] || [ ! -f "$INPUT" ]; then

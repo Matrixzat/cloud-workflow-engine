@@ -593,8 +593,9 @@ jobs:
               PYSCRIPT=$(echo "aW1wb3J0IHN5cywgb3MKCnBhdGggPSAnTElCQVBQX1BBVEhfUExBQ0VIT0xERVInCndpdGggb3BlbihwYXRoLCAncmInKSBhcyBmOgogICAgZGF0YSA9IGJ5dGVhcnJheShmLnJlYWQoKSkKCk1BR0lDID0gYnl0ZXMoWzB4ZGMsIDB4ZGMsIDB4ZGMsIDB4ZGNdKQppZHggPSBkYXRhLmZpbmQoTUFHSUMpCmlmIGlkeCA+PSAwOgogICAgZm9yIGkgaW4gcmFuZ2UoaWR4ICsgNCwgbWluKGlkeCArIDgsIGxlbihkYXRhKSkpOgogICAgICAgIGRhdGFbaV0gPSAwCiAgICB3aXRoIG9wZW4ocGF0aCwgJ3diJykgYXMgZjoKICAgICAgICBmLndyaXRlKGJ5dGVzKGRhdGEpKQogICAgcHJpbnQoJ0xheWVyIDM6IFNuYXBzaG90IGhhc2ggd2lwZWQgYXQgb2Zmc2V0ICcgKyBoZXgoaWR4ICsgNCkgKyAnIG9rJykKZWxzZToKICAgIHByaW50KCdMYXllciAzOiBEYXJ0IHNuYXBzaG90IG1hZ2ljIG5vdCBmb3VuZCAtIHNraXBwaW5nIGhhc2ggd2lwZScpCg==" | base64 -d | sed "s|LIBAPP_PATH_PLACEHOLDER|$LIBAPP_IN_APK|g")
               echo "$PYSCRIPT" | python3
 
-              # Remove old signature, repack, align, re-sign
-              rm -rf "$PATCH_DIR/META-INF"
+              # Remove ONLY signing artifacts — NOT META-INF/services/ (ServiceLoader
+              # files live there; deleting them breaks kotlinx-coroutines main dispatcher)
+              find "$PATCH_DIR/META-INF" -maxdepth 1 \( -name "*.SF" -o -name "*.RSA" -o -name "*.DSA" -o -name "MANIFEST.MF" \) -delete 2>/dev/null || true
               UNSIGNED_APK="/tmp/apk_armor_unsigned.apk"
               ALIGNED_APK="/tmp/apk_armor_aligned.apk"
               rm -f "$UNSIGNED_APK" "$ALIGNED_APK"

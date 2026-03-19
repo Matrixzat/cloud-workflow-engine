@@ -573,41 +573,22 @@ jobs:
 
           APK_PATH="/tmp/project/build/app/outputs/flutter-apk/app-${BUILD_MODE}.apk"
 
-          # ── Layer 3: Wipe snapshot hash — targeted update (avoids full-repack ./ entry bug) ──
-          # CRITICAL FIX: full repack with 'zip -r .' creates entries prefixed with './'
-          # (e.g. './classes.dex' instead of 'classes.dex'). ART cannot find DEX files
-          # with that prefix -> ClassNotFoundException for ALL classes incl. MainActivity.
-          # Solution: extract ONLY libapp.so, patch it, then update just that one entry
-          # with 'zip -u'. All other APK entries remain untouched with their original paths.
+          # -- Layer 3: Wipe snapshot hash via Python zipfile (clean rebuild, DEX-safe) --
+          # Python zipfile reads every entry via its central-directory offset and rewrites
+          # the APK cleanly. No ./ entry prefix, no orphaned local headers, no DEX corruption.
           if [ "${{ inputs.protect }}" = "true" ] && [ -f "$APK_PATH" ]; then
-            echo "Layer 3: Patching libapp.so inside APK..."
-            PATCH_DIR="/tmp/apk_armor_patch"
-            rm -rf "$PATCH_DIR"
-            mkdir -p "$PATCH_DIR"
-            # Extract ONLY libapp.so — never extract full APK (full extract+rezip breaks DEX paths)
-            unzip -q "$APK_PATH" "lib/arm64-v8a/libapp.so" -d "$PATCH_DIR" 2>/dev/null || true
-
-            LIBAPP_IN_APK=$(find "$PATCH_DIR/lib" -name "libapp.so" 2>/dev/null | head -1)
-            if [ -n "$LIBAPP_IN_APK" ]; then
-              # Python script base64-encoded to avoid YAML colon-parsing issues
-              PYSCRIPT=$(echo "aW1wb3J0IHN5cywgb3MKCnBhdGggPSAnTElCQVBQX1BBVEhfUExBQ0VIT0xERVInCndpdGggb3BlbihwYXRoLCAncmInKSBhcyBmOgogICAgZGF0YSA9IGJ5dGVhcnJheShmLnJlYWQoKSkKCk1BR0lDUyA9IFsKICAgIGJ5dGVzKFsweGY1LCAweGY1LCAweGRjLCAweGRjXSksCiAgICBieXRlcyhbMHhkYywgMHhkYywgMHhkYywgMHhkY10pLApdCgp0b3RhbF9wYXRjaGVkID0gMApmb3IgTUFHSUMgaW4gTUFHSUNTOgogICAgIyBDb2xsZWN0IEFMTCBwb3NpdGlvbnMgZmlyc3QKICAgIHBvc2l0aW9ucyA9IFtdCiAgICBpZHggPSAwCiAgICB3aGlsZSBUcnVlOgogICAgICAgIHBvcyA9IC0xCiAgICAgICAgZm9yIGkgaW4gcmFuZ2UoaWR4LCBsZW4oZGF0YSkgLSBsZW4oTUFHSUMpICsgMSk6CiAgICAgICAgICAgIGlmIGRhdGFbaTppK2xlbihNQUdJQyldID09IE1BR0lDOgogICAgICAgICAgICAgICAgcG9zID0gaQogICAgICAgICAgICAgICAgYnJlYWsKICAgICAgICBpZiBwb3MgPCAwOgogICAgICAgICAgICBicmVhawogICAgICAgIHBvc2l0aW9ucy5hcHBlbmQocG9zKQogICAgICAgIGlkeCA9IHBvcyArIGxlbihNQUdJQykKCiAgICBpZiBsZW4ocG9zaXRpb25zKSA9PSAwOgogICAgICAgIGNvbnRpbnVlCgogICAgIyBTS0lQIHRoZSBmaXJzdCBvY2N1cnJlbmNlIChWTSBpc29sYXRlIHNuYXBzaG90IOKAlCBGbHV0dGVyIG5lZWRzIGl0IHRvIGJvb3QpCiAgICAjIFplcm8gYWxsIHN1YnNlcXVlbnQgb2NjdXJyZW5jZXMgKGFwcCBpc29sYXRlIHNuYXBzaG90KHMpIOKAlCB3aGF0IEJsdXR0ZXIgcmVhZHMpCiAgICBwcmludCgnTGF5ZXIgMzogRm91bmQgJyArIHN0cihsZW4ocG9zaXRpb25zKSkgKyAnIHNuYXBzaG90IGhlYWRlcihzKSwga2VlcGluZyBWTSBhdCAweCcgKyBoZXgocG9zaXRpb25zWzBdKSArICcsIHdpcGluZyBhcHAgc25hcHNob3QocyknKQogICAgZm9yIHBvcyBpbiBwb3NpdGlvbnNbMTpdOgogICAgICAgIHdpcGVfZW5kID0gbWluKHBvcyArIDI0LCBsZW4oZGF0YSkpCiAgICAgICAgZm9yIGkgaW4gcmFuZ2UocG9zLCB3aXBlX2VuZCk6CiAgICAgICAgICAgIGRhdGFbaV0gPSAwCiAgICAgICAgcHJpbnQoJ0xheWVyIDM6IFdpcGVkIGFwcCBpc29sYXRlIHNuYXBzaG90IGF0IDB4JyArIGhleChwb3MpICsgJyAoJyArIHN0cih3aXBlX2VuZCAtIHBvcykgKyAnIGJ5dGVzKScpCiAgICAgICAgdG90YWxfcGF0Y2hlZCArPSAxCgppZiB0b3RhbF9wYXRjaGVkID4gMDoKICAgIHdpdGggb3BlbihwYXRoLCAnd2InKSBhcyBmOgogICAgICAgIGYud3JpdGUoYnl0ZXMoZGF0YSkpCiAgICBwcmludCgnTGF5ZXIgMzogJyArIHN0cih0b3RhbF9wYXRjaGVkKSArICcgYXBwIHNuYXBzaG90IGhlYWRlcihzKSB3aXBlZCBvayDigJQgVk0gc25hcHNob3QgcHJlc2VydmVkJykKZWxzZToKICAgIHByaW50KCdMYXllciAzOiBXQVJOSU5HIC0gbm8gYXBwIHNuYXBzaG90IGZvdW5kIHRvIHdpcGUnKQo=" | base64 -d | sed "s|LIBAPP_PATH_PLACEHOLDER|$LIBAPP_IN_APK|g")
-              echo "$PYSCRIPT" | python3
-
-              # Update ONLY libapp.so inside the original APK — all other entries untouched
-              LIBAPP_REL="${LIBAPP_IN_APK#$PATCH_DIR/}"
-              (cd "$PATCH_DIR" && zip -u -0 "$APK_PATH" "$LIBAPP_REL")
-              # Remove old V1/V2 signing metadata so apksigner can re-sign cleanly
-              zip -d "$APK_PATH" "META-INF/*.SF" "META-INF/*.RSA" "META-INF/*.DSA" "META-INF/MANIFEST.MF" 2>/dev/null || true
-              # Align and re-sign
+            echo "Layer 3: Rebuilding APK with patched libapp.so (Python zipfile)..."
+            LAYER3_PY="/tmp/layer3_repack.py"
+            echo "aW1wb3J0IHppcGZpbGUsIG9zLCBzeXMKCkFQS19QQVRIID0gb3MuZW52aXJvblsnQ0JFX0FQS19QQVRIJ10KCk1BR0lDUyA9IFtieXRlcyhbMHhmNSwweGY1LDB4ZGMsMHhkY10pLCBieXRlcyhbMHhkYywweGRjLDB4ZGMsMHhkY10pXQoKZGVmIHdpcGVfc25hcHNob3QoZGF0YSk6CiAgICBkYXRhID0gYnl0ZWFycmF5KGRhdGEpCiAgICB0b3RhbCA9IDAKICAgIGZvciBNIGluIE1BR0lDUzoKICAgICAgICBwbGlzdCA9IFtdCiAgICAgICAgaSA9IDAKICAgICAgICB3aGlsZSBUcnVlOgogICAgICAgICAgICBwb3MgPSBuZXh0KChqIGZvciBqIGluIHJhbmdlKGksIGxlbihkYXRhKS1sZW4oTSkrMSkgaWYgZGF0YVtqOmorbGVuKE0pXT09TSksIC0xKQogICAgICAgICAgICBpZiBwb3MgPCAwOgogICAgICAgICAgICAgICAgYnJlYWsKICAgICAgICAgICAgcGxpc3QuYXBwZW5kKHBvcykKICAgICAgICAgICAgaSA9IHBvcyArIGxlbihNKQogICAgICAgIGlmIG5vdCBwbGlzdDoKICAgICAgICAgICAgY29udGludWUKICAgICAgICBwcmludCgnTGF5ZXIgMzogRm91bmQgJytzdHIobGVuKHBsaXN0KSkrJyBzbmFwc2hvdCBoZWFkZXIocyksIGtlZXBpbmcgVk0gYXQgMHgnK2hleChwbGlzdFswXSkrJywgd2lwaW5nIGFwcCBzbmFwc2hvdChzKScpCiAgICAgICAgZm9yIHAgaW4gcGxpc3RbMTpdOgogICAgICAgICAgICBlID0gbWluKHArMjQsIGxlbihkYXRhKSkKICAgICAgICAgICAgZm9yIHggaW4gcmFuZ2UocCwgZSk6CiAgICAgICAgICAgICAgICBkYXRhW3hdID0gMAogICAgICAgICAgICBwcmludCgnTGF5ZXIgMzogV2lwZWQgYXBwIGlzb2xhdGUgc25hcHNob3QgYXQgMHgnK2hleChwKSsnICgnK3N0cihlLXApKycgYnl0ZXMpJykKICAgICAgICAgICAgdG90YWwgKz0gMQogICAgaWYgbm90IHRvdGFsOgogICAgICAgIHByaW50KCdMYXllciAzOiBXQVJOSU5HIC0gbm8gYXBwIHNuYXBzaG90IGZvdW5kIHRvIHdpcGUnKQogICAgcmV0dXJuIGJ5dGVzKGRhdGEpCgojIEZpbmQgYWxsIGxpYmFwcC5zbyBlbnRyaWVzCndpdGggemlwZmlsZS5aaXBGaWxlKEFQS19QQVRILCAncicpIGFzIHo6CiAgICBhbGxfaW5mb3MgPSB6LmluZm9saXN0KCkKICAgIGxpYmFwcF9pbmZvcyA9IFtpIGZvciBpIGluIGFsbF9pbmZvcyBpZiBpLmZpbGVuYW1lLmVuZHN3aXRoKCcvbGliYXBwLnNvJyldCgppZiBub3QgbGliYXBwX2luZm9zOgogICAgcHJpbnQoJ0xheWVyIDM6IGxpYmFwcC5zbyBub3QgZm91bmQgaW4gQVBLIC0gc2tpcHBpbmcnKQogICAgc3lzLmV4aXQoMCkKCnByaW50KCdMYXllciAzOiBGb3VuZCAnK3N0cihbaS5maWxlbmFtZSBmb3IgaSBpbiBsaWJhcHBfaW5mb3NdKSkKCiMgUmVhZCBhbmQgcGF0Y2ggZWFjaCBsaWJhcHAuc28Kd2l0aCB6aXBmaWxlLlppcEZpbGUoQVBLX1BBVEgsICdyJykgYXMgejoKICAgIHBhdGNoZWQgPSB7fQogICAgZm9yIGluZm8gaW4gbGliYXBwX2luZm9zOgogICAgICAgIHJhdyA9IHoucmVhZChpbmZvLmZpbGVuYW1lKQogICAgICAgIHBhdGNoZWRbaW5mby5maWxlbmFtZV0gPSB3aXBlX3NuYXBzaG90KHJhdykKCiMgUmVidWlsZCBBUEs6IGNvcHkgZXZlcnkgZW50cnkgZXhhY3RseSwgYnV0IHJlcGxhY2UgcGF0Y2hlZCBsaWJhcHAuc28KVE1QID0gQVBLX1BBVEggKyAnLmxheWVyMy50bXAnCndpdGggemlwZmlsZS5aaXBGaWxlKEFQS19QQVRILCAncicpIGFzIHppbjoKICAgIHdpdGggemlwZmlsZS5aaXBGaWxlKFRNUCwgJ3cnLCBhbGxvd1ppcDY0PVRydWUpIGFzIHpvdXQ6CiAgICAgICAgZm9yIGl0ZW0gaW4gemluLmluZm9saXN0KCk6CiAgICAgICAgICAgIGRhdGEgPSBwYXRjaGVkLmdldChpdGVtLmZpbGVuYW1lLCB6aW4ucmVhZChpdGVtLmZpbGVuYW1lKSkKICAgICAgICAgICAgemkgPSB6aXBmaWxlLlppcEluZm8oaXRlbS5maWxlbmFtZSkKICAgICAgICAgICAgemkuY29tcHJlc3NfdHlwZSA9IGl0ZW0uY29tcHJlc3NfdHlwZQogICAgICAgICAgICB6aS5leHRlcm5hbF9hdHRyID0gaXRlbS5leHRlcm5hbF9hdHRyCiAgICAgICAgICAgIHppLmRhdGVfdGltZSA9IGl0ZW0uZGF0ZV90aW1lCiAgICAgICAgICAgIHppLmNvbW1lbnQgPSBpdGVtLmNvbW1lbnQKICAgICAgICAgICAgem91dC53cml0ZXN0cih6aSwgZGF0YSkKCm9zLnJlcGxhY2UoVE1QLCBBUEtfUEFUSCkKcHJpbnQoJ0xheWVyIDM6IEFQSyByZWJ1aWx0IGNsZWFubHkgd2l0aCBwYXRjaGVkIGxpYmFwcC5zbycpCgojIFZlcmlmeSBERVggZmlsZXMgYXJlIHByZXNlbnQKd2l0aCB6aXBmaWxlLlppcEZpbGUoQVBLX1BBVEgsICdyJykgYXMgejoKICAgIGRleCA9IFtuIGZvciBuIGluIHoubmFtZWxpc3QoKSBpZiBuLmVuZHN3aXRoKCcuZGV4JyldCiAgICBpZiBub3QgZGV4OgogICAgICAgIHByaW50KCdMYXllciAzOiBGQVRBTCAtIG5vIERFWCBmaWxlcyBpbiByZWJ1aWx0IEFQSyEnKQogICAgICAgIHN5cy5leGl0KDEpCiAgICBwcmludCgnTGF5ZXIgMzogREVYIHZlcmlmaWNhdGlvbiBPSzogJytzdHIoZGV4KSkK" | base64 -d > "$LAYER3_PY"
+            if CBE_APK_PATH="$APK_PATH" python3 "$LAYER3_PY"; then
+              echo "Layer 3: Snapshot wipe + APK rebuild OK"
               ALIGNED_APK="/tmp/apk_armor_aligned.apk"
               rm -f "$ALIGNED_APK"
               zipalign -f 4 "$APK_PATH" "$ALIGNED_APK"
-
               KS_FILE=$(grep "^storeFile=" /tmp/key.properties | cut -d= -f2-)
               KS_PASS=$(grep "^storePassword=" /tmp/key.properties | cut -d= -f2-)
               KEY_ALIAS=$(grep "^keyAlias=" /tmp/key.properties | cut -d= -f2-)
               KEY_PASS=$(grep "^keyPassword=" /tmp/key.properties | cut -d= -f2-)
-
               apksigner sign \
                 --ks "$KS_FILE" \
                 --ks-pass "pass:$KS_PASS" \
@@ -615,11 +596,11 @@ jobs:
                 --key-pass "pass:$KEY_PASS" \
                 --out "$APK_PATH" \
                 "$ALIGNED_APK"
-              echo "Layer 3: APK patched in-place and re-signed ✓"
+              echo "Layer 3: APK signed ✓"
             else
-              echo "Layer 3: libapp.so not found inside APK — skipping"
+              echo "Layer 3: Python patch failed - using unpatched APK"
             fi
-            rm -rf "$PATCH_DIR" /tmp/apk_armor_aligned.apk
+            rm -f /tmp/layer3_repack.py /tmp/apk_armor_aligned.apk
           fi
 
           echo "BUILD_OUTPUT=$APK_PATH" >> $GITHUB_ENV

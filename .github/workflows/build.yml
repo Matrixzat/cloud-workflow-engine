@@ -598,11 +598,10 @@ jobs:
               UNSIGNED_APK="/tmp/apk_armor_unsigned.apk"
               ALIGNED_APK="/tmp/apk_armor_aligned.apk"
               rm -f "$UNSIGNED_APK" "$ALIGNED_APK"
-              # .so files MUST be stored uncompressed — Android rejects APKs where native
-              # libs are deflated because it cannot page-align them for direct loading.
-              (cd "$PATCH_DIR" && \
-                find . -name "*.so" | zip -q -0 "$UNSIGNED_APK" -@ && \
-                zip -q -r "$UNSIGNED_APK" . -x "*.so")
+              # Store ALL entries uncompressed — Android requires resources.arsc and .so
+              # files to be stored (not deflated); safest approach is -0 for the whole APK.
+              # Zipalign will then align uncompressed entries on 4-byte boundaries.
+              (cd "$PATCH_DIR" && zip -q -0 -r "$UNSIGNED_APK" .)
               zipalign -f 4 "$UNSIGNED_APK" "$ALIGNED_APK"
 
               KS_FILE=$(grep "^storeFile=" /tmp/key.properties | cut -d= -f2-)

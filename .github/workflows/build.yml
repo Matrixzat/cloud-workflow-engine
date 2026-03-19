@@ -640,7 +640,7 @@ jobs:
           APK=$(find . -name "*.apk" -not -path "*/intermediates/*" | head -1)
           echo "BUILD_OUTPUT=$(realpath $APK)" >> $GITHUB_ENV
 
-      # ── 11a. Harden APK — strip Dart snapshot hash ───────────────────────────
+      # ── 11a. Harden APK — deep binary hardening ──────────────────────────────
       - name: Harden APK
         run: |
           INPUT="${BUILD_OUTPUT}"
@@ -652,56 +652,192 @@ jobs:
           WORKDIR="/tmp/apk_harden"
           mkdir -p "$WORKDIR"
 
-          # Extract libapp.so (Flutter only — other project types won't have it)
-          if unzip -l "$INPUT" | grep -q 'lib/arm64-v8a/libapp.so'; then
-            unzip -o "$INPUT" 'lib/arm64-v8a/libapp.so' -d "$WORKDIR"
-            LIBAPP="$WORKDIR/lib/arm64-v8a/libapp.so"
+          if ! unzip -l "$INPUT" | grep -q 'lib/arm64-v8a/libapp.so'; then
+            echo "No libapp.so — not a Flutter APK, skipping hardening"
+            exit 0
+          fi
 
-            # Zero the Dart snapshot hash (64 bytes after each Dart magic marker)
-            python3 << 'PYEOF'
-import sys, os
+          unzip -o "$INPUT" 'lib/arm64-v8a/libapp.so' -d "$WORKDIR"
+          LIBAPP="$WORKDIR/lib/arm64-v8a/libapp.so"
+          echo "Original size: $(du -sh $LIBAPP | cut -f1)"
 
-path = os.environ.get('LIBAPP', '/tmp/apk_harden/lib/arm64-v8a/libapp.so')
+          # ── Layer 1: Strip DWARF debug info, build-id and compiler comments ──
+          # Removes all debug sections; safe — Android loads via program headers
+          if command -v llvm-strip > /dev/null 2>&1; then
+            llvm-strip --strip-debug "$LIBAPP" && echo "[L1] llvm-strip --strip-debug done"
+          elif command -v strip > /dev/null 2>&1; then
+            strip --strip-debug "$LIBAPP" && echo "[L1] strip --strip-debug done"
+          fi
 
-# Dart VM snapshot magic — appears in _kDartVmSnapshotData and _kDartIsolateSnapshotData
-DART_MAGIC = bytes([0xdc, 0xdc, 0xf5, 0xf5])
-# Number of bytes to zero after the magic (covers kind + reserved + hash fields)
-PATCH_SIZE = 64
+          # Also nuke .comment and .note.gnu.build-id via objcopy if available
+          if command -v objcopy > /dev/null 2>&1; then
+            objcopy \
+              --remove-section=.comment \
+              --remove-section=.note.gnu.build-id \
+              --remove-section=.gnu.build.attributes \
+              "$LIBAPP" "$LIBAPP.tmp" 2>/dev/null && mv "$LIBAPP.tmp" "$LIBAPP" || true
+            echo "[L1] objcopy sections removed"
+          fi
 
-with open(path, 'r+b') as f:
+          # ── Layer 2–5: Python binary patcher ─────────────────────────────────
+          python3 << 'PYEOF'
+import struct, sys, os, random
+
+path = '/tmp/apk_harden/lib/arm64-v8a/libapp.so'
+
+with open(path, 'rb') as f:
     data = bytearray(f.read())
 
-count = 0
+# ─ Layer 2: Zero Dart snapshot hashes ─────────────────────────────────────
+# Dart VM / isolate snapshot data starts with 0xdcdcf5f5.
+# The 64 bytes after the magic cover: kind(4) + reserved(8) + hash(32) + extra.
+# Blutter (and Doldrums) use this hash to identify the engine version.
+DART_MAGIC = bytes([0xdc, 0xdc, 0xf5, 0xf5])
+SNAP_COUNT = 0
 pos = 0
 while True:
     idx = data.find(DART_MAGIC, pos)
     if idx == -1:
         break
-    patch_start = idx + len(DART_MAGIC)
-    patch_end   = patch_start + PATCH_SIZE
-    data[patch_start:patch_end] = b'\x00' * PATCH_SIZE
-    print(f'  Snapshot header zeroed at offset 0x{idx:08x}')
-    count += 1
+    patch_s = idx + len(DART_MAGIC)
+    patch_e = patch_s + 64
+    data[patch_s:patch_e] = b'\x00' * 64
+    print(f'[L2] Snapshot header zeroed @ 0x{idx:08x}')
+    SNAP_COUNT += 1
     pos = idx + 1
+print(f'[L2] {SNAP_COUNT} snapshot header(s) patched')
+
+# ─ Layer 3: Remove ELF section header table ───────────────────────────────
+# Android only uses program headers (PT_LOAD) to load .so files.
+# Section headers are only used by debuggers and reverse engineering tools.
+# Setting e_shoff=0, e_shnum=0, e_shstrndx=0 breaks Ghidra/IDA section view.
+ELF_MAGIC = b'\x7fELF'
+if data[:4] == ELF_MAGIC and data[4] == 2:  # 64-bit ELF
+    # e_shoff  @ offset 40 (8 bytes) — section header table file offset
+    # e_shnum  @ offset 60 (2 bytes) — number of section headers
+    # e_shstrndx @ offset 62 (2 bytes) — section name string table index
+    struct.pack_into('<Q', data, 40, 0)   # e_shoff  = 0
+    struct.pack_into('<H', data, 60, 0)   # e_shnum  = 0
+    struct.pack_into('<H', data, 62, 0)   # e_shstrndx = SHN_UNDEF
+    print('[L3] ELF section header table reference removed (e_shoff/e_shnum/e_shstrndx zeroed)')
+else:
+    print('[L3] Skipped — not a 64-bit ELF or magic mismatch')
+
+# ─ Layer 4: Zero GNU Build-ID note ────────────────────────────────────────
+# The build-id is a unique SHA1/MD5 fingerprint embedded by the linker.
+# It can be used to correlate the binary to build systems or symbol servers.
+GNU_NAME = b'GNU\x00'
+BUILD_ID_TYPE = 3   # NT_GNU_BUILD_ID
+bid_count = 0
+pos = 0
+while True:
+    idx = data.find(GNU_NAME, pos)
+    if idx == -1:
+        break
+    # A GNU note has: namesz(4)+descsz(4)+type(4)+name(4 bytes "GNU\0")+desc
+    note_start = idx - 12
+    if note_start >= 0:
+        try:
+            namesz, descsz, ntype = struct.unpack_from('<III', data, note_start)
+            if namesz == 4 and ntype == BUILD_ID_TYPE and 8 <= descsz <= 40:
+                desc_off = idx + 4
+                data[desc_off:desc_off + descsz] = b'\x00' * descsz
+                print(f'[L4] GNU Build-ID ({descsz} bytes) zeroed @ 0x{desc_off:08x}')
+                bid_count += 1
+        except Exception:
+            pass
+    pos = idx + 1
+if bid_count == 0:
+    print('[L4] No GNU Build-ID found (may have been removed by strip already)')
+
+# ─ Layer 5: Scramble exported symbol name strings in .dynstr ──────────────
+# Even with --obfuscate, a few internal linker symbols may remain visible.
+# We locate the dynamic string table via PT_DYNAMIC and overwrite symbol
+# name strings with null bytes, preserving lengths so the library loads fine.
+# Only scrambles non-essential names (skips soname and needed entries).
+SKIP_PREFIXES = (b'\x00', b'libflutter', b'libandroid', b'libc', b'libm',
+                 b'libdl', b'libstdc', b'Android', b'__cxa', b'__stack')
+
+def find_dynstr(buf):
+    """Locate the DT_STRTAB value from PT_DYNAMIC segment."""
+    if len(buf) < 64:
+        return None, 0
+    e_phoff  = struct.unpack_from('<Q', buf, 32)[0]
+    e_phnum  = struct.unpack_from('<H', buf, 56)[0]
+    e_phentsize = struct.unpack_from('<H', buf, 54)[0]
+    for i in range(e_phnum):
+        off = e_phoff + i * e_phentsize
+        if off + e_phentsize > len(buf):
+            break
+        p_type = struct.unpack_from('<I', buf, off)[0]
+        if p_type == 2:  # PT_DYNAMIC
+            p_offset = struct.unpack_from('<Q', buf, off + 8)[0]
+            p_filesz = struct.unpack_from('<Q', buf, off + 32)[0]
+            strtab_off = None
+            strsz = 0
+            pos2 = p_offset
+            while pos2 + 16 <= p_offset + p_filesz and pos2 + 16 <= len(buf):
+                d_tag = struct.unpack_from('<q', buf, pos2)[0]
+                d_val = struct.unpack_from('<Q', buf, pos2 + 8)[0]
+                if d_tag == 5:   # DT_STRTAB
+                    strtab_off = d_val
+                elif d_tag == 10: # DT_STRSZ
+                    strsz = d_val
+                elif d_tag == 0:  # DT_NULL
+                    break
+                pos2 += 16
+            return strtab_off, strsz
+    return None, 0
+
+strtab_vaddr, strsz = find_dynstr(data)
+if strtab_vaddr and strsz:
+    # Map virtual address to file offset via PT_LOAD segments
+    e_phoff = struct.unpack_from('<Q', data, 32)[0]
+    e_phnum = struct.unpack_from('<H', data, 56)[0]
+    e_phentsize = struct.unpack_from('<H', data, 54)[0]
+    file_off = None
+    for i in range(e_phnum):
+        off = e_phoff + i * e_phentsize
+        p_type = struct.unpack_from('<I', data, off)[0]
+        if p_type == 1:  # PT_LOAD
+            p_vaddr   = struct.unpack_from('<Q', data, off + 16)[0]
+            p_filesz  = struct.unpack_from('<Q', data, off + 32)[0]
+            p_offset2 = struct.unpack_from('<Q', data, off + 8)[0]
+            if p_vaddr <= strtab_vaddr < p_vaddr + p_filesz:
+                file_off = p_offset2 + (strtab_vaddr - p_vaddr)
+                break
+    if file_off:
+        scram_count = 0
+        pos3 = file_off + 1
+        end3 = file_off + strsz
+        while pos3 < end3:
+            null = data.index(b'\x00', pos3) if b'\x00' in data[pos3:end3] else end3
+            sym  = data[pos3:null]
+            if sym and not any(sym.startswith(p) for p in SKIP_PREFIXES):
+                data[pos3:null] = b'\x00' * len(sym)
+                scram_count += 1
+            pos3 = null + 1
+        print(f'[L5] {scram_count} dynamic symbol name(s) wiped from .dynstr')
+    else:
+        print('[L5] Could not map DT_STRTAB vaddr to file offset — skipping')
+else:
+    print('[L5] No PT_DYNAMIC / DT_STRTAB found — skipping')
 
 with open(path, 'wb') as f:
     f.write(data)
 
-print(f'Hardening done — {count} snapshot header(s) patched')
-if count == 0:
-    print('  (No Dart magic found — Flutter obfuscation may have already removed it)')
+print('All hardening layers applied ✓')
 PYEOF
 
-            # Repack patched libapp.so back into the APK
-            PATCHED="$WORKDIR/patched.apk"
-            cp "$INPUT" "$PATCHED"
-            cd "$WORKDIR"
-            zip -u "$PATCHED" lib/arm64-v8a/libapp.so
-            echo "BUILD_OUTPUT=$PATCHED" >> $GITHUB_ENV
-            echo "Snapshot hash stripped and APK repacked ✓"
-          else
-            echo "No libapp.so found — not a Flutter APK, skipping hardening"
-          fi
+          echo "Hardened size: $(du -sh $LIBAPP | cut -f1)"
+
+          # ── Repack patched libapp.so into APK ─────────────────────────────
+          PATCHED="$WORKDIR/patched.apk"
+          cp "$INPUT" "$PATCHED"
+          cd "$WORKDIR"
+          zip -u "$PATCHED" lib/arm64-v8a/libapp.so
+          echo "BUILD_OUTPUT=$PATCHED" >> $GITHUB_ENV
+          echo "libapp.so hardened and APK repacked ✓"
 
       - name: Sign APK
         run: |

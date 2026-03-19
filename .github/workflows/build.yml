@@ -27,6 +27,10 @@ on:
         description: 'Staging asset ID — deleted immediately after source is downloaded'
         required: false
         default: ''
+      protect:
+        description: 'Enable App Armor 9-layer protection (Flutter only)'
+        required: false
+        default: 'false'
 
 permissions:
   contents: write   # needed to delete GitHub Release assets via GITHUB_TOKEN
@@ -540,8 +544,167 @@ jobs:
           fi
 
           flutter pub get
-          flutter build apk --$BUILD_MODE --target-platform android-arm64 --no-pub
-          echo "BUILD_OUTPUT=/tmp/project/build/app/outputs/flutter-apk/app-${BUILD_MODE}.apk" >> $GITHUB_ENV
+
+          # ── App Armor: pre-build injection (layers 3–9) ────────────────────
+          if [ "${{ inputs.protect }}" = "true" ]; then
+            echo "=== App Armor: injecting protection layers ==="
+            PKG_PATH=$(echo "$PACKAGE_NAME" | tr '.' '/')
+
+            # Layers 4-7: Runtime guards (root / anti-debug / anti-hook / emulator)
+            GUARD_DIR="android/app/src/main/kotlin/${PKG_PATH}"
+            mkdir -p "$GUARD_DIR"
+            cat > "$GUARD_DIR/AppGuardProvider.kt" << 'KOTLIN_EOF'
+package PLACEHOLDER_PACKAGE
+
+import android.content.ContentProvider
+import android.content.ContentValues
+import android.database.Cursor
+import android.net.Uri
+import android.os.Process
+import java.io.File
+
+class AppGuardProvider : ContentProvider() {
+    override fun onCreate(): Boolean {
+        checkRoot()
+        checkDebugger()
+        checkHooks()
+        checkEmulator()
+        return true
+    }
+
+    // Layer 6: Root Detection
+    private fun checkRoot() {
+        val rootPaths = listOf(
+            "/system/app/Superuser.apk", "/sbin/su", "/system/bin/su",
+            "/system/xbin/su", "/data/local/xbin/su", "/data/local/bin/su",
+            "/system/sd/xbin/su", "/system/bin/failsafe/su", "/data/local/su", "/su/bin/su"
+        )
+        if (rootPaths.any { File(it).exists() }) Process.killProcess(Process.myPid())
+        try {
+            val p = Runtime.getRuntime().exec(arrayOf("/system/xbin/which", "su"))
+            if (p.inputStream.read() != -1) Process.killProcess(Process.myPid())
+        } catch (_: Exception) {}
+    }
+
+    // Layer 7: Anti-Debug
+    private fun checkDebugger() {
+        if (android.os.Debug.isDebuggerConnected()) Process.killProcess(Process.myPid())
+        try {
+            val tracerPid = File("/proc/self/status").readLines()
+                .firstOrNull { it.startsWith("TracerPid:") }
+                ?.trim()?.split("\\s+".toRegex())?.lastOrNull()?.trim()
+            if (tracerPid != null && tracerPid != "0") Process.killProcess(Process.myPid())
+        } catch (_: Exception) {}
+    }
+
+    // Layer 8: Anti-Hooking (Frida / Xposed / Substrate / LSPosed)
+    private fun checkHooks() {
+        val hooking = listOf("frida", "xposed", "lsposed", "substrate", "edxposed", "magisk")
+        try {
+            val maps = File("/proc/self/maps").readText().lowercase()
+            if (hooking.any { maps.contains(it) }) Process.killProcess(Process.myPid())
+        } catch (_: Exception) {}
+    }
+
+    // Layer 9: Emulator / VM Detection
+    private fun checkEmulator() {
+        val build = android.os.Build
+        val markers = listOf("generic", "unknown", "google_sdk", "emulator", "sdk_gphone",
+            "bluestacks", "genymotion", "vbox", "nox", "memu")
+        val fields = listOf(
+            build.FINGERPRINT, build.MODEL, build.MANUFACTURER,
+            build.HARDWARE, build.PRODUCT, build.BOARD
+        ).map { it.lowercase() }
+        if (markers.any { m -> fields.any { it.contains(m) } }) Process.killProcess(Process.myPid())
+    }
+
+    override fun query(uri: Uri, proj: Array<String>?, sel: String?, args: Array<String>?, sort: String?): Cursor? = null
+    override fun getType(uri: Uri): String? = null
+    override fun insert(uri: Uri, values: ContentValues?): Uri? = null
+    override fun delete(uri: Uri, sel: String?, args: Array<String>?): Int = 0
+    override fun update(uri: Uri, values: ContentValues?, sel: String?, args: Array<String>?): Int = 0
+}
+KOTLIN_EOF
+            sed -i "s/package PLACEHOLDER_PACKAGE/package $PACKAGE_NAME/" "$GUARD_DIR/AppGuardProvider.kt"
+            echo "Layers 6-9: AppGuardProvider.kt → $GUARD_DIR ✓"
+
+            # Register provider in AndroidManifest.xml
+            MANIFEST=$(find android -name "AndroidManifest.xml" -path "*/main/AndroidManifest.xml" | head -1)
+            if [ -n "$MANIFEST" ] && ! grep -q "AppGuardProvider" "$MANIFEST"; then
+              PTAG="        <provider android:name=\".AppGuardProvider\" android:authorities=\"\${applicationId}.guard\" android:exported=\"false\" />"
+              sed -i "/<\/application>/i\\${PTAG}" "$MANIFEST"
+              echo "AppGuardProvider registered in AndroidManifest.xml ✓"
+            fi
+            echo "=== Pre-build injection complete ==="
+          fi
+
+          # ── Build (layers 1-2: obfuscation + debug-symbol strip, release only) ─
+          if [ "${{ inputs.protect }}" = "true" ] && [ "$BUILD_MODE" = "release" ]; then
+            echo "Layers 1-2: --obfuscate --split-debug-info (release mode)"
+            flutter build apk --$BUILD_MODE --target-platform android-arm64 --no-pub \
+              --obfuscate --split-debug-info=/tmp/dart-symbols
+          else
+            flutter build apk --$BUILD_MODE --target-platform android-arm64 --no-pub
+          fi
+
+          APK_PATH="/tmp/project/build/app/outputs/flutter-apk/app-${BUILD_MODE}.apk"
+
+          # ── Layer 3: Wipe snapshot hash inside the APK (unzip → patch → rezip → sign) ──
+          if [ "${{ inputs.protect }}" = "true" ] && [ -f "$APK_PATH" ]; then
+            echo "Layer 3: Patching libapp.so inside APK..."
+            PATCH_DIR="/tmp/apk_armor_patch"
+            rm -rf "$PATCH_DIR"
+            mkdir -p "$PATCH_DIR"
+            unzip -q "$APK_PATH" -d "$PATCH_DIR"
+
+            LIBAPP_IN_APK=$(find "$PATCH_DIR/lib" -name "libapp.so" 2>/dev/null | head -1)
+            if [ -n "$LIBAPP_IN_APK" ]; then
+              python3 << PYEOF
+import sys, os
+
+path = "$LIBAPP_IN_APK"
+with open(path, 'rb') as f:
+    data = bytearray(f.read())
+
+MAGIC = bytes([0xdc, 0xdc, 0xdc, 0xdc])
+idx = data.find(MAGIC)
+if idx >= 0:
+    for i in range(idx + 4, min(idx + 8, len(data))):
+        data[i] = 0
+    with open(path, 'wb') as f:
+        f.write(bytes(data))
+    print(f"Layer 3: Snapshot hash wiped at offset {idx + 4:#010x} ✓")
+else:
+    print("Layer 3: Dart snapshot magic not found — skipping hash wipe")
+PYEOF
+
+              # Remove old signature, repack, align, re-sign
+              rm -rf "$PATCH_DIR/META-INF"
+              UNSIGNED_APK="/tmp/apk_armor_unsigned.apk"
+              ALIGNED_APK="/tmp/apk_armor_aligned.apk"
+              (cd "$PATCH_DIR" && zip -q -r "$UNSIGNED_APK" .)
+              zipalign -f 4 "$UNSIGNED_APK" "$ALIGNED_APK"
+
+              KS_FILE=$(grep "^storeFile=" /tmp/key.properties | cut -d= -f2-)
+              KS_PASS=$(grep "^storePassword=" /tmp/key.properties | cut -d= -f2-)
+              KEY_ALIAS=$(grep "^keyAlias=" /tmp/key.properties | cut -d= -f2-)
+              KEY_PASS=$(grep "^keyPassword=" /tmp/key.properties | cut -d= -f2-)
+
+              apksigner sign \
+                --ks "$KS_FILE" \
+                --ks-pass "pass:$KS_PASS" \
+                --ks-key-alias "$KEY_ALIAS" \
+                --key-pass "pass:$KEY_PASS" \
+                --out "$APK_PATH" \
+                "$ALIGNED_APK"
+              echo "Layer 3: APK repacked and re-signed ✓"
+            else
+              echo "Layer 3: libapp.so not found inside APK — skipping"
+            fi
+            rm -rf "$PATCH_DIR" /tmp/apk_armor_unsigned.apk /tmp/apk_armor_aligned.apk
+          fi
+
+          echo "BUILD_OUTPUT=$APK_PATH" >> $GITHUB_ENV
 
       # ── 10b. BUILD: React Native ─────────────────────────────────────────────
       - name: Build React Native APK

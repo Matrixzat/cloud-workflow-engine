@@ -573,13 +573,19 @@ jobs:
 
           APK_PATH="/tmp/project/build/app/outputs/flutter-apk/app-${BUILD_MODE}.apk"
 
-          # ── Layer 3: Wipe snapshot hash inside the APK (unzip → patch → rezip → sign) ──
+          # ── Layer 3: Wipe snapshot hash — targeted update (avoids full-repack ./ entry bug) ──
+          # CRITICAL FIX: full repack with 'zip -r .' creates entries prefixed with './'
+          # (e.g. './classes.dex' instead of 'classes.dex'). ART cannot find DEX files
+          # with that prefix -> ClassNotFoundException for ALL classes incl. MainActivity.
+          # Solution: extract ONLY libapp.so, patch it, then update just that one entry
+          # with 'zip -u'. All other APK entries remain untouched with their original paths.
           if [ "${{ inputs.protect }}" = "true" ] && [ -f "$APK_PATH" ]; then
             echo "Layer 3: Patching libapp.so inside APK..."
             PATCH_DIR="/tmp/apk_armor_patch"
             rm -rf "$PATCH_DIR"
             mkdir -p "$PATCH_DIR"
-            unzip -q "$APK_PATH" -d "$PATCH_DIR"
+            # Extract ONLY libapp.so — never extract full APK (full extract+rezip breaks DEX paths)
+            unzip -q "$APK_PATH" "lib/arm64-v8a/libapp.so" -d "$PATCH_DIR" 2>/dev/null || true
 
             LIBAPP_IN_APK=$(find "$PATCH_DIR/lib" -name "libapp.so" 2>/dev/null | head -1)
             if [ -n "$LIBAPP_IN_APK" ]; then
@@ -587,17 +593,15 @@ jobs:
               PYSCRIPT=$(echo "aW1wb3J0IHN5cywgb3MKCnBhdGggPSAnTElCQVBQX1BBVEhfUExBQ0VIT0xERVInCndpdGggb3BlbihwYXRoLCAncmInKSBhcyBmOgogICAgZGF0YSA9IGJ5dGVhcnJheShmLnJlYWQoKSkKCk1BR0lDUyA9IFsKICAgIGJ5dGVzKFsweGY1LCAweGY1LCAweGRjLCAweGRjXSksCiAgICBieXRlcyhbMHhkYywgMHhkYywgMHhkYywgMHhkY10pLApdCgp0b3RhbF9wYXRjaGVkID0gMApmb3IgTUFHSUMgaW4gTUFHSUNTOgogICAgIyBDb2xsZWN0IEFMTCBwb3NpdGlvbnMgZmlyc3QKICAgIHBvc2l0aW9ucyA9IFtdCiAgICBpZHggPSAwCiAgICB3aGlsZSBUcnVlOgogICAgICAgIHBvcyA9IC0xCiAgICAgICAgZm9yIGkgaW4gcmFuZ2UoaWR4LCBsZW4oZGF0YSkgLSBsZW4oTUFHSUMpICsgMSk6CiAgICAgICAgICAgIGlmIGRhdGFbaTppK2xlbihNQUdJQyldID09IE1BR0lDOgogICAgICAgICAgICAgICAgcG9zID0gaQogICAgICAgICAgICAgICAgYnJlYWsKICAgICAgICBpZiBwb3MgPCAwOgogICAgICAgICAgICBicmVhawogICAgICAgIHBvc2l0aW9ucy5hcHBlbmQocG9zKQogICAgICAgIGlkeCA9IHBvcyArIGxlbihNQUdJQykKCiAgICBpZiBsZW4ocG9zaXRpb25zKSA9PSAwOgogICAgICAgIGNvbnRpbnVlCgogICAgIyBTS0lQIHRoZSBmaXJzdCBvY2N1cnJlbmNlIChWTSBpc29sYXRlIHNuYXBzaG90IOKAlCBGbHV0dGVyIG5lZWRzIGl0IHRvIGJvb3QpCiAgICAjIFplcm8gYWxsIHN1YnNlcXVlbnQgb2NjdXJyZW5jZXMgKGFwcCBpc29sYXRlIHNuYXBzaG90KHMpIOKAlCB3aGF0IEJsdXR0ZXIgcmVhZHMpCiAgICBwcmludCgnTGF5ZXIgMzogRm91bmQgJyArIHN0cihsZW4ocG9zaXRpb25zKSkgKyAnIHNuYXBzaG90IGhlYWRlcihzKSwga2VlcGluZyBWTSBhdCAweCcgKyBoZXgocG9zaXRpb25zWzBdKSArICcsIHdpcGluZyBhcHAgc25hcHNob3QocyknKQogICAgZm9yIHBvcyBpbiBwb3NpdGlvbnNbMTpdOgogICAgICAgIHdpcGVfZW5kID0gbWluKHBvcyArIDI0LCBsZW4oZGF0YSkpCiAgICAgICAgZm9yIGkgaW4gcmFuZ2UocG9zLCB3aXBlX2VuZCk6CiAgICAgICAgICAgIGRhdGFbaV0gPSAwCiAgICAgICAgcHJpbnQoJ0xheWVyIDM6IFdpcGVkIGFwcCBpc29sYXRlIHNuYXBzaG90IGF0IDB4JyArIGhleChwb3MpICsgJyAoJyArIHN0cih3aXBlX2VuZCAtIHBvcykgKyAnIGJ5dGVzKScpCiAgICAgICAgdG90YWxfcGF0Y2hlZCArPSAxCgppZiB0b3RhbF9wYXRjaGVkID4gMDoKICAgIHdpdGggb3BlbihwYXRoLCAnd2InKSBhcyBmOgogICAgICAgIGYud3JpdGUoYnl0ZXMoZGF0YSkpCiAgICBwcmludCgnTGF5ZXIgMzogJyArIHN0cih0b3RhbF9wYXRjaGVkKSArICcgYXBwIHNuYXBzaG90IGhlYWRlcihzKSB3aXBlZCBvayDigJQgVk0gc25hcHNob3QgcHJlc2VydmVkJykKZWxzZToKICAgIHByaW50KCdMYXllciAzOiBXQVJOSU5HIC0gbm8gYXBwIHNuYXBzaG90IGZvdW5kIHRvIHdpcGUnKQo=" | base64 -d | sed "s|LIBAPP_PATH_PLACEHOLDER|$LIBAPP_IN_APK|g")
               echo "$PYSCRIPT" | python3
 
-              # Remove ONLY signing artifacts — NOT META-INF/services/ (ServiceLoader
-              # files live there; deleting them breaks kotlinx-coroutines main dispatcher)
-              find "$PATCH_DIR/META-INF" -maxdepth 1 \( -name "*.SF" -o -name "*.RSA" -o -name "*.DSA" -o -name "MANIFEST.MF" \) -delete 2>/dev/null || true
-              UNSIGNED_APK="/tmp/apk_armor_unsigned.apk"
+              # Update ONLY libapp.so inside the original APK — all other entries untouched
+              LIBAPP_REL="${LIBAPP_IN_APK#$PATCH_DIR/}"
+              (cd "$PATCH_DIR" && zip -u -0 "$APK_PATH" "$LIBAPP_REL")
+              # Remove old V1/V2 signing metadata so apksigner can re-sign cleanly
+              zip -d "$APK_PATH" "META-INF/*.SF" "META-INF/*.RSA" "META-INF/*.DSA" "META-INF/MANIFEST.MF" 2>/dev/null || true
+              # Align and re-sign
               ALIGNED_APK="/tmp/apk_armor_aligned.apk"
-              rm -f "$UNSIGNED_APK" "$ALIGNED_APK"
-              # Store ALL entries uncompressed — Android requires resources.arsc and .so
-              # files to be stored (not deflated); safest approach is -0 for the whole APK.
-              # Zipalign will then align uncompressed entries on 4-byte boundaries.
-              (cd "$PATCH_DIR" && zip -q -0 -r "$UNSIGNED_APK" .)
-              zipalign -f 4 "$UNSIGNED_APK" "$ALIGNED_APK"
+              rm -f "$ALIGNED_APK"
+              zipalign -f 4 "$APK_PATH" "$ALIGNED_APK"
 
               KS_FILE=$(grep "^storeFile=" /tmp/key.properties | cut -d= -f2-)
               KS_PASS=$(grep "^storePassword=" /tmp/key.properties | cut -d= -f2-)
@@ -611,11 +615,11 @@ jobs:
                 --key-pass "pass:$KEY_PASS" \
                 --out "$APK_PATH" \
                 "$ALIGNED_APK"
-              echo "Layer 3: APK repacked and re-signed ✓"
+              echo "Layer 3: APK patched in-place and re-signed ✓"
             else
               echo "Layer 3: libapp.so not found inside APK — skipping"
             fi
-            rm -rf "$PATCH_DIR" /tmp/apk_armor_unsigned.apk /tmp/apk_armor_aligned.apk
+            rm -rf "$PATCH_DIR" /tmp/apk_armor_aligned.apk
           fi
 
           echo "BUILD_OUTPUT=$APK_PATH" >> $GITHUB_ENV

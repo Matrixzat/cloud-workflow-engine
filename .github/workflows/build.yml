@@ -582,7 +582,7 @@ jobs:
             # applicationId vs manifest namespace mismatch (ClassNotFoundException).
             MANIFEST=$(find android -name "AndroidManifest.xml" -path "*/main/AndroidManifest.xml" | head -1)
             if [ -n "$MANIFEST" ] && ! grep -q "AppGuardProvider" "$MANIFEST"; then
-              PTAG="        <provider android:name=\"${GUARD_PKG}.AppGuardProvider\" android:authorities=\"${applicationId}.guard\" android:exported=\"false\" />"
+              PTAG="        <provider android:name=\"${GUARD_PKG}.AppGuardProvider\" android:authorities=\"\${applicationId}.guard\" android:exported=\"false\" />"
               sed -i "/<\/application>/i\\${PTAG}" "$MANIFEST"
               echo "AppGuardProvider registered as ${GUARD_PKG}.AppGuardProvider ✓"
             fi

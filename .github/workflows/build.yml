@@ -27,10 +27,6 @@ on:
         description: 'Staging asset ID — deleted immediately after source is downloaded'
         required: false
         default: ''
-      protect:
-        description: 'Enable App Armor 9-layer protection (Flutter only)'
-        required: false
-        default: 'false'
 
 permissions:
   contents: write   # needed to delete GitHub Release assets via GITHUB_TOKEN
@@ -48,10 +44,6 @@ jobs:
       BUILD_MODE:   ${{ inputs.build_mode }}
 
     steps:
-
-      # ── 0. Checkout repo so $GITHUB_WORKSPACE has .github/scripts/ available ─
-      - name: Checkout workflow repo
-        uses: actions/checkout@v4
 
       # ── 1. System dependencies ───────────────────────────────────────────────
       - name: Install system dependencies
@@ -548,79 +540,8 @@ jobs:
           fi
 
           flutter pub get
-
-          # ── App Armor: pre-build injection (layers 3–4) ────────────────────
-          if [ "${{ inputs.protect }}" = "true" ]; then
-            echo "=== App Armor: injecting protection layers ==="
-
-            # Layer 4: Network Security Config — reject user-installed CAs (blocks Burp/Charles/HTTP Canary MITM)
-            MANIFEST=$(find android -name "AndroidManifest.xml" -path "*/main/AndroidManifest.xml" | head -1)
-            RES_XML_DIR="android/app/src/main/res/xml"
-            mkdir -p "$RES_XML_DIR"
-            echo "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiPz4KPG5ldHdvcmstc2VjdXJpdHktY29uZmlnPgogICAgPGJhc2UtY29uZmlnIGNsZWFydGV4dFRyYWZmaWNQZXJtaXR0ZWQ9ImZhbHNlIj4KICAgICAgICA8dHJ1c3QtYW5jaG9ycz4KICAgICAgICAgICAgPGNlcnRpZmljYXRlcyBzcmM9InN5c3RlbSIvPgogICAgICAgIDwvdHJ1c3QtYW5jaG9ycz4KICAgIDwvYmFzZS1jb25maWc+CjwvbmV0d29yay1zZWN1cml0eS1jb25maWc+Cg==" | base64 -d > "$RES_XML_DIR/network_security_config.xml"
-            echo "Layer 4: network_security_config.xml ✓"
-            if [ -n "$MANIFEST" ] && ! grep -q "networkSecurityConfig" "$MANIFEST"; then
-              sed -i 's/<application/<application android:networkSecurityConfig="@xml\/network_security_config"/' "$MANIFEST"
-              echo "Layer 4: networkSecurityConfig wired into AndroidManifest.xml ✓"
-            fi
-            # ── ProGuard: inject Activity keep rules (R8 code-shrinking fix) ─────
-            # R8 silently removes MainActivity when minifyEnabled=true and project
-            # ProGuard files are absent or incomplete. Write a guaranteed keep file
-            # via base64-decode (safe in YAML block scalars) then wire into build.gradle.
-            ARMOR_PRO="android/app/cbe_armor.pro"
-            mkdir -p "$(dirname "$ARMOR_PRO")"
-            echo "IyBBcHAgQXJtb3IgaW5qZWN0ZWQgcnVsZXMg4oCUIGtlZXAgYWxsIEFjdGl2aXR5IGVudHJ5IHBvaW50cyBzbyBSOCBjYW5ub3QgcmVtb3ZlIHRoZW0KLWtlZXAgcHVibGljIGNsYXNzICogZXh0ZW5kcyBhbmRyb2lkLmFwcC5BY3Rpdml0eSB7ICo7IH0KLWtlZXAgcHVibGljIGNsYXNzICogZXh0ZW5kcyBhbmRyb2lkLmFwcC5BcHBsaWNhdGlvbiB7ICo7IH0KLWtlZXAgcHVibGljIGNsYXNzICogZXh0ZW5kcyBhbmRyb2lkeC5hcHBjb21wYXQuYXBwLkFwcENvbXBhdEFjdGl2aXR5IHsgKjsgfQota2VlcCBwdWJsaWMgY2xhc3MgKiBleHRlbmRzIGlvLmZsdXR0ZXIuZW1iZWRkaW5nLmFuZHJvaWQuRmx1dHRlckFjdGl2aXR5IHsgKjsgfQota2VlcCBwdWJsaWMgY2xhc3MgKiBleHRlbmRzIGlvLmZsdXR0ZXIuZW1iZWRkaW5nLmFuZHJvaWQuRmx1dHRlckZyYWdtZW50QWN0aXZpdHkgeyAqOyB9Ci1rZWVwY2xhc3NtZW1iZXJzIHB1YmxpYyBjbGFzcyAqIGV4dGVuZHMgYW5kcm9pZC5hcHAuQWN0aXZpdHkgeyAqOyB9Cgo=" | base64 -d > "$ARMOR_PRO"
-            BUILD_GRADLE=$(find android -name "build.gradle" -path "*/app/build.gradle" | head -1)
-            if [ -n "$BUILD_GRADLE" ]; then
-              sed -i "s|proguardFiles |proguardFiles 'cbe_armor.pro', |" "$BUILD_GRADLE" || true
-              echo "App Armor: Activity keep rules injected into build.gradle ✓"
-            fi
-            echo "=== Pre-build injection complete ==="
-          fi
-
-          # ── Build (layers 1-2: obfuscation + debug-symbol strip, release only) ─
-          if [ "${{ inputs.protect }}" = "true" ] && [ "$BUILD_MODE" = "release" ]; then
-            echo "Layers 1-2: --obfuscate --split-debug-info (release mode)"
-            flutter build apk --$BUILD_MODE --target-platform android-arm64 --no-pub \
-              --obfuscate --split-debug-info=/tmp/dart-symbols
-          else
-            flutter build apk --$BUILD_MODE --target-platform android-arm64 --no-pub
-          fi
-
-          APK_PATH="/tmp/project/build/app/outputs/flutter-apk/app-${BUILD_MODE}.apk"
-
-          # -- Layer 3: Snapshot Hash Erasure + ELF Symbol Scrambling + Optional XOR Payload Encrypt --
-          # A: Rename all _kDart* symbol names in .dynstr to random garbage (blutter can't find by name)
-          # B: Zero the 32-byte Dart snapshot hash in VmSnapshotData + IsolateSnapshotData
-          # C: Zero the Dart features string (prevents version/arch fingerprinting)
-          # D: XOR-encrypt payload bytes (only when libcbe_native.so is bundled in APK for runtime decrypt)
-          if [ "${{ inputs.protect }}" = "true" ] && [ -f "$APK_PATH" ]; then
-            echo "Layer 3: Applying snapshot protection (hash erasure + symbol scrambling)..."
-            LAYER3_PY="$GITHUB_WORKSPACE/.github/scripts/layer3_armor.py"
-            if CBE_APK_PATH="$APK_PATH" python3 "$LAYER3_PY"; then
-              echo "Layer 3: APK structure verified OK"
-              ALIGNED_APK="/tmp/apk_armor_aligned.apk"
-              rm -f "$ALIGNED_APK"
-              zipalign -f 4 "$APK_PATH" "$ALIGNED_APK"
-              KS_FILE=$(grep "^storeFile=" /tmp/key.properties | cut -d= -f2-)
-              KS_PASS=$(grep "^storePassword=" /tmp/key.properties | cut -d= -f2-)
-              KEY_ALIAS=$(grep "^keyAlias=" /tmp/key.properties | cut -d= -f2-)
-              KEY_PASS=$(grep "^keyPassword=" /tmp/key.properties | cut -d= -f2-)
-              apksigner sign \
-                --ks "$KS_FILE" \
-                --ks-pass "pass:$KS_PASS" \
-                --ks-key-alias "$KEY_ALIAS" \
-                --key-pass "pass:$KEY_PASS" \
-                --out "$APK_PATH" \
-                "$ALIGNED_APK"
-              echo "Layer 3: APK signed ✓"
-            else
-              echo "Layer 3: Python patch failed - using unpatched APK"
-            fi
-            rm -f /tmp/layer3_repack.py /tmp/apk_armor_aligned.apk
-          fi
-
-          echo "BUILD_OUTPUT=$APK_PATH" >> $GITHUB_ENV
+          flutter build apk --$BUILD_MODE --target-platform android-arm64 --no-pub
+          echo "BUILD_OUTPUT=/tmp/project/build/app/outputs/flutter-apk/app-${BUILD_MODE}.apk" >> $GITHUB_ENV
 
       # ── 10b. BUILD: React Native ─────────────────────────────────────────────
       - name: Build React Native APK

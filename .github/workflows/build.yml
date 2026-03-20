@@ -83,16 +83,32 @@ jobs:
           API="https://api.github.com/repos/${{ github.repository }}"
           AUTH='-H "Authorization: Bearer '"$GH_TOKEN"'" -H "Accept: application/vnd.github.v3+json"'
 
-          # 1. Delete the specific release asset
+          # 1. Identify which release owns this asset (works for any tag, not just build-queue)
+          RELEASE_INFO=$(curl -s \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.v3+json" \
+            "$API/releases?per_page=20" | python3 -c "
+import json,sys
+try:
+    releases=json.load(sys.stdin)
+    aid=int('${{ inputs.asset_id }}')
+    for rel in releases:
+        for asset in rel.get('assets',[]):
+            if asset['id']==aid:
+                print(rel['id'],rel['tag_name'])
+                break
+except:pass
+" 2>/dev/null)
+          RELEASE_ID=$(echo "$RELEASE_INFO" | awk '{print $1}')
+          RELEASE_TAG=$(echo "$RELEASE_INFO" | awk '{print $2}')
+          echo "Asset belongs to release id=$RELEASE_ID tag=$RELEASE_TAG"
+
+          # 2. Delete the specific release asset
           CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
             -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.v3+json" \
             "$API/releases/assets/${{ inputs.asset_id }}")
           echo "Asset ${{ inputs.asset_id }} delete → $CODE"
 
-          # 2. Find and delete the build-queue release
-          RELEASE_ID=$(curl -s \
-            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.v3+json" \
-            "$API/releases/tags/build-queue" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('id',''))" 2>/dev/null)
+          # 3. Delete the release (whatever tag it has — not hardcoded to build-queue)
           if [ -n "$RELEASE_ID" ]; then
             CODE2=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
               -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.v3+json" \
@@ -102,11 +118,13 @@ jobs:
             echo "Release not found (already gone)"
           fi
 
-          # 3. Delete the git tag ref itself
-          CODE3=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
-            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.v3+json" \
-            "$API/git/refs/tags/build-queue")
-          echo "Tag ref delete → $CODE3"
+          # 4. Delete the git tag ref (using actual tag name, not hardcoded)
+          if [ -n "$RELEASE_TAG" ]; then
+            CODE3=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.v3+json" \
+              "$API/git/refs/tags/$RELEASE_TAG")
+            echo "Tag ref '$RELEASE_TAG' delete → $CODE3"
+          fi
           echo "Cleanup complete ✓"
 
       # ── 3. Extract source ────────────────────────────────────────────────────

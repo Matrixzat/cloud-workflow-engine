@@ -8,7 +8,7 @@ CBE Dart Snapshot Armor
   5. patchelf: add DT_NEEDED(libcbe_armor.so) to libapp.so
   6. Repack APK (strip old signature; signing done by the next step)
 """
-import sys, os, struct, subprocess, zipfile, glob, shutil, re
+import sys, os, struct, subprocess, zipfile, glob, shutil, re, copy
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 XOR_KEY    = bytes([0x4D,0x58,0x24,0x39,0x6B,0x23,0x50,0x32,
@@ -239,12 +239,17 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM*vm,void*r){{
                 if item.filename=='lib/arm64-v8a/libapp.so':
                     data=new_libapp
                     print(f"  ↳ replaced lib/arm64-v8a/libapp.so")
-                # Store native libs uncompressed (required for direct execution)
-                compress=zipfile.ZIP_STORED if item.filename.endswith('.so') else zipfile.ZIP_DEFLATED
-                zout.writestr(item.filename,data,compress_type=compress)
+                # Preserve original ZipInfo metadata (extra, permissions, etc.)
+                # Only override compress_type for .so files (must be uncompressed)
+                out_info = copy.copy(item)
+                if item.filename.endswith('.so'):
+                    out_info.compress_type = zipfile.ZIP_STORED
+                zout.writestr(out_info, data)
             if armor_bytes:
-                zout.writestr(f'lib/arm64-v8a/{ARMOR_LIB}',armor_bytes,
-                              compress_type=zipfile.ZIP_STORED)
+                armor_info = zipfile.ZipInfo(filename=f'lib/arm64-v8a/{ARMOR_LIB}')
+                armor_info.compress_type = zipfile.ZIP_STORED
+                armor_info.external_attr = 0o100644 << 16  # rw-r--r--
+                zout.writestr(armor_info, armor_bytes)
                 print(f"  ↳ added lib/arm64-v8a/{ARMOR_LIB}")
 
     os.replace(tmp_apk,apk_path)

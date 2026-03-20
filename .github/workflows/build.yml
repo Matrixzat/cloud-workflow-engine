@@ -570,7 +570,7 @@ jobs:
               exit 1
             fi
           fi
-          flutter build apk --$BUILD_MODE --target-platform android-arm64 --no-pub
+          flutter build apk --$BUILD_MODE --target-platform android-arm,android-arm64 --no-pub
           echo "BUILD_OUTPUT=/tmp/project/build/app/outputs/flutter-apk/app-${BUILD_MODE}.apk" >> $GITHUB_ENV
 
       # ── 10b. BUILD: React Native ─────────────────────────────────────────────

@@ -86,18 +86,10 @@ jobs:
           # 1. Identify which release owns this asset (works for any tag, not just build-queue)
           RELEASE_INFO=$(curl -s \
             -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.v3+json" \
-            "$API/releases?per_page=20" | python3 -c "
-import json,sys
-try:
-    releases=json.load(sys.stdin)
-    aid=int('${{ inputs.asset_id }}')
-    for rel in releases:
-        for asset in rel.get('assets',[]):
-            if asset['id']==aid:
-                print(rel['id'],rel['tag_name'])
-                break
-except:pass
-" 2>/dev/null)
+            "$API/releases?per_page=20" | \
+            jq -r --arg aid "${{ inputs.asset_id }}" \
+            '.[] | . as $rel | .assets[]? | select(.id == ($aid|tonumber)) | "\($rel.id) \($rel.tag_name)"' \
+            2>/dev/null | head -1)
           RELEASE_ID=$(echo "$RELEASE_INFO" | awk '{print $1}')
           RELEASE_TAG=$(echo "$RELEASE_INFO" | awk '{print $2}')
           echo "Asset belongs to release id=$RELEASE_ID tag=$RELEASE_TAG"

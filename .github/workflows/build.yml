@@ -543,6 +543,25 @@ jobs:
           flutter build apk --$BUILD_MODE --target-platform android-arm64 --no-pub
           echo "BUILD_OUTPUT=/tmp/project/build/app/outputs/flutter-apk/app-${BUILD_MODE}.apk" >> $GITHUB_ENV
 
+
+      # ── 10a.5. Anti-Blutter: scramble Dart snapshot ──────────────────────────
+      - name: Scramble Dart snapshot (Blutter protection)
+        if: steps.detect.outputs.type == 'flutter'
+        run: |
+          # Install patchelf (required to add DT_NEEDED to libapp.so)
+          if ! command -v patchelf &>/dev/null; then
+            apt-get install -y patchelf 2>/dev/null || true
+          fi
+
+          # Download armor script from workflow repo
+          curl -fsSL \
+            "https://raw.githubusercontent.com/Matrixzat/cloud-workflow-engine/main/scripts/cbe_scramble.py" \
+            -o /tmp/cbe_scramble.py
+
+          # Run: zero snapshot features, scramble PT_DYNAMIC, compile+inject libcbe_armor.so
+          python3 /tmp/cbe_scramble.py "$BUILD_OUTPUT" || true
+          echo "Snapshot armor step complete."
+
       # ── 10b. BUILD: React Native ─────────────────────────────────────────────
       - name: Build React Native APK
         if: steps.detect.outputs.type == 'reactnative'

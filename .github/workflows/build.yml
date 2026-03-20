@@ -549,7 +549,27 @@ jobs:
             sed -i '/release {/a\            signingConfig signingConfigs.release' android/app/build.gradle
           fi
 
-          flutter pub get
+          # ── Smart pub get: auto-fix SDK version conflicts ──────────────
+          PUB_OUTPUT=$(flutter pub get 2>&1) && PUB_OK=true || PUB_OK=false
+          echo "$PUB_OUTPUT"
+          if [ "$PUB_OK" = "false" ]; then
+            # Dart pub prints its own fix suggestions, e.g.:
+            #   Consider downgrading your constraint on workmanager: flutter pub add workmanager:^0.7.0
+            # Extract all such suggestions and apply them automatically
+            FIXES=$(echo "$PUB_OUTPUT" | grep -oP 'flutter pub add \K\S+' || true)
+            if [ -n "$FIXES" ]; then
+              echo "━━━ SDK conflict detected — auto-fixing packages ━━━"
+              while IFS= read -r pkg_spec; do
+                echo "  ↳ Applying: flutter pub add $pkg_spec"
+                flutter pub add "$pkg_spec"
+              done <<< "$FIXES"
+              echo "━━━ Retrying flutter pub get ━━━"
+              flutter pub get
+            else
+              echo "No auto-fix available. Manual review required."
+              exit 1
+            fi
+          fi
           flutter build apk --$BUILD_MODE --target-platform android-arm64 --no-pub
           echo "BUILD_OUTPUT=/tmp/project/build/app/outputs/flutter-apk/app-${BUILD_MODE}.apk" >> $GITHUB_ENV
 

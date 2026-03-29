@@ -23,6 +23,10 @@ on:
         description: 'Build mode: release | debug | profile'
         required: false
         default: 'release'
+      architectures:
+        description: 'Target ABIs (comma-separated): armeabi-v7a, arm64-v8a, x86_64'
+        required: false
+        default: 'armeabi-v7a,arm64-v8a'
       asset_id:
         description: 'Staging asset ID — deleted immediately after source is downloaded'
         required: false
@@ -42,6 +46,7 @@ jobs:
       PACKAGE_NAME: ${{ inputs.package_name }}
       FLUTTER_VER:  ${{ inputs.flutter_version }}
       BUILD_MODE:   ${{ inputs.build_mode }}
+      ARCHITECTURES: ${{ inputs.architectures }}
 
     steps:
 
@@ -570,7 +575,7 @@ jobs:
               exit 1
             fi
           fi
-          flutter build apk --$BUILD_MODE --target-platform android-arm,android-arm64 --no-pub
+          flutter build apk --$BUILD_MODE --target-platform $(echo "$ARCHITECTURES" | sed 's/armeabi-v7a/android-arm/g; s/arm64-v8a/android-arm64/g; s/x86_64/android-x64/g') --no-pub
           echo "BUILD_OUTPUT=/tmp/project/build/app/outputs/flutter-apk/app-${BUILD_MODE}.apk" >> $GITHUB_ENV
 
       # ── 10b. BUILD: React Native ─────────────────────────────────────────────
@@ -668,7 +673,7 @@ jobs:
           cd android
           chmod +x gradlew
           ./gradlew assemble$(echo "$BUILD_MODE" | sed 's/.*/\\\u&/') \
-            -PreactNativeArchitectures=arm64-v8a \
+            -PreactNativeArchitectures=$ARCHITECTURES \
             --no-daemon
           cd ..
           APK=$(find android/app/build/outputs/apk -name "*.apk" | head -1)
@@ -775,7 +780,7 @@ jobs:
           cd "$GRADLE_DIR"
           chmod +x gradlew
           ./gradlew assemble$(echo "$BUILD_MODE" | sed 's/.*/\u&/') \
-            -PreactNativeArchitectures=arm64-v8a \
+            -PreactNativeArchitectures=$ARCHITECTURES \
             --no-daemon
           cd -
           APK=$(find . -name "*.apk" -not -path "*/intermediates/*" | head -1)

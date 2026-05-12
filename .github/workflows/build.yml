@@ -528,6 +528,30 @@ jobs:
           npx expo-cli eject 2>&1 || true
           echo "Android folder contents after prebuild:"; ls android/ 2>/dev/null || echo "(android/ not created)"
 
+      # ── 9c. Patch Flutter ProGuard rules (R8 missing class fix) ─────────────
+        - name: Patch Flutter ProGuard rules for R8
+          if: steps.detect.outputs.type == 'flutter'
+          run: |
+            # R8 fails if proguard-rules.pro doesn't suppress Play Core references
+            # from flutter/embedding (FlutterPlayStoreSplitApplication).
+            # Auto-inject dontwarn rules into every proguard-rules.pro found.
+            find /tmp/project/android -name "proguard-rules.pro" | while read PG; do
+              if ! grep -q "com.google.android.play.core.splitcompat" "$PG" 2>/dev/null; then
+                echo "" >> "$PG"
+                echo "# Auto-injected by Cloud Build Engine — fixes R8 missing class" >> "$PG"
+                echo "-dontwarn com.google.android.play.**" >> "$PG"
+                echo "-dontwarn com.google.android.play.core.**" >> "$PG"
+                echo "-dontwarn com.google.android.play.core.splitcompat.**" >> "$PG"
+                echo "-dontwarn com.google.android.play.core.splitinstall.**" >> "$PG"
+                echo "-dontwarn com.google.android.play.core.tasks.**" >> "$PG"
+                echo "-keep class com.google.android.play.core.splitcompat.SplitCompatApplication { *; }" >> "$PG"
+                echo "  ✔ Patched: $PG"
+              else
+                echo "  (already has play.core rules — skipping: $PG)"
+              fi
+            done
+
+  
       # ── 10a. BUILD: Flutter ──────────────────────────────────────────────────
       - name: Build Flutter APK
         if: steps.detect.outputs.type == 'flutter'

@@ -1,0 +1,64 @@
+name: adiza_moviez
+description: Adiza Moviez Box - Premium Movie & TV Streaming App
+publish_to: 'none'
+version: 4.2.6+33
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: ">=3.10.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  dio: ^5.4.3
+  dio_cookie_manager: ^3.1.1
+  cookie_jar: ^4.0.8
+  cached_network_image: ^3.3.1
+  flutter_cache_manager: ^3.3.1
+  shimmer: ^3.0.0
+  shared_preferences: ^2.2.3
+  provider: ^6.1.2
+  video_player: ^2.8.6
+  screen_brightness: ^2.1.7
+  wakelock_plus: ^1.2.8
+  google_fonts: ^6.2.1
+  flutter_rating_bar: ^4.0.1
+  path_provider: ^2.1.3
+  package_info_plus: ^8.0.0
+  intl: ^0.19.0
+  url_launcher: ^6.3.0
+  flutter_svg: ^2.0.10+1
+  permission_handler: ^11.3.1
+  crypto: ^3.0.3
+  flutter_local_notifications: ^17.2.2
+  connectivity_plus: ^6.1.1
+  workmanager: ^0.7.0
+  webview_flutter: ^4.9.0
+  gal: ^1.2.0
+  background_downloader: ^8.9.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icon.png
+    - assets/amb_logo.png
+    - assets/developer.jpg
+    - assets/football_banner.jpg
+    - assets/football_players.jpg
+    - assets/football_header.png
+    - assets/fb_slide1.webp
+    - assets/fb_slide2.jpg
+    - assets/fb_slide3.jpg
+    - assets/fb_slide4.jpg
+    - assets/fb_slide5.jpg
+    - assets/fb_slide6.jpg
+    - assets/fb_slide7.jpg
+    - assets/fb_slide8.jpg
+    - assets/fb_slide9.jpg
+    - assets/fb_slide10.jpg
+    - assets/fb_slide11.jpg

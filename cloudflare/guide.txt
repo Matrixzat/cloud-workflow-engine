@@ -1,0 +1,275 @@
+================================================================
+  ADIZA MOVIEZ BOX — CLOUDFLARE WORKERS DEPLOYMENT GUIDE
+================================================================
+
+WORKERS INCLUDED
+----------------
+1. uganda-munowatch.worker.js  — Main Uganda Cinema API worker
+2. relay.worker.js             — General-purpose HTTP relay worker
+
+================================================================
+  PREREQUISITES
+================================================================
+- A Cloudflare account (free tier works)
+- Wrangler CLI installed:
+    npm install -g wrangler
+- Log in to Wrangler:
+    wrangler login
+
+================================================================
+  WORKER 1: UGANDA-MUNOWATCH (MAIN WORKER)
+================================================================
+
+This is the main backend for Uganda Cinema Plus inside the app.
+It scrapes munowatch.org, manages VIP licenses via D1, and
+returns stream URLs to the Flutter app.
+
+STEP 1 — Create the D1 Database
+---------------------------------
+Run in your terminal:
+
+    wrangler d1 create adiza_license_db
+
+You will see output like:
+    database_name = "adiza_license_db"
+    database_id   = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+Copy the database_id — you will need it in the next step.
+
+STEP 2 — Create wrangler.toml
+-------------------------------
+Create a file called wrangler.toml next to uganda-munowatch.worker.js
+with this content (replace YOUR_DATABASE_ID with the one from Step 1):
+
+    name = "uganda-munowatch"
+    main = "uganda-munowatch.worker.js"
+    compatibility_date = "2024-01-01"
+
+    [[d1_databases]]
+    binding = "DB"
+    database_name = "adiza_license_db"
+    database_id   = "YOUR_DATABASE_ID"
+
+STEP 3 — Initialise the D1 Tables
+------------------------------------
+The worker auto-creates tables on first request. But you can also
+run this manually to set them up before first deploy:
+
+    wrangler d1 execute adiza_license_db --remote --command "
+      CREATE TABLE IF NOT EXISTS activations (
+        device_id TEXT PRIMARY KEY,
+        username TEXT DEFAULT '',
+        expiry TEXT DEFAULT '2099-12-31',
+        is_active INTEGER DEFAULT 1,
+        created_at INTEGER DEFAULT 0,
+        notes TEXT DEFAULT ''
+      );
+      CREATE TABLE IF NOT EXISTS app_activations (
+        app_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        telegram_username TEXT NOT NULL DEFAULT '',
+        expiry TEXT NOT NULL DEFAULT '2080',
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (app_id, device_id)
+      );
+      CREATE TABLE IF NOT EXISTS vip_tokens (
+        token TEXT PRIMARY KEY,
+        device_id TEXT,
+        created_at INTEGER,
+        used INTEGER DEFAULT 0,
+        expires_at INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS apps (
+        app_id TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL DEFAULT '',
+        tg_command TEXT NOT NULL DEFAULT '',
+        expiry_default TEXT NOT NULL DEFAULT '2080',
+        group_link TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL DEFAULT ''
+      );
+    "
+
+STEP 4 — Deploy the Worker
+----------------------------
+    wrangler deploy uganda-munowatch.worker.js \
+      --name uganda-munowatch \
+      --compatibility-date 2024-01-01
+
+Or with the wrangler.toml file present just run:
+    wrangler deploy
+
+Your worker URL will be:
+    https://uganda-munowatch.YOUR-SUBDOMAIN.workers.dev
+
+STEP 5 — Update the Flutter App
+---------------------------------
+Open lib/api/munowatch_client.dart and update the base URL:
+
+    static const String _base = 'https://uganda-munowatch.YOUR-SUBDOMAIN.workers.dev';
+
+Then rebuild the app.
+
+STEP 6 — Admin Panel
+----------------------
+Visit your worker URL in a browser. The admin panel is at:
+    https://uganda-munowatch.YOUR-SUBDOMAIN.workers.dev/admin
+
+Default admin password is set inside the worker (search for
+ADMIN_PASS in the worker source to change it before deploying).
+
+================================================================
+  WORKER 2: RELAY WORKER
+================================================================
+
+This is a lightweight HTTP proxy/relay used by other parts of the
+app to bypass CORS restrictions when calling third-party APIs.
+
+Allowed target hosts (configured inside relay.worker.js):
+  - aoneroom.com
+  - movbox.cc
+  - hakunaymatata.com
+
+STEP 1 — Create wrangler.toml
+-------------------------------
+Create a file called wrangler.toml next to relay.worker.js:
+
+    name = "adiza-relay"
+    main = "relay.worker.js"
+    compatibility_date = "2024-01-01"
+
+No D1 database is needed for the relay worker.
+
+STEP 2 — Deploy
+-----------------
+    wrangler deploy relay.worker.js \
+      --name adiza-relay \
+      --compatibility-date 2024-01-01
+
+Your relay URL will be:
+    https://adiza-relay.YOUR-SUBDOMAIN.workers.dev
+
+Usage:
+    GET https://adiza-relay.YOUR-SUBDOMAIN.workers.dev/relay?url=TARGET_URL
+    POST: same, include body + Content-Type header
+    Cookie forwarding: send X-Forward-Cookie header
+
+================================================================
+  QUICK REFERENCE — USEFUL WRANGLER COMMANDS
+================================================================
+
+List all your workers:
+    wrangler list
+
+View live logs from a running worker:
+    wrangler tail uganda-munowatch
+
+List D1 databases:
+    wrangler d1 list
+
+Query your D1 database directly:
+    wrangler d1 execute adiza_license_db --remote \
+      --command "SELECT * FROM activations LIMIT 10;"
+
+Add a VIP user manually:
+    wrangler d1 execute adiza_license_db --remote \
+      --command "INSERT INTO app_activations
+        (app_id, device_id, telegram_username, expiry, is_active, created_at)
+        VALUES ('com.adiza.moviezbox', 'DEVICE_ID_HERE', '@username', '2099-12-31', 1, strftime('%s','now'));"
+
+Delete a user:
+    wrangler d1 execute adiza_license_db --remote \
+      --command "DELETE FROM app_activations WHERE device_id='DEVICE_ID_HERE';"
+
+================================================================
+  PAGINATION FIX — READ THIS BEFORE TOUCHING /grid OR /movies
+================================================================
+
+PROBLEM (what was broken and why):
+------------------------------------
+The /grid endpoint had this line:
+
+    hasMore: movies.length >= 24
+
+This was WRONG. Here is what actually happens on munowatch.com:
+
+  - Page 1 of any genre pipe returns 24 movies  → hasMore = true  ✓
+  - Page 2 of any genre pipe returns 12 movies  → hasMore = false ✗ (BUG)
+  - Page 3 of any genre pipe returns 12 movies  (never reached)
+  - Page 4, 5, 6 ... N all return 12 movies     (never reached)
+
+The pipe does NOT signal end-of-content by returning fewer movies.
+It returns 12 per page INDEFINITELY until the pipe is truly empty
+(at which point it returns 0 movies). So checking >= 24 caused the
+app to stop after only 36 movies (page 1 + page 2) even though
+hundreds more were available.
+
+FIX APPLIED:
+-------------
+Changed to:
+
+    hasMore: movies.length >= 1
+
+Now pagination continues as long as at least 1 movie is returned.
+Only a 0-movie response means the pipe is truly exhausted.
+
+This was confirmed by live testing — forcing page 3, 4, 5... on
+the Action genre (pipe_type=g, pipe_id=1) returned 12 movies each
+time with a new last_fetch_id cursor, proving unlimited content exists.
+
+RULE FOR FUTURE AGENTS:
+-------------------------
+DO NOT change hasMore back to >= 24 or any other threshold.
+The correct value is >= 1 for all cursor-based grid endpoints.
+
+The only correct way to detect end-of-content is: movies.length === 0
+
+This applies to:
+  - /grid   (genre pipes, VJ pipes)
+  - /movies (latest movies pipe, pipe_type=p pipe_id=4)
+
+SEARCH ENDPOINT NOTE:
+----------------------
+The /search endpoint on munowatch.com is NOT paginated.
+  - /search?q=action always returns the same ~18 movies regardless
+    of any page parameter — the server ignores the page param.
+  - The cursor-based path /search/{q}/0/{lid} returns 404 on munowatch.com.
+  - hasMore is intentionally set to false for /search so the client
+    treats it as a one-shot supplement after the grid pipe exhausts.
+  DO NOT try to paginate search or use the path-based cursor for it.
+
+================================================================
+  TROUBLESHOOTING
+================================================================
+
+Worker returns 401 / "unauthorized":
+  - Check that your D1 database is correctly bound in wrangler.toml
+  - Make sure the database_id matches the one Wrangler created
+
+Worker returns 500 on /stream:
+  - The munowatch.org session may have expired
+  - The worker will auto re-login on the next request
+  - If it persists, the upstream site may have changed structure
+
+Downloads or streams returning 403:
+  - Bunny CDN (b-cdn.net) blocks requests with a Referer header
+  - The Flutter app already strips Referer for b-cdn.net URLs
+  - No action needed on the worker side
+
+D1 table already exists error:
+  - Safe to ignore — tables use CREATE TABLE IF NOT EXISTS
+
+================================================================
+  CONTACT / SUPPORT
+================================================================
+
+App Package:  com.adiza.moviezbox
+Worker Name:  uganda-munowatch
+Database:     adiza_license_db
+Relay Worker: adiza-relay
+
+================================================================

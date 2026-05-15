@@ -1,9 +1,0 @@
-name = "adiza-moviez-box"
-main = "cloudflare/adiza-moviez-box.worker.js"
-compatibility_date = "2024-11-01"
-account_id = "21060c9085636596243acc450e5a96d6"
-
-[[d1_databases]]
-binding = "DB"
-database_name = "adiza-movie-box-db"
-database_id = "b63ad94b-cd9a-4301-bdb8-daf6a05eaf00"

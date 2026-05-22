@@ -1,81 +1,51 @@
-name: Dump Sapa TV DEX
+name: Dump Sapa TV DEX (frida-dexdump)
 
 on:
   workflow_dispatch:
 
 jobs:
-  static-unpack:
+  dump:
     runs-on: ubuntu-latest
-    outputs:
-      got_real_dex: ${{ steps.check.outputs.got_real_dex }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download Sapa TV APK
-        run: |
-          wget -q "https://www.dropbox.com/scl/fi/2jheqcz019z01rxp0fdja/Mobile-Sapa-TV_1.2.1_20260304_mobile.apk?rlkey=sxjzzrqkrp7bw0gl6matcgvmh&st=1vsin4ud&dl=1" -O SapaTV.apk
-          echo "APK: $(ls -lh SapaTV.apk | awk '{print $5}')"
-
-      - name: Static jiagu_unpacker (offline AES/XOR decrypt)
-        run: |
-          pip3 install -q pycryptodome
-          git clone -q --depth=1 https://x-access-token:${{ github.token }}@github.com/SafaSafari/jiagu_unpacker.git
-          mkdir -p dumped_dex
-          python3 jiagu_unpacker/jiagu_unpacker.py -apk SapaTV.apk -out dumped_dex 2>&1 || true
-
-      - name: Check — classes*.dex only (not shell.dex)
-        id: check
-        run: |
-          find dumped_dex -type f -exec ls -lh {} \; 2>/dev/null || echo "none"
-          COUNT=$(find dumped_dex -name "classes*.dex" 2>/dev/null | wc -l)
-          echo "Real DEX: $COUNT"
-          echo "got_real_dex=$COUNT" >> $GITHUB_OUTPUT
-
-      - name: Upload static result
-        if: steps.check.outputs.got_real_dex > 0
-        uses: actions/upload-artifact@v4
-        with:
-          name: sapa-tv-static-dex
-          path: dumped_dex/
-          retention-days: 7
-
-  runtime-dump:
-    runs-on: ubuntu-latest
-    needs: static-unpack
-    if: needs.static-unpack.outputs.got_real_dex == '0' || needs.static-unpack.outputs.got_real_dex == ''
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
 
-      - name: Download APKs
+      - name: Install frida-dexdump on runner
+        run: pip3 install -q frida-tools frida-dexdump
+
+      - name: Download SapaTV APK + frida-server (before emulator boots)
         run: |
-          wget -q "https://www.dropbox.com/scl/fi/2jheqcz019z01rxp0fdja/Mobile-Sapa-TV_1.2.1_20260304_mobile.apk?rlkey=sxjzzrqkrp7bw0gl6matcgvmh&st=1vsin4ud&dl=1" -O SapaTV.apk
-          wget -q "https://github.com/CodingGay/BlackDex/releases/download/v3.2/app-BlackDex64.apk" -O BlackDex.apk
-          echo "SapaTV: $(ls -lh SapaTV.apk | awk '{print $5}')"
-          echo "BlackDex: $(ls -lh BlackDex.apk | awk '{print $5}')"
+          wget -q "https://www.dropbox.com/scl/fi/2jheqcz019z01rxp0fdja/Mobile-Sapa-TV_1.2.1_20260304_mobile.apk?rlkey=sxjzzrqkrp7bw0gl6matcgvmh&st=1vsin4ud&dl=1" -O SapaTV.apk &
+          FV=$(python3 -c "import frida; print(frida.__version__)")
+          echo "Frida version: $FV"
+          wget -q "https://github.com/frida/frida/releases/download/${FV}/frida-server-${FV}-android-x86_64.xz" -O frida-server.xz &
+          wait
+          xz -d frida-server.xz
+          # After xz -d: output file is named frida-server (no extension)
+          ls -lh frida-server SapaTV.apk
 
-      - name: Run emulator + BlackDex UI automation + frida attach fallback
+      - name: Run emulator + dump
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
           arch: x86_64
-          profile: pixel
           target: google_apis
-          avd-name: SapaDumpAVD
+          profile: pixel
+          avd-name: SapaDump
           emulator-options: -no-window -no-audio -no-snapshot -gpu swiftshader_indirect
           disable-animations: true
           script: bash .github/scripts/dump.sh
 
-      - name: Upload result
+      - name: Upload DEX files
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sapa-tv-runtime-dex
+          name: sapa-tv-dex
           path: dumped_dex/
+          if-no-files-found: warn
           retention-days: 7

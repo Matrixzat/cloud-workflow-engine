@@ -1,4 +1,4 @@
-name: Dump Sapa TV DEX
+name: Dump Sapa TV DEX (BlackDex + Cache)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
 jobs:
   dump:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
 
     steps:
       - name: Enable KVM
@@ -15,61 +15,151 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Setup Android SDK
+      - name: Cache Android SDK cmdline-tools
+        uses: actions/cache@v4
+        id: cache-sdk
+        with:
+          path: ~/android-sdk/cmdline-tools
+          key: android-cmdtools-11076708
+
+      - name: Setup Android cmdline-tools (if not cached)
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
-          sudo apt-get update -q && sudo apt-get install -y -q wget unzip python3-pip
+          sudo apt-get update -q && sudo apt-get install -y -q wget unzip
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdtools.zip
           unzip -q cmdtools.zip -d $HOME/android-sdk
           mkdir -p $HOME/android-sdk/cmdline-tools/latest
-          mv $HOME/android-sdk/cmdline-tools/cmdline-tools/* $HOME/android-sdk/cmdline-tools/latest/ 2>/dev/null || mv $HOME/android-sdk/cmdline-tools/* $HOME/android-sdk/cmdline-tools/latest/ 2>/dev/null || true
+          mv $HOME/android-sdk/cmdline-tools/cmdline-tools/* $HOME/android-sdk/cmdline-tools/latest/ 2>/dev/null || true
+
+      - name: Cache Android system image
+        uses: actions/cache@v4
+        id: cache-sysimg
+        with:
+          path: ~/android-sdk/system-images
+          key: android-sysimage-30-google-x86_64-v2
+
+      - name: Cache platform-tools + emulator
+        uses: actions/cache@v4
+        id: cache-tools
+        with:
+          path: |
+            ~/android-sdk/platform-tools
+            ~/android-sdk/emulator
+            ~/android-sdk/platforms
+          key: android-tools-30-v2
+
+      - name: Install SDK packages (if not cached)
+        run: |
+          export ANDROID_SDK_ROOT=$HOME/android-sdk
+          export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          if [ "${{ steps.cache-tools.outputs.cache-hit }}" != "true" ]; then
+            sdkmanager "platform-tools" "platforms;android-30" "emulator"
+          fi
+          if [ "${{ steps.cache-sysimg.outputs.cache-hit }}" != "true" ]; then
+            sdkmanager "system-images;android-30;google_apis;x86_64"
+          fi
           echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
           echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
           echo "$HOME/android-sdk/emulator" >> $GITHUB_PATH
 
-      - name: Install SDK packages
+      - name: Cache BlackDex APK
+        uses: actions/cache@v4
+        id: cache-blackdex
+        with:
+          path: ~/blackdex/BlackDex.apk
+          key: blackdex-hluwa-3x-v1
+
+      - name: Build BlackDex from source (if not cached)
+        if: steps.cache-blackdex.outputs.cache-hit != 'true'
         run: |
-          yes | $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
-          $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-30" "emulator" "system-images;android-30;google_apis;x86_64"
+          sudo apt-get install -y -q git openjdk-17-jdk
+          git clone --depth=1 https://github.com/hluwa/BlackDex.git ~/blackdex-src
+          cd ~/blackdex-src
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon -q 2>&1 | tail -5 || \
+          ./gradlew assembleDebug --no-daemon -q 2>&1 | tail -5
+          mkdir -p ~/blackdex
+          APK=$(find . -name "*.apk" | head -1)
+          cp "$APK" ~/blackdex/BlackDex.apk
+          echo "BlackDex APK: $(ls -lh ~/blackdex/BlackDex.apk)"
+
+      - name: Cache pip + frida
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-frida-tools-v1
 
       - name: Create & Start Emulator
         run: |
-          echo "no" | $HOME/android-sdk/cmdline-tools/latest/bin/avdmanager create avd -n sapa_avd -k "system-images;android-30;google_apis;x86_64" --force
-          $HOME/android-sdk/emulator/emulator -avd sapa_avd -no-window -no-audio -no-snapshot -gpu swiftshader_indirect &
-          echo "Waiting for boot..."
-          $HOME/android-sdk/platform-tools/adb wait-for-device
-          timeout 300 bash -c 'until $HOME/android-sdk/platform-tools/adb shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; do sleep 5; echo "booting..."; done'
-          $HOME/android-sdk/platform-tools/adb shell input keyevent 82
+          echo "no" | avdmanager create avd -n sapa_avd -k "system-images;android-30;google_apis;x86_64" --force
+          $ANDROID_SDK_ROOT/emulator/emulator -avd sapa_avd -no-window -no-audio -no-snapshot -gpu swiftshader_indirect &
+          adb wait-for-device
+          timeout 300 bash -c 'until adb shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; do sleep 5; echo "booting..."; done'
+          adb shell input keyevent 82
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
           echo "Emulator ready"
 
-      - name: Download & Install APK
+      - name: Download & Install Sapa TV APK
         run: |
           wget -q "https://www.dropbox.com/scl/fi/2jheqcz019z01rxp0fdja/Mobile-Sapa-TV_1.2.1_20260304_mobile.apk?rlkey=sxjzzrqkrp7bw0gl6matcgvmh&st=1vsin4ud&dl=1" -O SapaTV.apk
-          ls -lh SapaTV.apk
-          $HOME/android-sdk/platform-tools/adb install -r SapaTV.apk
-          echo "Installed OK"
+          echo "APK: $(ls -lh SapaTV.apk)"
+          adb install -r SapaTV.apk
+          echo "Sapa TV installed"
 
-      - name: Install Frida + frida-dexdump
+      - name: Install BlackDex & Grant Permissions
         run: |
-          pip3 install frida-tools frida-dexdump
-          FRIDA_VER=$(python3 -c "import frida; print(frida.__version__)")
-          echo "Frida: $FRIDA_VER"
-          wget -q "https://github.com/frida/frida/releases/download/${FRIDA_VER}/frida-server-${FRIDA_VER}-android-x86_64.xz" -O fs.xz
-          xz -d fs.xz
-          mv frida-server-* frida-bin
-          $HOME/android-sdk/platform-tools/adb push frida-bin /data/local/tmp/frida-server
-          $HOME/android-sdk/platform-tools/adb shell "chmod +x /data/local/tmp/frida-server"
+          adb install -r ~/blackdex/BlackDex.apk
+          BLACKDEX_PKG=$(adb shell pm list packages | grep -i black | tr -d '\r' | cut -d: -f2 | head -1)
+          echo "BlackDex package: $BLACKDEX_PKG"
+          echo "BLACKDEX_PKG=$BLACKDEX_PKG" >> $GITHUB_ENV
+          adb shell pm grant "$BLACKDEX_PKG" android.permission.READ_EXTERNAL_STORAGE || true
+          adb shell pm grant "$BLACKDEX_PKG" android.permission.WRITE_EXTERNAL_STORAGE || true
+          adb shell appops set "$BLACKDEX_PKG" MANAGE_EXTERNAL_STORAGE allow || true
 
-      - name: Launch app + dump DEX
+      - name: Launch BlackDex & Dump Target
         run: |
-          $HOME/android-sdk/platform-tools/adb shell "/data/local/tmp/frida-server &" &
+          TARGET="com.mm.droid.livetv.mobile31027704"
+          # Launch target app first so it is installed/visible
+          adb shell monkey -p $TARGET -c android.intent.category.LAUNCHER 1 || true
           sleep 5
-          $HOME/android-sdk/platform-tools/adb shell "monkey -p com.mm.droid.livetv.mobile31027704 -c android.intent.category.LAUNCHER 1" || true
-          sleep 20
+          # Launch BlackDex with target package as intent extra
+          adb shell am start -n "$BLACKDEX_PKG/top.niunaijun.blackdex.MainActivity" \
+            --es packageName "$TARGET" || \
+          adb shell am start -n "$BLACKDEX_PKG/.MainActivity" \
+            --es packageName "$TARGET" || true
+          echo "Waiting for dump (90s)..."
+          sleep 90
+          # Pull results
           mkdir -p dumped_dex
-          frida-dexdump -U -f com.mm.droid.livetv.mobile31027704 -o ./dumped_dex/ || true
+          adb pull /sdcard/BlackDex/$TARGET/ ./dumped_dex/ 2>/dev/null || \
+          adb pull /sdcard/BlackDex/ ./dumped_dex/ 2>/dev/null || true
           echo "=== Dumped files ==="
-          ls -lh dumped_dex/
+          find dumped_dex -type f | xargs ls -lh 2>/dev/null || echo "No files yet"
+
+      - name: Fallback — frida-dexdump if BlackDex empty
+        run: |
+          COUNT=$(find dumped_dex -name "*.dex" 2>/dev/null | wc -l)
+          echo "DEX files so far: $COUNT"
+          if [ "$COUNT" -lt 1 ]; then
+            echo "BlackDex got nothing — falling back to frida-dexdump"
+            pip3 install -q frida-tools frida-dexdump
+            FRIDA_VER=$(python3 -c "import frida; print(frida.__version__)")
+            wget -q "https://github.com/frida/frida/releases/download/${FRIDA_VER}/frida-server-${FRIDA_VER}-android-x86_64.xz" -O fs.xz
+            xz -d fs.xz && mv frida-server-* frida-bin
+            adb push frida-bin /data/local/tmp/frida-server
+            adb shell "chmod +x /data/local/tmp/frida-server"
+            adb shell "/data/local/tmp/frida-server &" &
+            sleep 5
+            adb shell "monkey -p com.mm.droid.livetv.mobile31027704 -c android.intent.category.LAUNCHER 1" || true
+            sleep 15
+            frida-dexdump -U -f com.mm.droid.livetv.mobile31027704 -o ./dumped_dex/ || true
+          fi
+          echo "=== Final dump ==="
+          find dumped_dex -type f | xargs ls -lh 2>/dev/null
 
       - name: Upload dumped DEX
         uses: actions/upload-artifact@v4

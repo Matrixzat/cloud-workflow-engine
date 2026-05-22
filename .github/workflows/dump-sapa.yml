@@ -5,7 +5,7 @@ on:
 
 jobs:
   # ─────────────────────────────────────────────
-  # STEP 1: Static jiagu_unpacker — no emulator, ~1 min
+  # STEP 1: Static jiagu_unpacker (no emulator, ~1 min)
   # ─────────────────────────────────────────────
   static-unpack:
     runs-on: ubuntu-latest
@@ -26,17 +26,16 @@ jobs:
           mkdir -p dumped_dex
           python3 jiagu_unpacker/jiagu_unpacker.py -apk SapaTV.apk -out dumped_dex 2>&1 || true
 
-      - name: Check — only count real app DEX (not shell.dex)
+      - name: Check result — only count classes*.dex (not shell.dex)
         id: check
         run: |
-          echo "=== All output files ==="
+          echo "=== Output files ==="
           find dumped_dex -type f -exec ls -lh {} \; 2>/dev/null || echo "none"
-          # Real DEX = classes.dex / classes2.dex etc, NOT shell.dex
           COUNT=$(find dumped_dex -name "classes*.dex" 2>/dev/null | wc -l)
-          echo "Real app DEX count: $COUNT"
+          echo "Real DEX count: $COUNT"
           echo "got_real_dex=$COUNT" >> $GITHUB_OUTPUT
 
-      - name: Upload static result (if real DEX found)
+      - name: Upload if static succeeded
         if: steps.check.outputs.got_real_dex > 0
         uses: actions/upload-artifact@v4
         with:
@@ -45,9 +44,8 @@ jobs:
           retention-days: 7
 
   # ─────────────────────────────────────────────
-  # STEP 2: Runtime dump — only runs if static got nothing
-  # CodingGay/BlackDex prebuilt APK + frida-dexdump fallback
-  # Uses reactivecircus/android-emulator-runner (standard in 2025)
+  # STEP 2: Runtime dump — only if static got nothing
+  # CodingGay/BlackDex prebuilt + frida-dexdump fallback
   # ─────────────────────────────────────────────
   runtime-dump:
     runs-on: ubuntu-latest
@@ -62,11 +60,10 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Download Sapa TV APK + BlackDex prebuilt
+      - name: Download Sapa TV APK + BlackDex prebuilt APK
         run: |
           wget -q "https://www.dropbox.com/scl/fi/2jheqcz019z01rxp0fdja/Mobile-Sapa-TV_1.2.1_20260304_mobile.apk?rlkey=sxjzzrqkrp7bw0gl6matcgvmh&st=1vsin4ud&dl=1" \
             -O SapaTV.apk
-          # CodingGay/BlackDex — prebuilt release APK, no building needed
           wget -q "https://github.com/CodingGay/BlackDex/releases/download/v3.2/app-BlackDex64.apk" \
             -O BlackDex.apk
           echo "SapaTV: $(ls -lh SapaTV.apk | awk '{print $5}')"
@@ -77,7 +74,7 @@ jobs:
         with:
           api-level: 30
           arch: x86_64
-          profile: Nexus6
+          profile: pixel
           target: google_apis
           avd-name: SapaDumpAVD
           emulator-options: -no-window -no-audio -no-snapshot -gpu swiftshader_indirect
@@ -85,9 +82,9 @@ jobs:
           script: |
             mkdir -p dumped_dex
 
-            echo "=== Installing apps ==="
-            adb install -r SapaTV.apk  && echo "Sapa TV installed"
-            adb install -r BlackDex.apk && echo "BlackDex installed"
+            echo "=== Installing APKs ==="
+            adb install -r SapaTV.apk  && echo "Sapa TV OK"
+            adb install -r BlackDex.apk && echo "BlackDex OK"
 
             BPKG=$(adb shell pm list packages 2>/dev/null \
               | grep -i black | tr -d r | cut -d: -f2 | head -1)
@@ -97,27 +94,27 @@ jobs:
             adb shell pm grant "$BPKG" android.permission.WRITE_EXTERNAL_STORAGE 2>/dev/null || true
             adb shell appops set "$BPKG" MANAGE_EXTERNAL_STORAGE allow              2>/dev/null || true
 
-            echo "=== Launch Sapa TV to init Jiagu loader ==="
+            echo "=== Launch Sapa TV (init Jiagu loader) ==="
             adb shell monkey -p com.mm.droid.livetv.mobile31027704 \
               -c android.intent.category.LAUNCHER 1 || true
             sleep 10
 
-            echo "=== Launch BlackDex dump ==="
+            echo "=== Launch BlackDex ==="
             adb shell am start \
               -n "$BPKG/top.niunaijun.blackdex.MainActivity" \
               --es packageName "com.mm.droid.livetv.mobile31027704" 2>/dev/null || \
             adb shell monkey -p "$BPKG" -c android.intent.category.LAUNCHER 1 || true
 
-            echo "Waiting 90s for BlackDex..."
+            echo "Waiting 90s for BlackDex to dump..."
             sleep 90
 
             adb pull /sdcard/BlackDex/com.mm.droid.livetv.mobile31027704/ ./dumped_dex/ 2>/dev/null || \
             adb pull /sdcard/BlackDex/ ./dumped_dex/ 2>/dev/null || true
 
             COUNT=$(find dumped_dex -name "*.dex" | wc -l)
-            echo "BlackDex: $COUNT dex files"
+            echo "BlackDex result: $COUNT dex files"
 
-            # frida-dexdump if BlackDex got nothing
+            # frida-dexdump fallback if BlackDex got nothing
             if [ "$COUNT" -lt 1 ]; then
               echo "=== frida-dexdump fallback ==="
               pip3 install -q frida-tools frida-dexdump

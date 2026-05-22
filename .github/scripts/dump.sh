@@ -29,7 +29,7 @@ $ADB push "$WDIR/.github/scripts/fast_dump.js" /data/local/tmp/fast_dump.js
 
 echo "=== Run frida hook (60s max) ==="
 # -f spawns the app, --no-pause lets it run, hook script catches DEX at decrypt time
-timeout 75 frida -U -f "$TARGET" --no-pause -l /data/local/tmp/fast_dump.js 2>&1 || true
+timeout 75 frida -U -f "$TARGET" -l /data/local/tmp/fast_dump.js 2>&1 || true
 
 echo "=== Pull dumped DEX files ==="
 $ADB pull /sdcard/ "$WDIR/dumped_dex/" 2>/dev/null || true

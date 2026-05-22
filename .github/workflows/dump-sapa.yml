@@ -1,4 +1,4 @@
-name: Dump Sapa TV DEX (frida-dexdump)
+name: Dump Sapa TV DEX (fast hook)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
 jobs:
   dump:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -15,21 +15,18 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
 
-      - name: Install frida-dexdump on runner
-        run: pip3 install -q frida-tools frida-dexdump
-
-      - name: Download SapaTV APK + frida-server (before emulator boots)
+      - name: Install frida + download APKs + frida-server
         run: |
+          pip3 install -q frida-tools
           wget -q "https://www.dropbox.com/scl/fi/2jheqcz019z01rxp0fdja/Mobile-Sapa-TV_1.2.1_20260304_mobile.apk?rlkey=sxjzzrqkrp7bw0gl6matcgvmh&st=1vsin4ud&dl=1" -O SapaTV.apk &
           FV=$(python3 -c "import frida; print(frida.__version__)")
-          echo "Frida version: $FV"
+          echo "Frida: $FV"
           wget -q "https://github.com/frida/frida/releases/download/${FV}/frida-server-${FV}-android-x86_64.xz" -O frida-server.xz &
           wait
           xz -d frida-server.xz
-          # After xz -d: output file is named frida-server (no extension)
           ls -lh frida-server SapaTV.apk
 
-      - name: Run emulator + dump
+      - name: Run emulator + fast hook dump
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
@@ -41,7 +38,7 @@ jobs:
           disable-animations: true
           script: bash .github/scripts/dump.sh
 
-      - name: Upload DEX files
+      - name: Upload DEX
         if: always()
         uses: actions/upload-artifact@v4
         with:

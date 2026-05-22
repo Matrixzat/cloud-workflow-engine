@@ -70,7 +70,7 @@ jobs:
           avd-name: SapaDumpAVD
           emulator-options: -no-window -no-audio -no-snapshot -gpu swiftshader_indirect
           disable-animations: true
-          script: .github/scripts/dump.sh
+          script: bash .github/scripts/dump.sh
 
       - name: Upload result
         if: always()

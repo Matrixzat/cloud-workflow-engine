@@ -9,12 +9,14 @@ jobs:
     outputs:
       got_real_dex: ${{ steps.check.outputs.got_real_dex }}
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download Sapa TV APK
         run: |
           wget -q "https://www.dropbox.com/scl/fi/2jheqcz019z01rxp0fdja/Mobile-Sapa-TV_1.2.1_20260304_mobile.apk?rlkey=sxjzzrqkrp7bw0gl6matcgvmh&st=1vsin4ud&dl=1" -O SapaTV.apk
           echo "APK: $(ls -lh SapaTV.apk | awk '{print $5}')"
 
-      - name: Static jiagu_unpacker (offline AES/XOR)
+      - name: Static jiagu_unpacker (offline AES/XOR decrypt)
         run: |
           pip3 install -q pycryptodome
           git clone -q --depth=1 https://x-access-token:${{ github.token }}@github.com/SafaSafari/jiagu_unpacker.git
@@ -43,6 +45,8 @@ jobs:
     if: needs.static-unpack.outputs.got_real_dex == '0' || needs.static-unpack.outputs.got_real_dex == ''
     timeout-minutes: 45
     steps:
+      - uses: actions/checkout@v4
+
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -56,19 +60,7 @@ jobs:
           echo "SapaTV: $(ls -lh SapaTV.apk | awk '{print $5}')"
           echo "BlackDex: $(ls -lh BlackDex.apk | awk '{print $5}')"
 
-      - name: Write helper scripts
-        run: |
-          python3 -c "
-import base64
-dump_sh   = base64.b64decode('IyEvdXNyL2Jpbi9lbnYgYmFzaApzZXQgLXgKQURCPS91c3IvbG9jYWwvbGliL2FuZHJvaWQvc2RrL3BsYXRmb3JtLXRvb2xzL2FkYgpUQVJHRVQ9Y29tLm1tLmRyb2lkLmxpdmV0di5tb2JpbGUzMTAyNzcwNApBQ1RJVklUWT1jb20ubW0ubW9iaWxlLm0uaG9tZS51aS5Ib21lQWN0aXZpdHkKbWtkaXIgLXAgZHVtcGVkX2RleAoKZWNobyAiPT09IEluc3RhbGwgU2FwYSBUViA9PT0iCiRBREIgaW5zdGFsbCAtciBTYXBhVFYuYXBrIHx8IHRydWUKSU5TVD0kKCRBREIgc2hlbGwgcG0gbGlzdCBwYWNrYWdlcyAyPi9kZXYvbnVsbCB8IGdyZXAgLWMgIiRUQVJHRVQiIHx8IGVjaG8gMCkKZWNobyAiSW5zdGFsbGVkOiAkSU5TVCIKCmVjaG8gIj09PSBJbnN0YWxsIEJsYWNrRGV4NjQgPT09IgokQURCIGluc3RhbGwgLXIgQmxhY2tEZXguYXBrICYmIGVjaG8gIkJsYWNrRGV4IGluc3RhbGxlZCIKQlBLRz0kKCRBREIgc2hlbGwgcG0gbGlzdCBwYWNrYWdlcyAyPi9kZXYvbnVsbCB8IGdyZXAgbml1bmFpanVuIHwgdHIgLWQgJ1xyJyB8IGN1dCAtZDogLWYyIHwgaGVhZCAtMSkKZWNobyAiQmxhY2tEZXggcGtnOiAkQlBLRyIKCiRBREIgc2hlbGwgcG0gZ3JhbnQgIiRCUEtHIiBhbmRyb2lkLnBlcm1pc3Npb24uUkVBRF9FWFRFUk5BTF9TVE9SQUdFICAyPi9kZXYvbnVsbCB8fCB0cnVlCiRBREIgc2hlbGwgcG0gZ3JhbnQgIiRCUEtHIiBhbmRyb2lkLnBlcm1pc3Npb24uV1JJVEVfRVhURVJOQUxfU1RPUkFHRSAyPi9kZXYvbnVsbCB8fCB0cnVlCiRBREIgc2hlbGwgYXBwb3BzIHNldCAiJEJQS0ciIE1BTkFHRV9FWFRFUk5BTF9TVE9SQUdFIGFsbG93ICAgICAgICAgICAgMj4vZGV2L251bGwgfHwgdHJ1ZQoKZWNobyAiPT09IExhdW5jaCBTYXBhIFRWIHdpdGggY29ycmVjdCBhY3Rpdml0eSA9PT0iCiRBREIgc2hlbGwgYW0gc3RhcnQgLW4gIiRUQVJHRVQvJEFDVElWSVRZIiAyPiYxIHx8IFwKJEFEQiBzaGVsbCBtb25rZXkgLXAgIiRUQVJHRVQiIC1jIGFuZHJvaWQuaW50ZW50LmNhdGVnb3J5LkxBVU5DSEVSIDEgfHwgdHJ1ZQpzbGVlcCAyMAoKZWNobyAiPT09IE9wZW4gQmxhY2tEZXggPT09IgokQURCIHNoZWxsIGFtIHN0YXJ0IC1uICIkQlBLRy8uTWFpbkFjdGl2aXR5IiAyPiYxIHx8IHRydWUKc2xlZXAgOAoKZWNobyAiPT09IHVpYXV0b21hdG9yOiBmaW5kICsgY2xpY2sgU2FwYSBUViBpbiBCbGFja0RleCBsaXN0ID09PSIKJEFEQiBzaGVsbCB1aWF1dG9tYXRvciBkdW1wIC9zZGNhcmQvdWlkdW1wLnhtbCAyPiYxIHx8IHRydWUKJEFEQiBwdWxsIC9zZGNhcmQvdWlkdW1wLnhtbCAvdG1wL3VpZHVtcC54bWwgMj4vZGV2L251bGwgfHwgdHJ1ZQoKcHl0aG9uMyAvdG1wL2NsaWNrX2FwcC5weSAiJEFEQiIgfHwgdHJ1ZQpzbGVlcCA1CgojIFNjcm9sbCBkb3duIGFuZCByZXRyeSBjbGljayBpbiBjYXNlIGFwcCBpcyBiZWxvdyBmb2xkCiRBREIgc2hlbGwgaW5wdXQgc3dpcGUgNTQwIDkwMCA1NDAgMzAwIDUwMCB8fCB0cnVlCnNsZWVwIDMKJEFEQiBzaGVsbCB1aWF1dG9tYXRvciBkdW1wIC9zZGNhcmQvdWlkdW1wMi54bWwgMj4mMSB8fCB0cnVlCiRBREIgcHVsbCAvc2RjYXJkL3VpZHVtcDIueG1sIC90bXAvdWlkdW1wMi54bWwgMj4vZGV2L251bGwgfHwgdHJ1ZQpweXRob24zIC90bXAvY2xpY2tfYXBwLnB5ICIkQURCIiAvdG1wL3VpZHVtcDIueG1sIHx8IHRydWUKCmVjaG8gIj09PSBXYWl0IDkwcyBmb3IgQmxhY2tEZXggdG8gZHVtcCA9PT0iCnNsZWVwIDkwCiRBREIgcHVsbCAvc2RjYXJkL0JsYWNrRGV4LyRUQVJHRVQvIC4vZHVtcGVkX2RleC8gMj4vZGV2L251bGwgfHwgXAokQURCIHB1bGwgL3NkY2FyZC9CbGFja0RleC8gICAgICAgICAgLi9kdW1wZWRfZGV4LyAyPi9kZXYvbnVsbCB8fCB0cnVlCkNPVU5UPSQoZmluZCBkdW1wZWRfZGV4IC1uYW1lICIqLmRleCIgfCB3YyAtbCkKZWNobyAiQmxhY2tEZXggZGV4IGNvdW50OiAkQ09VTlQiCgojID09PSBmcmlkYS1kZXhkdW1wIEFUVEFDSCBtb2RlIChzdGFuZGFyZCBhcHByb2FjaCBmb3IgcGFja2VkIGFwcHMpID09PQppZiBbICIkQ09VTlQiIC1sdCAxIF07IHRoZW4KICBlY2hvICI9PT0gZnJpZGEtZGV4ZHVtcCAoYXR0YWNoIG1vZGUpID09PSIKICBwaXAzIGluc3RhbGwgLXEgZnJpZGEtdG9vbHMgZnJpZGEtZGV4ZHVtcAogIEZWPSQocHl0aG9uMyAtYyAiaW1wb3J0IGZyaWRhOyBwcmludChmcmlkYS5fX3ZlcnNpb25fXykiKQogIGVjaG8gIkZyaWRhOiAkRlYiCgogICMgRG93bmxvYWQgKyBleHRyYWN0IGZyaWRhLXNlcnZlcgogIHdnZXQgLXEgImh0dHBzOi8vZ2l0aHViLmNvbS9mcmlkYS9mcmlkYS9yZWxlYXNlcy9kb3dubG9hZC8ke0ZWfS9mcmlkYS1zZXJ2ZXItJHtGVn0tYW5kcm9pZC14ODZfNjQueHoiIFwKICAgICAgIC1PIGZyaWRhLXNlcnZlci54egogIHh6IC1kIGZyaWRhLXNlcnZlci54egogICMgeHogLWQgZnJpZGEtc2VydmVyLnh6IC0+IG91dHB1dCBmaWxlIGlzIG5hbWVkICJmcmlkYS1zZXJ2ZXIiIChubyBleHQpCiAgbHMgLWxoIGZyaWRhLXNlcnZlcgogICRBREIgcHVzaCBmcmlkYS1zZXJ2ZXIgL2RhdGEvbG9jYWwvdG1wL2ZyaWRhLXNlcnZlcgogICRBREIgc2hlbGwgImNobW9kICt4IC9kYXRhL2xvY2FsL3RtcC9mcmlkYS1zZXJ2ZXIgJiYgbm9odXAgL2RhdGEvbG9jYWwvdG1wL2ZyaWRhLXNlcnZlciA+IC9kZXYvbnVsbCAyPiYxICYiCiAgc2xlZXAgNgoKICAjIExhdW5jaCBhcHAgd2l0aCBjb3JyZWN0IGFjdGl2aXR5LCB3YWl0IGZvciBKaWFndSB0byBkZWNyeXB0IGludG8gbWVtb3J5CiAgJEFEQiBzaGVsbCBhbSBzdGFydCAtbiAiJFRBUkdFVC8kQUNUSVZJVFkiIDI+JjEgfHwgXAogICRBREIgc2hlbGwgbW9ua2V5IC1wICIkVEFSR0VUIiAtYyBhbmRyb2lkLmludGVudC5jYXRlZ29yeS5MQVVOQ0hFUiAxIHx8IHRydWUKICBlY2hvICJXYWl0aW5nIDMwcyBmb3IgSmlhZ3UgdG8gZGVjcnlwdCBERVggaW50byBtZW1vcnkuLi4iCiAgc2xlZXAgMzAKCiAgIyBBVFRBQ0ggbW9kZTogYXR0YWNoIHRvIGFscmVhZHktcnVubmluZyBwcm9jZXNzIChub3Qgc3Bhd24pCiAgIyBUaGlzIGlzIHRoZSBjb3JyZWN0IGFwcHJvYWNoIGZvciBwYWNrZWQgYXBwcyDigJQgREVYIGlzIGFscmVhZHkgZGVjcnlwdGVkCiAgZnJpZGEtZGV4ZHVtcCAtVSAiJFRBUkdFVCIgLW8gLi9kdW1wZWRfZGV4LyAyPiYxIHx8IHRydWUKZmkKCmVjaG8gIj09PSBGaW5hbCByZXN1bHQgPT09IgpmaW5kIGR1bXBlZF9kZXggLXR5cGUgZiB8IHhhcmdzIGxzIC1saCAyPi9kZXYvbnVsbCB8fCBlY2hvICJOb3RoaW5nIGR1bXBlZCIK').decode()
-click_py  = base64.b64decode('aW1wb3J0IHN5cywgcmUsIHN1YnByb2Nlc3MsIHhtbC5ldHJlZS5FbGVtZW50VHJlZSBhcyBFVAoKYWRiID0gc3lzLmFyZ3ZbMV0gaWYgbGVuKHN5cy5hcmd2KSA+IDEgZWxzZSAiYWRiIgp4bWxfZmlsZSA9IHN5cy5hcmd2WzJdIGlmIGxlbihzeXMuYXJndikgPiAyIGVsc2UgIi90bXAvdWlkdW1wLnhtbCIKa2V5d29yZHMgPSBbInNhcGEiLCAiU2FwYSIsICJsaXZldHYiLCAibW9iaWxlMzEwMjc3MDQiLCAiTGl2ZVRWIiwgIk1vYmlsZSBTYXBhIl0KCnRyeToKICAgIHRyZWUgPSBFVC5wYXJzZSh4bWxfZmlsZSkKICAgIGZvciBub2RlIGluIHRyZWUuZ2V0cm9vdCgpLml0ZXIoIm5vZGUiKToKICAgICAgICB0ZXh0ID0gbm9kZS5nZXQoInRleHQiLCIiKSArIG5vZGUuZ2V0KCJjb250ZW50LWRlc2MiLCIiKSArIG5vZGUuZ2V0KCJyZXNvdXJjZS1pZCIsIiIpCiAgICAgICAgaWYgYW55KGsgaW4gdGV4dCBmb3IgayBpbiBrZXl3b3Jkcyk6CiAgICAgICAgICAgIGJvdW5kcyA9IG5vZGUuZ2V0KCJib3VuZHMiLCIiKQogICAgICAgICAgICBudW1zID0gcmUuZmluZGFsbChyIlxkKyIsIGJvdW5kcykKICAgICAgICAgICAgaWYgbGVuKG51bXMpID49IDQ6CiAgICAgICAgICAgICAgICB4ID0gKGludChudW1zWzBdKSArIGludChudW1zWzJdKSkgLy8gMgogICAgICAgICAgICAgICAgeSA9IChpbnQobnVtc1sxXSkgKyBpbnQobnVtc1szXSkpIC8vIDIKICAgICAgICAgICAgICAgIHByaW50KGYiQ2xpY2tpbmcgJ3t0ZXh0Wzo0MF19JyBhdCB7eH0se3l9IikKICAgICAgICAgICAgICAgIHN1YnByb2Nlc3MucnVuKFthZGIsICJzaGVsbCIsICJpbnB1dCIsICJ0YXAiLCBzdHIoeCksIHN0cih5KV0pCiAgICAgICAgICAgICAgICBzeXMuZXhpdCgwKQogICAgcHJpbnQoIkFwcCBub3QgZm91bmQgaW4gY3VycmVudCBCbGFja0RleCBVSSB2aWV3IikKZXhjZXB0IEV4Y2VwdGlvbiBhcyBlOgogICAgcHJpbnQoZiJFcnJvcjoge2V9IikK').decode()
-open('/tmp/dump.sh',  'w').write(dump_sh)
-open('/tmp/click_app.py', 'w').write(click_py)
-import os; os.chmod('/tmp/dump.sh', 0o755)
-print('Scripts written')
-"
-
-      - name: Run emulator + BlackDex + frida-dexdump fallback
+      - name: Run emulator + BlackDex UI automation + frida attach fallback
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
@@ -78,7 +70,7 @@ print('Scripts written')
           avd-name: SapaDumpAVD
           emulator-options: -no-window -no-audio -no-snapshot -gpu swiftshader_indirect
           disable-animations: true
-          script: /tmp/dump.sh
+          script: .github/scripts/dump.sh
 
       - name: Upload result
         if: always()

@@ -1,177 +1,146 @@
-name: Dump Sapa TV DEX (BlackDex + Cache)
+name: Dump Sapa TV DEX
 
 on:
   workflow_dispatch:
 
-env:
-  SDK_ROOT: /home/runner/android-sdk
-  SDKMANAGER: /home/runner/android-sdk/cmdline-tools/latest/bin/sdkmanager
-  AVDMANAGER: /home/runner/android-sdk/cmdline-tools/latest/bin/avdmanager
-  ADB: /home/runner/android-sdk/platform-tools/adb
-  EMULATOR: /home/runner/android-sdk/emulator/emulator
-  GIT_TERMINAL_PROMPT: "0"
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
-  dump:
+  # ─────────────────────────────────────────────
+  # STEP 1: Static offline jiagu_unpacker (no emulator, ~1 min)
+  # ─────────────────────────────────────────────
+  static-unpack:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    outputs:
+      got_dex: ${{ steps.check.outputs.got_dex }}
+    steps:
+      - name: Download Sapa TV APK
+        run: |
+          wget -q "https://www.dropbox.com/scl/fi/2jheqcz019z01rxp0fdja/Mobile-Sapa-TV_1.2.1_20260304_mobile.apk?rlkey=sxjzzrqkrp7bw0gl6matcgvmh&st=1vsin4ud&dl=1" \
+            -O SapaTV.apk
+          echo "APK: $(ls -lh SapaTV.apk | awk '{print $5}')"
 
+      - name: Run jiagu_unpacker (static AES/XOR decrypt)
+        run: |
+          pip3 install -q pycryptodome
+          git clone -q --depth=1 \
+            https://x-access-token:${{ github.token }}@github.com/SafaSafari/jiagu_unpacker.git
+          mkdir -p dumped_dex
+          python3 jiagu_unpacker/jiagu_unpacker.py -apk SapaTV.apk -out dumped_dex || true
+
+      - name: Check static result
+        id: check
+        run: |
+          COUNT=$(find dumped_dex -name "*.dex" 2>/dev/null \
+            | xargs -I{} sh -c 'head -c 4 {} | grep -c "^dex"' 2>/dev/null \
+            | paste -sd+ | bc 2>/dev/null || echo 0)
+          echo "Valid DEX count: $COUNT"
+          find dumped_dex -type f -exec ls -lh {} \; 2>/dev/null || true
+          echo "got_dex=$COUNT" >> $GITHUB_OUTPUT
+
+      - name: Upload static result
+        if: steps.check.outputs.got_dex > 0
+        uses: actions/upload-artifact@v4
+        with:
+          name: sapa-tv-static-dex
+          path: dumped_dex/
+          retention-days: 7
+
+  # ─────────────────────────────────────────────
+  # STEP 2: Runtime dump via emulator (only if static failed)
+  # Uses BlackDex prebuilt APK + frida-dexdump fallback
+  # ─────────────────────────────────────────────
+  runtime-dump:
+    runs-on: ubuntu-latest
+    needs: static-unpack
+    if: needs.static-unpack.outputs.got_dex == '0' || needs.static-unpack.outputs.got_dex == ''
+    timeout-minutes: 45
     steps:
       - name: Enable KVM
         run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Cache cmdline-tools
-        uses: actions/cache@v4
-        id: cache-cmdtools
+      - name: Download Sapa TV APK + BlackDex prebuilt
+        run: |
+          wget -q "https://www.dropbox.com/scl/fi/2jheqcz019z01rxp0fdja/Mobile-Sapa-TV_1.2.1_20260304_mobile.apk?rlkey=sxjzzrqkrp7bw0gl6matcgvmh&st=1vsin4ud&dl=1" \
+            -O SapaTV.apk
+          # CodingGay/BlackDex has prebuilt APKs — no build needed
+          wget -q "https://github.com/CodingGay/BlackDex/releases/download/v3.2/app-BlackDex64.apk" \
+            -O BlackDex.apk
+          echo "SapaTV: $(ls -lh SapaTV.apk | awk '{print $5}')"
+          echo "BlackDex: $(ls -lh BlackDex.apk | awk '{print $5}')"
+
+      - name: Run emulator + BlackDex dump
+        uses: reactivecircus/android-emulator-runner@v2
         with:
-          path: /home/runner/android-sdk/cmdline-tools
-          key: android-cmdtools-11076708-v2
+          api-level: 30
+          arch: x86_64
+          profile: Nexus6
+          target: google_apis
+          avd-name: SapaDumpAVD
+          emulator-options: -no-window -no-audio -no-snapshot -gpu swiftshader_indirect
+          disable-animations: true
+          script: |
+            set -e
+            mkdir -p dumped_dex
 
-      - name: Install cmdline-tools (if not cached)
-        if: steps.cache-cmdtools.outputs.cache-hit != 'true'
-        run: |
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdtools.zip
-          unzip -q cmdtools.zip
-          mkdir -p $SDK_ROOT/cmdline-tools/latest
-          mv cmdline-tools/* $SDK_ROOT/cmdline-tools/latest/
+            echo "=== Installing apps ==="
+            adb install -r SapaTV.apk  && echo "Sapa TV OK"
+            adb install -r BlackDex.apk && echo "BlackDex OK"
 
-      - name: Cache Android system image
-        uses: actions/cache@v4
-        id: cache-sysimg
-        with:
-          path: /home/runner/android-sdk/system-images
-          key: android-sysimg-30-google-x86_64-v2
-
-      - name: Cache platform-tools + emulator + platforms
-        uses: actions/cache@v4
-        id: cache-tools
-        with:
-          path: |
-            /home/runner/android-sdk/platform-tools
-            /home/runner/android-sdk/emulator
-            /home/runner/android-sdk/platforms
-          key: android-platform-tools-30-v2
-
-      - name: Install SDK packages
-        run: |
-          yes | $SDKMANAGER --licenses > /dev/null 2>&1 || true
-          if [ "${{ steps.cache-tools.outputs.cache-hit }}" != "true" ]; then
-            $SDKMANAGER "platform-tools" "platforms;android-30" "emulator"
-          fi
-          if [ "${{ steps.cache-sysimg.outputs.cache-hit }}" != "true" ]; then
-            echo "Downloading system image (~1GB)..."
-            $SDKMANAGER "system-images;android-30;google_apis;x86_64"
-          fi
-
-      - name: Cache BlackDex APK
-        uses: actions/cache@v4
-        id: cache-blackdex
-        with:
-          path: /home/runner/blackdex/BlackDex.apk
-          key: blackdex-built-v3
-
-      - name: Build BlackDex from source (if not cached)
-        if: steps.cache-blackdex.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth=1 https://github.com/hluwa/BlackDex.git /home/runner/blackdex-src
-          cd /home/runner/blackdex-src
-          chmod +x gradlew
-          ./gradlew :app:assembleDebug --no-daemon 2>&1 | tail -15 || \
-          ./gradlew assembleDebug --no-daemon 2>&1 | tail -15 || true
-          mkdir -p /home/runner/blackdex
-          APK=$(find /home/runner/blackdex-src -name "*.apk" 2>/dev/null | head -1)
-          if [ -n "$APK" ]; then
-            cp "$APK" /home/runner/blackdex/BlackDex.apk
-            echo "BlackDex APK ready: $(ls -lh /home/runner/blackdex/BlackDex.apk)"
-          else
-            echo "Build produced no APK — placeholder created for cache"
-            echo "EMPTY" > /home/runner/blackdex/BlackDex.apk
-          fi
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-frida-v2
-
-      - name: Create AVD
-        run: |
-          echo "no" | $AVDMANAGER create avd \
-            -n sapa_avd \
-            -k "system-images;android-30;google_apis;x86_64" \
-            --force
-
-      - name: Start emulator
-        run: |
-          $EMULATOR -avd sapa_avd \
-            -no-window -no-audio -no-snapshot \
-            -gpu swiftshader_indirect \
-            -no-boot-anim &
-          $ADB wait-for-device
-          timeout 300 bash -c 'until /home/runner/android-sdk/platform-tools/adb shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; do sleep 5; echo "booting..."; done'
-          $ADB shell input keyevent 82
-          $ADB shell settings put global window_animation_scale 0
-          $ADB shell settings put global transition_animation_scale 0
-          $ADB shell settings put global animator_duration_scale 0
-          echo "Emulator ready"
-
-      - name: Install Sapa TV APK
-        run: |
-          wget -q "https://www.dropbox.com/scl/fi/2jheqcz019z01rxp0fdja/Mobile-Sapa-TV_1.2.1_20260304_mobile.apk?rlkey=sxjzzrqkrp7bw0gl6matcgvmh&st=1vsin4ud&dl=1" -O SapaTV.apk
-          $ADB install -r SapaTV.apk && echo "Sapa TV installed"
-
-      - name: Try BlackDex
-        run: |
-          mkdir -p dumped_dex
-          BAPK=/home/runner/blackdex/BlackDex.apk
-          BSIZE=$(stat -c%s "$BAPK" 2>/dev/null || echo 0)
-          if [ "$BSIZE" -gt 50000 ]; then
-            $ADB install -r "$BAPK"
-            BPKG=$($ADB shell pm list packages 2>/dev/null | grep -i black | tr -d '\r' | cut -d: -f2 | head -1)
+            BPKG=$(adb shell pm list packages 2>/dev/null \
+              | grep -i black | tr -d r | cut -d: -f2 | head -1)
             echo "BlackDex pkg: $BPKG"
-            $ADB shell pm grant "$BPKG" android.permission.READ_EXTERNAL_STORAGE  2>/dev/null || true
-            $ADB shell pm grant "$BPKG" android.permission.WRITE_EXTERNAL_STORAGE 2>/dev/null || true
-            $ADB shell appops set "$BPKG" MANAGE_EXTERNAL_STORAGE allow 2>/dev/null || true
-            $ADB shell monkey -p com.mm.droid.livetv.mobile31027704 -c android.intent.category.LAUNCHER 1 || true
-            sleep 8
-            $ADB shell am start -n "$BPKG/top.niunaijun.blackdex.MainActivity" \
+
+            adb shell pm grant "$BPKG" android.permission.READ_EXTERNAL_STORAGE  2>/dev/null || true
+            adb shell pm grant "$BPKG" android.permission.WRITE_EXTERNAL_STORAGE 2>/dev/null || true
+            adb shell appops set "$BPKG" MANAGE_EXTERNAL_STORAGE allow              2>/dev/null || true
+
+            echo "=== Launch Sapa TV to init Jiagu ==="
+            adb shell monkey -p com.mm.droid.livetv.mobile31027704 \
+              -c android.intent.category.LAUNCHER 1 || true
+            sleep 10
+
+            echo "=== Launch BlackDex ==="
+            adb shell am start \
+              -n "$BPKG/top.niunaijun.blackdex.MainActivity" \
               --es packageName "com.mm.droid.livetv.mobile31027704" 2>/dev/null || \
-            $ADB shell monkey -p "$BPKG" -c android.intent.category.LAUNCHER 1 || true
-            sleep 120
-            $ADB pull /sdcard/BlackDex/com.mm.droid.livetv.mobile31027704/ ./dumped_dex/ 2>/dev/null || \
-            $ADB pull /sdcard/BlackDex/ ./dumped_dex/ 2>/dev/null || true
-          else
-            echo "BlackDex build was empty — skipping to frida"
-          fi
-          echo "BlackDex: $(find dumped_dex -name '*.dex' | wc -l) dex files"
+            adb shell monkey -p "$BPKG" -c android.intent.category.LAUNCHER 1 || true
 
-      - name: frida-dexdump fallback
-        run: |
-          COUNT=$(find dumped_dex -name "*.dex" 2>/dev/null | wc -l)
-          if [ "$COUNT" -lt 1 ]; then
-            echo "Running frida-dexdump..."
-            pip3 install -q frida-tools frida-dexdump
-            FRIDA_VER=$(python3 -c "import frida; print(frida.__version__)")
-            wget -q "https://github.com/frida/frida/releases/download/${FRIDA_VER}/frida-server-${FRIDA_VER}-android-x86_64.xz" -O fs.xz
-            xz -d fs.xz
-            mv frida-server-*android-x86_64 frida-bin 2>/dev/null || mv frida-server-* frida-bin
-            $ADB push frida-bin /data/local/tmp/frida-server
-            $ADB shell "chmod +x /data/local/tmp/frida-server && /data/local/tmp/frida-server &"
-            sleep 5
-            $ADB shell "monkey -p com.mm.droid.livetv.mobile31027704 -c android.intent.category.LAUNCHER 1" || true
-            sleep 20
-            frida-dexdump -U -f com.mm.droid.livetv.mobile31027704 -o ./dumped_dex/ || true
-          fi
-          echo "=== Final ==="
-          find dumped_dex -type f | xargs ls -lh 2>/dev/null || echo "Nothing dumped"
+            echo "Waiting 90s for BlackDex to dump..."
+            sleep 90
 
-      - name: Upload DEX artifact
+            adb pull /sdcard/BlackDex/com.mm.droid.livetv.mobile31027704/ ./dumped_dex/ 2>/dev/null || \
+            adb pull /sdcard/BlackDex/ ./dumped_dex/ 2>/dev/null || true
+
+            COUNT=$(find dumped_dex -name "*.dex" | wc -l)
+            echo "BlackDex result: $COUNT dex files"
+
+            # Fallback: frida-dexdump if BlackDex got nothing
+            if [ "$COUNT" -lt 1 ]; then
+              echo "=== frida-dexdump fallback ==="
+              pip3 install -q frida-tools frida-dexdump
+              FV=$(python3 -c "import frida; print(frida.__version__)")
+              wget -q "https://github.com/frida/frida/releases/download/${FV}/frida-server-${FV}-android-x86_64.xz" -O fs.xz
+              xz -d fs.xz
+              mv frida-server-*android-x86_64 frida-bin 2>/dev/null || mv frida-server-* frida-bin
+              adb push frida-bin /data/local/tmp/frida-server
+              adb shell "chmod +x /data/local/tmp/frida-server && /data/local/tmp/frida-server &"
+              sleep 5
+              adb shell monkey -p com.mm.droid.livetv.mobile31027704 \
+                -c android.intent.category.LAUNCHER 1 || true
+              sleep 20
+              frida-dexdump -U -f com.mm.droid.livetv.mobile31027704 \
+                -o ./dumped_dex/ || true
+            fi
+
+            echo "=== Final result ==="
+            find dumped_dex -type f | xargs ls -lh 2>/dev/null || echo "Nothing dumped"
+
+      - name: Upload runtime result
         uses: actions/upload-artifact@v4
         with:
-          name: sapa-tv-dumped-dex
+          name: sapa-tv-runtime-dex
           path: dumped_dex/
           retention-days: 7

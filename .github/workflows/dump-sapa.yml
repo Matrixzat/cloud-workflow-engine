@@ -4,28 +4,25 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ── Step 1: Static offline decrypt (no emulator) ──────────────────────────
   static-unpack:
     runs-on: ubuntu-latest
     outputs:
       got_real_dex: ${{ steps.check.outputs.got_real_dex }}
     steps:
       - name: Download Sapa TV APK
-        run: |
-          wget -q "https://www.dropbox.com/scl/fi/2jheqcz019z01rxp0fdja/Mobile-Sapa-TV_1.2.1_20260304_mobile.apk?rlkey=sxjzzrqkrp7bw0gl6matcgvmh&st=1vsin4ud&dl=1" -O SapaTV.apk
-          echo "APK: $(ls -lh SapaTV.apk | awk '{print $5}')"
+        run: wget -q "https://www.dropbox.com/scl/fi/2jheqcz019z01rxp0fdja/Mobile-Sapa-TV_1.2.1_20260304_mobile.apk?rlkey=sxjzzrqkrp7bw0gl6matcgvmh&st=1vsin4ud&dl=1" -O SapaTV.apk
       - name: Static jiagu_unpacker
         run: |
           pip3 install -q pycryptodome
           git clone -q --depth=1 https://x-access-token:${{ github.token }}@github.com/SafaSafari/jiagu_unpacker.git
           mkdir -p dumped_dex
           python3 jiagu_unpacker/jiagu_unpacker.py -apk SapaTV.apk -out dumped_dex 2>&1 || true
-      - name: Check (only classes*.dex counts, not shell.dex)
+      - name: Check (classes*.dex only — not shell.dex)
         id: check
         run: |
           find dumped_dex -type f -exec ls -lh {} \; 2>/dev/null || echo "none"
           COUNT=$(find dumped_dex -name "classes*.dex" 2>/dev/null | wc -l)
-          echo "Real DEX count: $COUNT"
+          echo "Real DEX: $COUNT"
           echo "got_real_dex=$COUNT" >> $GITHUB_OUTPUT
       - name: Upload static result
         if: steps.check.outputs.got_real_dex > 0
@@ -35,7 +32,6 @@ jobs:
           path: dumped_dex/
           retention-days: 7
 
-  # ── Step 2: Runtime emulator dump (only if static got nothing) ────────────
   runtime-dump:
     runs-on: ubuntu-latest
     needs: static-unpack
@@ -59,46 +55,60 @@ jobs:
         run: |
           cat > /tmp/dump.sh << 'SCRIPT'
           #!/usr/bin/env bash
-          set -e
           ADB=/usr/local/lib/android/sdk/platform-tools/adb
+          BPKG=top.niunaijun.blackdex
+          TARGET=com.mm.droid.livetv.mobile31027704
           mkdir -p dumped_dex
 
-          echo "=== Installing APKs ==="
-          $ADB install -r SapaTV.apk  && echo "Sapa TV OK"
-          $ADB install -r BlackDex.apk && echo "BlackDex OK"
+          echo "=== Install Sapa TV ==="
+          $ADB install -r SapaTV.apk
+          INST=$($ADB shell pm list packages | grep "$TARGET" | wc -l)
+          echo "Sapa TV installed: $INST"
 
-          BPKG=$($ADB shell pm list packages 2>/dev/null | grep -i black | tr -d r | cut -d: -f2 | head -1)
-          echo "BlackDex pkg: $BPKG"
+          echo "=== Install BlackDex (hardcoded pkg: $BPKG) ==="
+          $ADB install -r BlackDex.apk && echo "BlackDex OK"
+          $ADB shell pm list packages | grep niunaijun || echo "BlackDex pkg not found!"
+
           $ADB shell pm grant "$BPKG" android.permission.READ_EXTERNAL_STORAGE  2>/dev/null || true
           $ADB shell pm grant "$BPKG" android.permission.WRITE_EXTERNAL_STORAGE 2>/dev/null || true
           $ADB shell appops set "$BPKG" MANAGE_EXTERNAL_STORAGE allow            2>/dev/null || true
 
-          echo "=== Launch Sapa TV (init Jiagu) ==="
-          $ADB shell monkey -p com.mm.droid.livetv.mobile31027704 -c android.intent.category.LAUNCHER 1 || true
-          sleep 10
+          echo "=== Launch Sapa TV (init Jiagu loader) ==="
+          $ADB shell monkey -p "$TARGET" -c android.intent.category.LAUNCHER 1 || true
+          sleep 12
 
           echo "=== Launch BlackDex ==="
-          $ADB shell am start -n "$BPKG/top.niunaijun.blackdex.MainActivity" --es packageName "com.mm.droid.livetv.mobile31027704" 2>/dev/null || $ADB shell monkey -p "$BPKG" -c android.intent.category.LAUNCHER 1 || true
-          echo "Waiting 90s for dump..."
+          $ADB shell am start -n "$BPKG/top.niunaijun.blackdex.MainActivity" --es packageName "$TARGET" 2>&1 || true
+          echo "Waiting 90s..."
           sleep 90
 
-          $ADB pull /sdcard/BlackDex/com.mm.droid.livetv.mobile31027704/ ./dumped_dex/ 2>/dev/null || $ADB pull /sdcard/BlackDex/ ./dumped_dex/ 2>/dev/null || true
+          $ADB pull /sdcard/BlackDex/$TARGET/ ./dumped_dex/ 2>/dev/null || \
+          $ADB pull /sdcard/BlackDex/         ./dumped_dex/ 2>/dev/null || true
+
           COUNT=$(find dumped_dex -name "*.dex" | wc -l)
           echo "BlackDex: $COUNT dex files"
 
+          # frida-dexdump fallback
           if [ "$COUNT" -lt 1 ]; then
             echo "=== frida-dexdump fallback ==="
             pip3 install -q frida-tools frida-dexdump
             FV=$(python3 -c "import frida; print(frida.__version__)")
+            echo "Frida version: $FV"
             wget -q "https://github.com/frida/frida/releases/download/${FV}/frida-server-${FV}-android-x86_64.xz" -O fs.xz
             xz -d fs.xz
-            mv frida-server-*android-x86_64 frida-bin 2>/dev/null || mv frida-server-* frida-bin
-            $ADB push frida-bin /data/local/tmp/frida-server
-            $ADB shell "chmod +x /data/local/tmp/frida-server && /data/local/tmp/frida-server &"
-            sleep 5
-            $ADB shell monkey -p com.mm.droid.livetv.mobile31027704 -c android.intent.category.LAUNCHER 1 || true
-            sleep 20
-            frida-dexdump -U -f com.mm.droid.livetv.mobile31027704 -o ./dumped_dex/ || true
+            # find the actual extracted filename
+            FS=$(ls frida-server-* 2>/dev/null | head -1)
+            echo "Frida server file: $FS"
+            if [ -n "$FS" ]; then
+              $ADB push "$FS" /data/local/tmp/frida-server
+              $ADB shell "chmod +x /data/local/tmp/frida-server && /data/local/tmp/frida-server &"
+              sleep 6
+              $ADB shell monkey -p "$TARGET" -c android.intent.category.LAUNCHER 1 || true
+              sleep 20
+              frida-dexdump -U -f "$TARGET" -o ./dumped_dex/ || true
+            else
+              echo "frida-server not found after extract"
+            fi
           fi
 
           echo "=== Final ==="
@@ -119,6 +129,7 @@ jobs:
           script: /tmp/dump.sh
 
       - name: Upload result
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: sapa-tv-runtime-dex

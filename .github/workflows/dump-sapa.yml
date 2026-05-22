@@ -5,12 +5,12 @@ on:
 
 jobs:
   # ─────────────────────────────────────────────
-  # STEP 1: Static offline jiagu_unpacker (no emulator, ~1 min)
+  # STEP 1: Static jiagu_unpacker — no emulator, ~1 min
   # ─────────────────────────────────────────────
   static-unpack:
     runs-on: ubuntu-latest
     outputs:
-      got_dex: ${{ steps.check.outputs.got_dex }}
+      got_real_dex: ${{ steps.check.outputs.got_real_dex }}
     steps:
       - name: Download Sapa TV APK
         run: |
@@ -18,26 +18,26 @@ jobs:
             -O SapaTV.apk
           echo "APK: $(ls -lh SapaTV.apk | awk '{print $5}')"
 
-      - name: Run jiagu_unpacker (static AES/XOR decrypt)
+      - name: Static jiagu_unpacker (AES/XOR offline decrypt)
         run: |
           pip3 install -q pycryptodome
           git clone -q --depth=1 \
             https://x-access-token:${{ github.token }}@github.com/SafaSafari/jiagu_unpacker.git
           mkdir -p dumped_dex
-          python3 jiagu_unpacker/jiagu_unpacker.py -apk SapaTV.apk -out dumped_dex || true
+          python3 jiagu_unpacker/jiagu_unpacker.py -apk SapaTV.apk -out dumped_dex 2>&1 || true
 
-      - name: Check static result
+      - name: Check — only count real app DEX (not shell.dex)
         id: check
         run: |
-          COUNT=$(find dumped_dex -name "*.dex" 2>/dev/null \
-            | xargs -I{} sh -c 'head -c 4 {} | grep -c "^dex"' 2>/dev/null \
-            | paste -sd+ | bc 2>/dev/null || echo 0)
-          echo "Valid DEX count: $COUNT"
-          find dumped_dex -type f -exec ls -lh {} \; 2>/dev/null || true
-          echo "got_dex=$COUNT" >> $GITHUB_OUTPUT
+          echo "=== All output files ==="
+          find dumped_dex -type f -exec ls -lh {} \; 2>/dev/null || echo "none"
+          # Real DEX = classes.dex / classes2.dex etc, NOT shell.dex
+          COUNT=$(find dumped_dex -name "classes*.dex" 2>/dev/null | wc -l)
+          echo "Real app DEX count: $COUNT"
+          echo "got_real_dex=$COUNT" >> $GITHUB_OUTPUT
 
-      - name: Upload static result
-        if: steps.check.outputs.got_dex > 0
+      - name: Upload static result (if real DEX found)
+        if: steps.check.outputs.got_real_dex > 0
         uses: actions/upload-artifact@v4
         with:
           name: sapa-tv-static-dex
@@ -45,13 +45,14 @@ jobs:
           retention-days: 7
 
   # ─────────────────────────────────────────────
-  # STEP 2: Runtime dump via emulator (only if static failed)
-  # Uses BlackDex prebuilt APK + frida-dexdump fallback
+  # STEP 2: Runtime dump — only runs if static got nothing
+  # CodingGay/BlackDex prebuilt APK + frida-dexdump fallback
+  # Uses reactivecircus/android-emulator-runner (standard in 2025)
   # ─────────────────────────────────────────────
   runtime-dump:
     runs-on: ubuntu-latest
     needs: static-unpack
-    if: needs.static-unpack.outputs.got_dex == '0' || needs.static-unpack.outputs.got_dex == ''
+    if: needs.static-unpack.outputs.got_real_dex == '0' || needs.static-unpack.outputs.got_real_dex == ''
     timeout-minutes: 45
     steps:
       - name: Enable KVM
@@ -65,13 +66,13 @@ jobs:
         run: |
           wget -q "https://www.dropbox.com/scl/fi/2jheqcz019z01rxp0fdja/Mobile-Sapa-TV_1.2.1_20260304_mobile.apk?rlkey=sxjzzrqkrp7bw0gl6matcgvmh&st=1vsin4ud&dl=1" \
             -O SapaTV.apk
-          # CodingGay/BlackDex has prebuilt APKs — no build needed
+          # CodingGay/BlackDex — prebuilt release APK, no building needed
           wget -q "https://github.com/CodingGay/BlackDex/releases/download/v3.2/app-BlackDex64.apk" \
             -O BlackDex.apk
           echo "SapaTV: $(ls -lh SapaTV.apk | awk '{print $5}')"
           echo "BlackDex: $(ls -lh BlackDex.apk | awk '{print $5}')"
 
-      - name: Run emulator + BlackDex dump
+      - name: Run emulator + BlackDex + frida-dexdump fallback
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
@@ -82,12 +83,11 @@ jobs:
           emulator-options: -no-window -no-audio -no-snapshot -gpu swiftshader_indirect
           disable-animations: true
           script: |
-            set -e
             mkdir -p dumped_dex
 
             echo "=== Installing apps ==="
-            adb install -r SapaTV.apk  && echo "Sapa TV OK"
-            adb install -r BlackDex.apk && echo "BlackDex OK"
+            adb install -r SapaTV.apk  && echo "Sapa TV installed"
+            adb install -r BlackDex.apk && echo "BlackDex installed"
 
             BPKG=$(adb shell pm list packages 2>/dev/null \
               | grep -i black | tr -d r | cut -d: -f2 | head -1)
@@ -97,27 +97,27 @@ jobs:
             adb shell pm grant "$BPKG" android.permission.WRITE_EXTERNAL_STORAGE 2>/dev/null || true
             adb shell appops set "$BPKG" MANAGE_EXTERNAL_STORAGE allow              2>/dev/null || true
 
-            echo "=== Launch Sapa TV to init Jiagu ==="
+            echo "=== Launch Sapa TV to init Jiagu loader ==="
             adb shell monkey -p com.mm.droid.livetv.mobile31027704 \
               -c android.intent.category.LAUNCHER 1 || true
             sleep 10
 
-            echo "=== Launch BlackDex ==="
+            echo "=== Launch BlackDex dump ==="
             adb shell am start \
               -n "$BPKG/top.niunaijun.blackdex.MainActivity" \
               --es packageName "com.mm.droid.livetv.mobile31027704" 2>/dev/null || \
             adb shell monkey -p "$BPKG" -c android.intent.category.LAUNCHER 1 || true
 
-            echo "Waiting 90s for BlackDex to dump..."
+            echo "Waiting 90s for BlackDex..."
             sleep 90
 
             adb pull /sdcard/BlackDex/com.mm.droid.livetv.mobile31027704/ ./dumped_dex/ 2>/dev/null || \
             adb pull /sdcard/BlackDex/ ./dumped_dex/ 2>/dev/null || true
 
             COUNT=$(find dumped_dex -name "*.dex" | wc -l)
-            echo "BlackDex result: $COUNT dex files"
+            echo "BlackDex: $COUNT dex files"
 
-            # Fallback: frida-dexdump if BlackDex got nothing
+            # frida-dexdump if BlackDex got nothing
             if [ "$COUNT" -lt 1 ]; then
               echo "=== frida-dexdump fallback ==="
               pip3 install -q frida-tools frida-dexdump
@@ -135,7 +135,7 @@ jobs:
                 -o ./dumped_dex/ || true
             fi
 
-            echo "=== Final result ==="
+            echo "=== Final ==="
             find dumped_dex -type f | xargs ls -lh 2>/dev/null || echo "Nothing dumped"
 
       - name: Upload runtime result

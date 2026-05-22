@@ -9,6 +9,7 @@ env:
   AVDMANAGER: /home/runner/android-sdk/cmdline-tools/latest/bin/avdmanager
   ADB: /home/runner/android-sdk/platform-tools/adb
   EMULATOR: /home/runner/android-sdk/emulator/emulator
+  GIT_TERMINAL_PROMPT: "0"
 
 jobs:
   dump:
@@ -23,7 +24,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Cache cmdline-tools
-        uses: actions/cache@v4
+        uses: actions/cache@v3
         id: cache-cmdtools
         with:
           path: /home/runner/android-sdk/cmdline-tools
@@ -38,14 +39,14 @@ jobs:
           mv cmdline-tools/* $SDK_ROOT/cmdline-tools/latest/
 
       - name: Cache Android system image
-        uses: actions/cache@v4
+        uses: actions/cache@v3
         id: cache-sysimg
         with:
           path: /home/runner/android-sdk/system-images
           key: android-sysimg-30-google-x86_64-v1
 
       - name: Cache platform-tools + emulator + platforms
-        uses: actions/cache@v4
+        uses: actions/cache@v3
         id: cache-tools
         with:
           path: |
@@ -62,34 +63,40 @@ jobs:
             $SDKMANAGER "platform-tools" "platforms;android-30" "emulator"
           fi
           if [ "${{ steps.cache-sysimg.outputs.cache-hit }}" != "true" ]; then
-            echo "Installing system image (large download ~1GB)..."
+            echo "Installing system image (~1GB)..."
             $SDKMANAGER "system-images;android-30;google_apis;x86_64"
           fi
 
       - name: Cache BlackDex APK
-        uses: actions/cache@v4
+        uses: actions/cache@v3
         id: cache-blackdex
         with:
           path: /home/runner/blackdex/BlackDex.apk
-          key: blackdex-built-v1
+          key: blackdex-built-v2
 
       - name: Build BlackDex from source (if not cached)
         if: steps.cache-blackdex.outputs.cache-hit != 'true'
         run: |
+          export GIT_TERMINAL_PROMPT=0
           git clone --depth=1 https://github.com/hluwa/BlackDex.git /home/runner/blackdex-src
           cd /home/runner/blackdex-src
           chmod +x gradlew
-          ./gradlew :app:assembleDebug --no-daemon -q 2>&1 | tail -10 || \
-          ./gradlew assembleDebug --no-daemon -q 2>&1 | tail -10 || \
-          ./gradlew assembleRelease --no-daemon -q 2>&1 | tail -10
+          # Try different module names
+          ./gradlew :app:assembleDebug --no-daemon 2>&1 | tail -15 || \
+          ./gradlew assembleDebug --no-daemon 2>&1 | tail -15 || true
           mkdir -p /home/runner/blackdex
-          APK=$(find /home/runner/blackdex-src -name "*.apk" | grep -v unsigned | head -1)
-          echo "Found APK: $APK"
-          cp "$APK" /home/runner/blackdex/BlackDex.apk
-          ls -lh /home/runner/blackdex/BlackDex.apk
+          APK=$(find /home/runner/blackdex-src -name "*.apk" 2>/dev/null | head -1)
+          if [ -z "$APK" ]; then
+            echo "Build failed — creating placeholder so fallback runs"
+            touch /home/runner/blackdex/BlackDex.apk
+          else
+            echo "Built APK: $APK"
+            cp "$APK" /home/runner/blackdex/BlackDex.apk
+          fi
+          ls -lh /home/runner/blackdex/
 
-      - name: Cache pip packages
-        uses: actions/cache@v4
+      - name: Cache pip
+        uses: actions/cache@v3
         with:
           path: ~/.cache/pip
           key: pip-frida-v1
@@ -119,59 +126,60 @@ jobs:
       - name: Install Sapa TV APK
         run: |
           wget -q "https://www.dropbox.com/scl/fi/2jheqcz019z01rxp0fdja/Mobile-Sapa-TV_1.2.1_20260304_mobile.apk?rlkey=sxjzzrqkrp7bw0gl6matcgvmh&st=1vsin4ud&dl=1" -O SapaTV.apk
-          echo "APK size: $(ls -lh SapaTV.apk | awk '{print $5}')"
-          $ADB install -r SapaTV.apk
-          echo "Sapa TV installed OK"
+          echo "APK: $(ls -lh SapaTV.apk | awk '{print $5}')"
+          $ADB install -r SapaTV.apk && echo "Installed OK"
 
-      - name: Install BlackDex + grant permissions
+      - name: Try BlackDex (if build succeeded)
         run: |
-          $ADB install -r /home/runner/blackdex/BlackDex.apk
-          BPKG=$($ADB shell pm list packages 2>/dev/null | grep -i black | tr -d '\r' | cut -d: -f2 | head -1)
-          echo "BlackDex package: $BPKG"
-          echo "BLACKDEX_PKG=$BPKG" >> $GITHUB_ENV
-          $ADB shell pm grant "$BPKG" android.permission.READ_EXTERNAL_STORAGE  2>/dev/null || true
-          $ADB shell pm grant "$BPKG" android.permission.WRITE_EXTERNAL_STORAGE 2>/dev/null || true
-          $ADB shell appops set "$BPKG" MANAGE_EXTERNAL_STORAGE allow 2>/dev/null || true
-
-      - name: Run BlackDex dump
-        run: |
-          TARGET="com.mm.droid.livetv.mobile31027704"
-          $ADB shell monkey -p $TARGET -c android.intent.category.LAUNCHER 1 2>/dev/null || true
-          sleep 8
-          $ADB shell am start -n "$BLACKDEX_PKG/top.niunaijun.blackdex.MainActivity" \
-            --es packageName "$TARGET" 2>/dev/null || \
-          $ADB shell am start -n "$BLACKDEX_PKG/.MainActivity" \
-            --es packageName "$TARGET" 2>/dev/null || \
-          $ADB shell monkey -p "$BLACKDEX_PKG" -c android.intent.category.LAUNCHER 1 2>/dev/null || true
-          echo "Waiting 120s for BlackDex to dump..."
-          sleep 120
+          BAPK_SIZE=$(stat -c%s /home/runner/blackdex/BlackDex.apk 2>/dev/null || echo 0)
           mkdir -p dumped_dex
-          $ADB pull /sdcard/BlackDex/$TARGET/ ./dumped_dex/ 2>/dev/null || \
-          $ADB pull /sdcard/BlackDex/         ./dumped_dex/ 2>/dev/null || true
-          echo "BlackDex result: $(find dumped_dex -name *.dex 2>/dev/null | wc -l) dex files"
+          if [ "$BAPK_SIZE" -gt 10000 ]; then
+            echo "BlackDex APK valid ($BAPK_SIZE bytes) — installing"
+            $ADB install -r /home/runner/blackdex/BlackDex.apk
+            BPKG=$($ADB shell pm list packages 2>/dev/null | grep -i black | tr -d '\r' | cut -d: -f2 | head -1)
+            echo "BlackDex pkg: $BPKG"
+            $ADB shell pm grant "$BPKG" android.permission.READ_EXTERNAL_STORAGE  2>/dev/null || true
+            $ADB shell pm grant "$BPKG" android.permission.WRITE_EXTERNAL_STORAGE 2>/dev/null || true
+            $ADB shell appops set "$BPKG" MANAGE_EXTERNAL_STORAGE allow 2>/dev/null || true
+            $ADB shell monkey -p com.mm.droid.livetv.mobile31027704 -c android.intent.category.LAUNCHER 1 || true
+            sleep 8
+            $ADB shell am start -n "$BPKG/top.niunaijun.blackdex.MainActivity" \
+              --es packageName "com.mm.droid.livetv.mobile31027704" 2>/dev/null || \
+            $ADB shell monkey -p "$BPKG" -c android.intent.category.LAUNCHER 1 || true
+            echo "Waiting 120s for BlackDex..."
+            sleep 120
+            $ADB pull /sdcard/BlackDex/com.mm.droid.livetv.mobile31027704/ ./dumped_dex/ 2>/dev/null || \
+            $ADB pull /sdcard/BlackDex/ ./dumped_dex/ 2>/dev/null || true
+          else
+            echo "BlackDex build failed or empty — skipping to frida-dexdump"
+          fi
+          echo "BlackDex got: $(find dumped_dex -name '*.dex' | wc -l) dex files"
 
-      - name: Fallback — frida-dexdump if BlackDex empty
+      - name: frida-dexdump (primary if BlackDex empty)
         run: |
           COUNT=$(find dumped_dex -name "*.dex" 2>/dev/null | wc -l)
           if [ "$COUNT" -lt 1 ]; then
-            echo "BlackDex got nothing — trying frida-dexdump fallback"
+            echo "Running frida-dexdump..."
             pip3 install -q frida-tools frida-dexdump
             FRIDA_VER=$(python3 -c "import frida; print(frida.__version__)")
-            echo "Frida $FRIDA_VER"
+            echo "Frida: $FRIDA_VER"
             wget -q "https://github.com/frida/frida/releases/download/${FRIDA_VER}/frida-server-${FRIDA_VER}-android-x86_64.xz" -O fs.xz
-            xz -d fs.xz && mv frida-server-*-android-x86_64 frida-bin || mv frida-server-* frida-bin
+            xz -d fs.xz
+            mv frida-server-*android-x86_64 frida-bin 2>/dev/null || mv frida-server-* frida-bin
             $ADB push frida-bin /data/local/tmp/frida-server
             $ADB shell "chmod +x /data/local/tmp/frida-server && /data/local/tmp/frida-server &"
             sleep 5
             $ADB shell "monkey -p com.mm.droid.livetv.mobile31027704 -c android.intent.category.LAUNCHER 1" || true
             sleep 20
             frida-dexdump -U -f com.mm.droid.livetv.mobile31027704 -o ./dumped_dex/ || true
+          else
+            echo "BlackDex already got $COUNT dex — skipping frida"
           fi
-          echo "=== Final dumped files ==="
+          echo "=== Final result ==="
           find dumped_dex -type f | xargs ls -lh 2>/dev/null || echo "Nothing dumped"
 
       - name: Upload DEX artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: sapa-tv-dumped-dex
           path: dumped_dex/

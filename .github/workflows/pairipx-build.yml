@@ -7,8 +7,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    permissions:
-      contents: write
 
     steps:
       - name: Install tools
@@ -28,13 +26,12 @@ jobs:
             platforms;android-34
             build-tools;34.0.0
 
-      - name: Download Gradle 8.2 directly
+      - name: Download Gradle 8.2
         run: |
           wget -q https://services.gradle.org/distributions/gradle-8.2-bin.zip -O /tmp/gradle.zip
           unzip -q /tmp/gradle.zip -d /opt/
-          export GRADLE=/opt/gradle-8.2/bin/gradle
-          echo "GRADLE=$GRADLE" >> $GITHUB_ENV
-          $GRADLE --version
+          echo "GRADLE=/opt/gradle-8.2/bin/gradle" >> $GITHUB_ENV
+          /opt/gradle-8.2/bin/gradle --version | head -3
 
       - name: Download PairipX source
         run: |
@@ -43,30 +40,21 @@ jobs:
           echo "Downloaded: $(du -sh /tmp/source.zip | cut -f1)"
           unzip -q /tmp/source.zip -d /tmp/extracted
           TOP=$(ls /tmp/extracted/ | head -1)
-          mv /tmp/extracted/$TOP/* /tmp/project/ 2>/dev/null || mv /tmp/extracted/$TOP/. /tmp/project/ 2>/dev/null || true
-          echo "Project root:"; ls /tmp/project/
-
-      - name: Verify engine JAR and assets
-        run: |
-          echo "=== JARs ==="
+          mv /tmp/extracted/$TOP/* /tmp/project/ 2>/dev/null || true
+          echo "Files: $(find /tmp/project -type f | wc -l)"
           find /tmp/project/app/libs -name '*.jar' -exec du -sh {} \;
-          echo "=== Assets ==="
-          ls /tmp/project/app/src/main/assets/ 2>/dev/null || echo 'no assets dir'
-          echo "=== JNI libs ==="
-          find /tmp/project/app/src/main/jniLibs -name '*.so' -exec du -sh {} \; 2>/dev/null || echo 'no jniLibs'
 
-      - name: Fix gradle.properties
+      - name: Write gradle.properties
         run: |
           cat > /tmp/project/gradle.properties << 'EOF'
-org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8
-org.gradle.daemon=false
-org.gradle.caching=false
-org.gradle.parallel=false
-android.useAndroidX=true
-android.enableJetifier=true
-android.nonTransitiveRClass=false
-android.suppressUnsupportedCompileSdk=34
-EOF
+          org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8
+          org.gradle.daemon=false
+          org.gradle.caching=false
+          org.gradle.parallel=false
+          android.useAndroidX=true
+          android.enableJetifier=true
+          android.suppressUnsupportedCompileSdk=34
+          EOF
 
       - name: Build APK
         working-directory: /tmp/project
@@ -76,41 +64,30 @@ EOF
             --no-build-cache \
             --rerun-tasks \
             --stacktrace \
-            -Dorg.gradle.jvmargs=-Xmx4g \
-            2>&1 | tee /tmp/build.log
-          echo "Build exit: ${PIPESTATUS[0]}"
+            -Dorg.gradle.jvmargs=-Xmx4g
+          find app/build/outputs/apk -name '*.apk' | xargs du -sh
 
-      - name: Find and check APK
+      - name: Inspect APK contents
         run: |
-          APK=$(find /tmp/project/app/build/outputs/apk -name '*.apk' 2>/dev/null | head -1)
-          if [ -z "$APK" ]; then
-            echo "No APK in outputs! Looking everywhere..."
-            find /tmp/project -name '*.apk' -not -path '*/assets/*' -not -path '*/intermediates/*' 2>/dev/null
-            tail -50 /tmp/build.log
-            exit 1
-          fi
+          APK=$(find /tmp/project/app/build/outputs/apk -name '*.apk' | head -1)
           echo "APK: $APK  size: $(du -sh $APK | cut -f1)"
           python3 -c "
-import zipfile
-with zipfile.ZipFile('$APK') as z:
-    total=sum(i.file_size for i in z.infolist())
-    print('Contents:', len(z.namelist()), 'files,', round(total/1024/1024,2), 'MB uncompressed')
-    for i in z.infolist():
-        if i.file_size > 10000:
-            print(' ', round(i.file_size/1024), 'KB', i.filename)
-"
+          import zipfile
+          with zipfile.ZipFile('$APK') as z:
+              total = sum(i.file_size for i in z.infolist())
+              print('Files:', len(z.namelist()), '| Uncompressed:', round(total/1024/1024,2), 'MB')
+              for i in sorted(z.infolist(), key=lambda x: -x.file_size)[:15]:
+                  print(' ', round(i.file_size/1024), 'KB  ', i.filename)
+          "
           echo "APK_PATH=$APK" >> $GITHUB_ENV
 
       - name: Sign APK
         run: |
           APKSIGNER=$(find $ANDROID_HOME/build-tools -name apksigner | sort -V | tail -1)
-          echo "apksigner: $APKSIGNER"
-          keytool -genkey -v -keystore /tmp/debug.jks \
-            -alias debug -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass android -keypass android \
-            -dname "CN=PairipX,O=PairipX,C=US" -noprompt
-          $APKSIGNER sign --ks /tmp/debug.jks --ks-pass pass:android \
-            --key-pass pass:android --ks-key-alias debug \
+          keytool -genkey -v -keystore /tmp/k.jks -alias k -keyalg RSA -keysize 2048 -validity 9999 \
+            -storepass android -keypass android -dname "CN=PairipX" -noprompt
+          $APKSIGNER sign --ks /tmp/k.jks --ks-pass pass:android \
+            --key-pass pass:android --ks-key-alias k \
             --out /tmp/PairipX_signed.apk "$APK_PATH"
           echo "Signed: $(du -sh /tmp/PairipX_signed.apk | cut -f1)"
 

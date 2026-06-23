@@ -1,0 +1,110 @@
+name: PairipX APK Builder
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+
+    steps:
+      - name: Install tools
+        run: sudo apt-get install -y --no-install-recommends unzip python3
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: >
+            platform-tools
+            platforms;android-34
+            build-tools;34.0.0
+
+      - name: Cache Gradle (project-specific)
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: pairipx-gradle-v1-${{ runner.os }}
+          restore-keys: pairipx-gradle-v1-
+
+      - name: Download PairipX source
+        run: |
+          mkdir -p /tmp/project
+          curl -L -o /tmp/source.zip "https://979791c9-5f5f-48c4-94c5-e8a933ccc599-00-27qowasz9vdfp.kirk.replit.dev/dl/PairipX.zip"
+          unzip -q /tmp/source.zip -d /tmp/extracted
+          TOP=$(ls /tmp/extracted/ | head -1)
+          mv /tmp/extracted/$TOP/* /tmp/project/ || mv /tmp/extracted/$TOP/. /tmp/project/
+          echo "Project root:"; ls /tmp/project/
+
+      - name: Verify engine JAR
+        run: |
+          JAR=$(find /tmp/project -name "RePairip.jar" | head -1)
+          echo "JAR: $JAR  size: $(du -sh $JAR | cut -f1)"
+          find /tmp/project/app -name "*.jar" | head -10
+
+      - name: Fix gradle.properties
+        run: |
+          cat > /tmp/project/gradle.properties << 'EOF'
+          org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8
+          org.gradle.daemon=false
+          org.gradle.caching=false
+          org.gradle.parallel=false
+          android.useAndroidX=true
+          android.enableJetifier=true
+          android.nonTransitiveRClass=false
+          android.suppressUnsupportedCompileSdk=34
+          EOF
+
+      - name: Build APK
+        working-directory: /tmp/project
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --no-build-cache \
+            --rerun-tasks \
+            --info \
+            2>&1 | tee /tmp/build.log | tail -5 || true
+          echo "Exit: ${PIPESTATUS[0]}"
+          find . -name "*.apk" -not -path "*/intermediates/*"
+
+      - name: Show build result
+        if: always()
+        run: |
+          echo "=== Last 50 lines of build log ==="
+          tail -50 /tmp/build.log
+          APK=$(find /tmp/project -name "*.apk" -not -path "*/intermediates/*" | head -1)
+          if [ -n "$APK" ]; then
+            echo "APK: $APK  ($(du -sh $APK | cut -f1))"
+            cp "$APK" /tmp/PairipX.apk
+          fi
+
+      - name: Sign APK
+        run: |
+          APK=$(find /tmp/project -name "*.apk" -not -path "*/intermediates/*" | head -1)
+          if [ -z "$APK" ]; then echo "No APK found!"; exit 1; fi
+          keytool -genkey -v -keystore /tmp/debug.jks \
+            -alias debug -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=PairipX,O=PairipX,C=US" -noprompt
+          apksigner sign --ks /tmp/debug.jks --ks-pass pass:android \
+            --key-pass pass:android --ks-key-alias debug \
+            --out /tmp/PairipX_signed.apk "$APK"
+          echo "Signed APK: $(du -sh /tmp/PairipX_signed.apk | cut -f1)"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PairipX-apk
+          path: /tmp/PairipX_signed.apk
+          retention-days: 7

@@ -85,6 +85,18 @@ jobs:
             echo "Source downloaded: $(du -sh /tmp/source_raw/source.zip | cut -f1)"
           fi
 
+      # ── Delete staging branch immediately after clone ────────────────────────
+      - name: Clean up source branch
+        if: ${{ inputs.source_branch != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -s -o /dev/null -X DELETE \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/git/refs/heads/${{ inputs.source_branch }}"
+          echo "Staging branch '${{ inputs.source_branch }}' deleted ✓"
+
       # ── Delete source asset, release, and tag immediately after download ───────
       - name: Clean up staging files
         if: ${{ inputs.asset_id != '' }}

@@ -27,6 +27,10 @@ on:
         description: 'Staging asset ID — deleted immediately after source is downloaded'
         required: false
         default: ''
+      source_branch:
+        description: 'Git branch in this repo containing the project source (alternative to asset_id)'
+        required: false
+        default: ''
 
 permissions:
   contents: write   # needed to delete GitHub Release assets via GITHUB_TOKEN
@@ -64,13 +68,22 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p /tmp/source_raw /tmp/project
-          # Download the release asset by ID using the internal token
-          curl -L -s \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/octet-stream" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/assets/${{ inputs.asset_id }}" \
-            -o /tmp/source_raw/source.zip
-          echo "Source downloaded: $(du -sh /tmp/source_raw/source.zip | cut -f1)"
+          if [ -n "${{ inputs.source_branch }}" ]; then
+            git clone --depth=1 --branch "${{ inputs.source_branch }}" \
+              "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
+              /tmp/source_clone
+            cd /tmp/source_clone
+            zip -r /tmp/source_raw/source.zip . --exclude ".git/*" --exclude ".github/*" -q
+            echo "Source cloned from branch '${{ inputs.source_branch }}': $(du -sh /tmp/source_raw/source.zip | cut -f1)"
+          else
+            # Download the release asset by ID using the internal token
+            curl -L -s \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/octet-stream" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/assets/${{ inputs.asset_id }}" \
+              -o /tmp/source_raw/source.zip
+            echo "Source downloaded: $(du -sh /tmp/source_raw/source.zip | cut -f1)"
+          fi
 
       # ── Delete source asset, release, and tag immediately after download ───────
       - name: Clean up staging files

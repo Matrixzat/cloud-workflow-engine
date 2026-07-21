@@ -250,18 +250,18 @@ static __attribute__((noinline,optnone)) void crash_now(void) {
 // aes256_cbc_dec, all defined above, so it's included here.
 #include "guard_pstrings.inc"
 // ── NS_JNI — inline reveal_ns for drop-in JNI string substitution ────────────
-// Returns a pointer to a function-scoped static buffer.  Safe because JNI
-// always consumes the C string before returning — no aliasing issue.
-// Each NS_JNI(idx,blob) gets its own __COUNTER__-keyed buffer, so multiple
-// uses in one function don't collide.
-#define _NS_BUF_NAME2(c) _ns_jni_buf_##c
-#define _NS_BUF_NAME(c)  _NS_BUF_NAME2(c)
-#define NS_JNI(idx, blob) \
-    ([&]() -> const char* { \
-        static char _NS_BUF_NAME(__COUNTER__)[SP_BUF_SZ*4]; \
-        reveal_ns((idx),(blob),(blob##_LEN), _NS_BUF_NAME(__COUNTER__-1)); \
-        return _NS_BUF_NAME(__COUNTER__-1); \
-    }())
+// Template keyed on __COUNTER__ so every call site gets its own static buffer.
+// Each instantiation of ns_jni_slot<N> has independent storage — safe for
+// multiple NS_JNI calls on the same line or in the same function.
+template<int N>
+static __attribute__((noinline)) const char *ns_jni_slot(
+        uint32_t idx, const uint8_t *ct, int len) {
+    static char buf[SP_BUF_SZ * 4];
+    static bool ok = false;
+    if (!ok) { reveal_ns(idx, ct, len, buf); ok = true; }
+    return buf;
+}
+#define NS_JNI(idx, blob) ns_jni_slot<__COUNTER__>((idx), (blob), (blob##_LEN))
 // ─────────────────────────────────────────────────────────────────────────────
 
 

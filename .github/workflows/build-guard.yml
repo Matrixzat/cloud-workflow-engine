@@ -83,6 +83,15 @@ jobs:
           set -e
           SRC="cpp"
 
+          # Locate static C++ runtime — suppress auto-link of libc++_shared.so
+          TC="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
+          CPP_STATIC_ARM64=$(find "$TC" -name "libc++_static.a" 2>/dev/null | grep -E "aarch64" | head -1)
+          CPP_ABI_ARM64=$(find   "$TC" -name "libc++abi.a"     2>/dev/null | grep -E "aarch64" | head -1)
+          CPP_STATIC_ARM32=$(find "$TC" -name "libc++_static.a" 2>/dev/null | grep -vE "aarch64" | head -1)
+          CPP_ABI_ARM32=$(find   "$TC" -name "libc++abi.a"     2>/dev/null | grep -vE "aarch64" | head -1)
+          echo "C++static arm64:   $CPP_STATIC_ARM64"
+          echo "C++static armeabi: $CPP_STATIC_ARM32"
+
           COMMON=(
             --sysroot="$SYSROOT"
             -fPIC -O2 -g0
@@ -113,7 +122,8 @@ jobs:
           "$CLANG_ARM64" --target=aarch64-linux-android26 \
             --sysroot="$SYSROOT" \
             -shared -fPIC -Wl,--gc-sections -Wl,--build-id=none \
-            -lc++_static -lc++abi \
+            -nostdlib++ \
+            "$CPP_STATIC_ARM64" "$CPP_ABI_ARM64" \
             -llog -lz -lm \
             guard_arm64.o \
             -o libcipher_arm64.so
@@ -129,7 +139,8 @@ jobs:
           "$CLANG_ARM32" --target=armv7a-linux-androideabi26 \
             --sysroot="$SYSROOT" \
             -shared -fPIC -Wl,--gc-sections -Wl,--build-id=none \
-            -lc++_static -lc++abi \
+            -nostdlib++ \
+            "$CPP_STATIC_ARM32" "$CPP_ABI_ARM32" \
             -llog -lz -lm \
             guard_armeabi.o \
             -o libcipher_armeabi.so

@@ -1,0 +1,91 @@
+name: Build Guard Binary (libcipher.so)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Android SDK / NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK r25c
+        run: |
+          yes | sdkmanager "ndk;25.2.9519653" 2>/dev/null || true
+          echo "NDK_ROOT=$ANDROID_SDK_ROOT/ndk/25.2.9519653" >> $GITHUB_ENV
+
+      - name: Resolve toolchain paths
+        run: |
+          TC="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
+          echo "CLANG_ARM64=$TC/bin/aarch64-linux-android26-clang++"    >> $GITHUB_ENV
+          echo "CLANG_ARM32=$TC/bin/armv7a-linux-androideabi26-clang++" >> $GITHUB_ENV
+          echo "SYSROOT=$TC/sysroot"                                    >> $GITHUB_ENV
+
+      - name: Probe OLLVM
+        run: |
+          echo "int x;" > /tmp/probe.c
+          if "$CLANG_ARM64" --target=aarch64-linux-android26 \
+               --sysroot="$SYSROOT" -mllvm -fla \
+               -x c -c /tmp/probe.c -o /tmp/probe.o 2>/dev/null; then
+            echo "OLLVM_FLAGS=-mllvm -fla -mllvm -bcf -mllvm -sub -mllvm -sobf" >> $GITHUB_ENV
+            echo "OLLVM detected"
+          else
+            echo "OLLVM_FLAGS=" >> $GITHUB_ENV
+            echo "No OLLVM — building with standard NDK"
+          fi
+
+      - name: Build libcipher.so (arm64-v8a + armeabi-v7a)
+        run: |
+          set -e
+          SRC="cpp"
+
+          COMMON=(
+            --sysroot="$SYSROOT"
+            -fPIC -O2 -g0
+            -fno-unwind-tables -fno-asynchronous-unwind-tables
+            -fexceptions -frtti
+            -fvisibility=hidden
+            -ffunction-sections -fdata-sections
+            -D__ANDROID__ -DANDROID
+            -I"$SRC"
+          )
+          if [ -n "$OLLVM_FLAGS" ]; then
+            read -ra OF <<< "$OLLVM_FLAGS"
+            COMMON+=("${OF[@]}")
+          fi
+
+          GUARD="$SRC/guard.cpp"
+
+          echo "=== arm64-v8a ==="
+          "$CLANG_ARM64" --target=aarch64-linux-android26 \
+            "${COMMON[@]}" -std=c++17 -c "$GUARD" -o guard_arm64.o
+          "$CLANG_ARM64" --target=aarch64-linux-android26 \
+            --sysroot="$SYSROOT" \
+            -shared -fPIC -Wl,--gc-sections -Wl,--build-id=none \
+            -llog -lz -lm guard_arm64.o \
+            -o libcipher_arm64.so
+          echo "libcipher_arm64.so: $(wc -c < libcipher_arm64.so) bytes"
+
+          echo "=== armeabi-v7a ==="
+          "$CLANG_ARM32" --target=armv7a-linux-androideabi26 \
+            "${COMMON[@]}" -std=c++17 -c "$GUARD" -o guard_armeabi.o
+          "$CLANG_ARM32" --target=armv7a-linux-androideabi26 \
+            --sysroot="$SYSROOT" \
+            -shared -fPIC -Wl,--gc-sections -Wl,--build-id=none \
+            -llog -lz -lm guard_armeabi.o \
+            -o libcipher_armeabi.so
+          echo "libcipher_armeabi.so: $(wc -c < libcipher_armeabi.so) bytes"
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: cipher-binaries
+          retention-days: 90
+          path: |
+            libcipher_arm64.so
+            libcipher_armeabi.so

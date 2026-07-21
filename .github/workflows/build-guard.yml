@@ -113,7 +113,7 @@ jobs:
           "$CLANG_ARM64" --target=aarch64-linux-android26 \
             --sysroot="$SYSROOT" \
             -shared -fPIC -Wl,--gc-sections -Wl,--build-id=none \
-            -static-libc++ \
+            -lc++_static -lc++abi \
             -llog -lz -lm \
             guard_arm64.o \
             -o libcipher_arm64.so
@@ -129,7 +129,7 @@ jobs:
           "$CLANG_ARM32" --target=armv7a-linux-androideabi26 \
             --sysroot="$SYSROOT" \
             -shared -fPIC -Wl,--gc-sections -Wl,--build-id=none \
-            -static-libc++ \
+            -lc++_static -lc++abi \
             -llog -lz -lm \
             guard_armeabi.o \
             -o libcipher_armeabi.so

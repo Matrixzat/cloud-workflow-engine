@@ -933,9 +933,9 @@ static __attribute__((noinline)) int lvm_exec(
 
             // ── System primitives ──────────────────────────────────────
             case 0x56: { /* LTRACE — read TracerPid from /proc/self/status */
-                char s_status[32] = {0}, s_tpid[16] = {0};
-                for (int i = 0; i < 17; i++) s_status[i] = (char)(G_PROC_STATUS[i] ^ 0xA3u);
-                for (int i = 0; i < 10; i++) s_tpid[i]   = (char)(G_TRACER_PID[i]  ^ 0xA3u);
+                char s_status[SP_BUF_SZ*2] = {0}, s_tpid[SP_BUF_SZ] = {0};
+                reveal_ns(77, SP_TRACER_STATUS, SP_TRACER_STATUS_LEN, s_status);
+                reveal_ns(78, SP_TRACER_PID,    SP_TRACER_PID_LEN,    s_tpid);
                 FILE *tf = fopen(s_status, "r");
                 int traced = 0;
                 if (tf) {
@@ -1268,11 +1268,9 @@ static volatile const uint8_t FONTS_BC_STARTUP_ENC[] = {
 
 // VM wrapper functions — each returns 1 for "tamper detected"
 static __attribute__((noinline)) int gvm_tracer(void) {
-    // Reuse the same XOR-decoded path/key arrays as check_tracer() —
-    // no plaintext "/proc/self/status" or "TracerPid:" in .rodata.
-    char s_status[32] = {0}, s_tpid[16] = {0};
-    for (int i = 0; i < 17; i++) s_status[i] = (char)(G_PROC_STATUS[i] ^ 0xA3);
-    for (int i = 0; i < 10; i++) s_tpid[i]   = (char)(G_TRACER_PID[i]  ^ 0xA3);
+    char s_status[SP_BUF_SZ*2] = {0}, s_tpid[SP_BUF_SZ] = {0};
+    reveal_ns(77, SP_TRACER_STATUS, SP_TRACER_STATUS_LEN, s_status);
+    reveal_ns(78, SP_TRACER_PID,    SP_TRACER_PID_LEN,    s_tpid);
     char line[256];
     FILE *f = fopen(s_status, "r");
     if (!f) return 0;

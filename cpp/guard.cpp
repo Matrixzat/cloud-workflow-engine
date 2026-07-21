@@ -301,23 +301,17 @@ static __attribute__((noinline)) void g_decode(const uint8_t *enc, int len, char
 // Anti-debug: abort if TracerPid != 0
 // ════════════════════════════════════════════════════════════════════════════
 
-// "/proc/self/status" XOR 0xA3 — no plaintext path in .rodata
-static const uint8_t G_PROC_STATUS[] = {
-    0x8c,0xd3,0xd1,0xcc,0xc0,0x8c,0xd0,0xc6,0xcf,0xc5,
-    0x8c,0xd0,0xd7,0xc2,0xd7,0xd6,0xd0};
-// "TracerPid:" XOR 0xA3
-static const uint8_t G_TRACER_PID[]  = {
-    0xf7,0xd1,0xc2,0xc0,0xc6,0xd1,0xf3,0xca,0xc7,0x99};
-
-// Path / ZIP-entry / safe-namespace strings are now AES-256-CBC encrypted with
-// per-string unique keys (see guard_pstrings.inc: SP_* blobs + reveal_ns()).
-// XOR-only constants removed — nothing here maps to a readable string in .rodata.
+// "/proc/self/status" and "TracerPid:" are AES-256-CBC encrypted in
+// guard_pstrings.inc (indices 77-78) via reveal_ns() — decrypted at runtime
+// only.  The old XOR-only approach was constant-folded by clang -O2 into
+// .rodata, leaking the plaintext strings in the binary.
 
 static void check_tracer(void) {
     GLOGI("check_tracer: start");
-    char s_status[32] = {0}, s_tpid[16] = {0};
-    for (int i = 0; i < 17; i++) s_status[i] = (char)(G_PROC_STATUS[i] ^ 0xA3);
-    for (int i = 0; i < 10; i++) s_tpid[i]   = (char)(G_TRACER_PID[i]  ^ 0xA3);
+    char s_status[SP_BUF_SZ*2] = {0};
+    char s_tpid[SP_BUF_SZ]     = {0};
+    reveal_ns(77, SP_TRACER_STATUS, SP_TRACER_STATUS_LEN, s_status);
+    reveal_ns(78, SP_TRACER_PID,    SP_TRACER_PID_LEN,    s_tpid);
 
     char line[256];
     FILE *f = fopen(s_status, "r");

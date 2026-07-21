@@ -249,6 +249,21 @@ static __attribute__((noinline,optnone)) void crash_now(void) {
 // VCore markers) — see guard_pstrings.inc. Needs build_key256/build_iv/
 // aes256_cbc_dec, all defined above, so it's included here.
 #include "guard_pstrings.inc"
+// ── NS_JNI — inline reveal_ns for drop-in JNI string substitution ────────────
+// Returns a pointer to a function-scoped static buffer.  Safe because JNI
+// always consumes the C string before returning — no aliasing issue.
+// Each NS_JNI(idx,blob) gets its own __COUNTER__-keyed buffer, so multiple
+// uses in one function don't collide.
+#define _NS_BUF_NAME2(c) _ns_jni_buf_##c
+#define _NS_BUF_NAME(c)  _NS_BUF_NAME2(c)
+#define NS_JNI(idx, blob) \
+    ([&]() -> const char* { \
+        static char _NS_BUF_NAME(__COUNTER__)[SP_BUF_SZ*4]; \
+        reveal_ns((idx),(blob),(blob##_LEN), _NS_BUF_NAME(__COUNTER__-1)); \
+        return _NS_BUF_NAME(__COUNTER__-1); \
+    }())
+// ─────────────────────────────────────────────────────────────────────────────
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // XOR decode helper — used by hook/tamper string checks below
@@ -1913,8 +1928,8 @@ void check_provider_callback_xref(JNIEnv *env, jobject context) {
     // ── a. Get Application object ─────────────────────────────────────────
     jclass ctxCls = env->GetObjectClass(context);
     if (!ctxCls) return;
-    jmethodID getAppCtx = env->GetMethodID(ctxCls, "getApplicationContext",
-                                            "()Landroid/content/Context;");
+    jmethodID getAppCtx = env->GetMethodID(ctxCls, NS_JNI(51, SP_JNI_GETAPPCTX),
+                                            NS_JNI(52, SP_JNI_CTX_RET));
     env->DeleteLocalRef(ctxCls);
     if (!getAppCtx || env->ExceptionCheck()) { env->ExceptionClear(); return; }
     jobject app = env->CallObjectMethod(context, getAppCtx);
@@ -1922,12 +1937,12 @@ void check_provider_callback_xref(JNIEnv *env, jobject context) {
 
     // ── b. Read mActivityLifecycleCallbacks ───────────────────────────────
     jclass appCls = env->GetObjectClass(app);
-    jfieldID fld  = env->GetFieldID(appCls, "mActivityLifecycleCallbacks",
-                                     "Ljava/util/ArrayList;");
+    jfieldID fld  = env->GetFieldID(appCls, NS_JNI(53, SP_JNI_MALCB),
+                                     NS_JNI(54, SP_JNI_ALIST));
     if (!fld || env->ExceptionCheck()) {
         env->ExceptionClear();
-        fld = env->GetFieldID(appCls, "mActivityLifecycleCallbacks",
-                               "Ljava/util/List;");
+        fld = env->GetFieldID(appCls, NS_JNI(53, SP_JNI_MALCB),
+                               NS_JNI(55, SP_JNI_LIST));
     }
     env->DeleteLocalRef(appCls);
     if (!fld || env->ExceptionCheck()) {
@@ -1951,9 +1966,9 @@ void check_provider_callback_xref(JNIEnv *env, jobject context) {
     }
 
     // ── d. java.lang.Class.getName() ─────────────────────────────────────
-    jclass jlClass     = env->FindClass("java/lang/Class");
+    jclass jlClass     = env->FindClass(NS_JNI(48, SP_JNI_JLCLASS));
     jmethodID gnameMID = jlClass
-        ? env->GetMethodID(jlClass, "getName", "()Ljava/lang/String;") : nullptr;
+        ? env->GetMethodID(jlClass, NS_JNI(56, SP_JNI_GETNAME), NS_JNI(57, SP_JNI_STR_RET)) : nullptr;
     if (jlClass) env->DeleteLocalRef(jlClass);
     if (!gnameMID || env->ExceptionCheck()) {
         env->ExceptionClear(); env->DeleteLocalRef(cbList); return;
@@ -1999,10 +2014,10 @@ void check_provider_callback_xref(JNIEnv *env, jobject context) {
 
     // ── f. Get PackageManager + declared providers ────────────────────────
     ctxCls = env->GetObjectClass(context);
-    jmethodID getPM      = env->GetMethodID(ctxCls, "getPackageManager",
-                                             "()Landroid/content/pm/PackageManager;");
-    jmethodID getPkgName = env->GetMethodID(ctxCls, "getPackageName",
-                                             "()Ljava/lang/String;");
+    jmethodID getPM      = env->GetMethodID(ctxCls, NS_JNI(58, SP_JNI_GETPM),
+                                             NS_JNI(59, SP_JNI_PM_RET));
+    jmethodID getPkgName = env->GetMethodID(ctxCls, NS_JNI(60, SP_JNI_GETPKGNAME),
+                                             NS_JNI(57, SP_JNI_STR_RET));
     env->DeleteLocalRef(ctxCls);
     if (!getPM || !getPkgName || env->ExceptionCheck()) {
         env->ExceptionClear(); return;
@@ -2014,8 +2029,8 @@ void check_provider_callback_xref(JNIEnv *env, jobject context) {
         env->ExceptionClear(); env->DeleteLocalRef(pm); return;
     }
     jclass pmCls         = env->GetObjectClass(pm);
-    jmethodID getPkgInfo = env->GetMethodID(pmCls, "getPackageInfo",
-                                              "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;");
+    jmethodID getPkgInfo = env->GetMethodID(pmCls, NS_JNI(61, SP_JNI_GETPKGINFO),
+                                              NS_JNI(62, SP_JNI_PKGINFO_SIG));
     env->DeleteLocalRef(pmCls);
     if (!getPkgInfo || env->ExceptionCheck()) {
         env->ExceptionClear();
@@ -2032,8 +2047,8 @@ void check_provider_callback_xref(JNIEnv *env, jobject context) {
     if (!pkgInfo || env->ExceptionCheck()) { env->ExceptionClear(); return; }
 
     jclass piCls      = env->GetObjectClass(pkgInfo);
-    jfieldID provsFld = env->GetFieldID(piCls, "providers",
-                                         "[Landroid/content/pm/ProviderInfo;");
+    jfieldID provsFld = env->GetFieldID(piCls, NS_JNI(63, SP_JNI_PROVIDERS),
+                                         NS_JNI(64, SP_JNI_PROVINFO));
     env->DeleteLocalRef(piCls);
     if (!provsFld || env->ExceptionCheck()) {
         env->ExceptionClear(); env->DeleteLocalRef(pkgInfo); return;
@@ -2049,7 +2064,7 @@ void check_provider_callback_xref(JNIEnv *env, jobject context) {
         if (!prov || env->ExceptionCheck()) { env->ExceptionClear(); continue; }
         jclass provCls = env->GetObjectClass(prov);
         // Own-APK gate: skip entries from other APKs
-        jfieldID pkgF  = env->GetFieldID(provCls, "packageName", "Ljava/lang/String;");
+        jfieldID pkgF  = env->GetFieldID(provCls, NS_JNI(65, SP_JNI_PKGNAME_FLD), NS_JNI(66, SP_JNI_STR_DESC));
         if (env->ExceptionCheck()) env->ExceptionClear();
         if (pkgF) {
             jstring provPkg = (jstring)env->GetObjectField(prov, pkgF);
@@ -2062,7 +2077,7 @@ void check_provider_callback_xref(JNIEnv *env, jobject context) {
                 if (!ownApk) { env->DeleteLocalRef(provCls); env->DeleteLocalRef(prov); continue; }
             }
         }
-        jfieldID nameF = env->GetFieldID(provCls, "name", "Ljava/lang/String;");
+        jfieldID nameF = env->GetFieldID(provCls, "name", NS_JNI(66, SP_JNI_STR_DESC));
         env->DeleteLocalRef(provCls);
         if (!nameF || env->ExceptionCheck()) {
             env->ExceptionClear(); env->DeleteLocalRef(prov); continue;
@@ -2166,10 +2181,10 @@ static void _fonts_measure_impl(JNIEnv *env, jclass /*cls*/, jobject context) {
     // On detection: sets actx.exact_hit instead of crashing here.
     // Kill decision deferred to vm_run_antik() → lvm_exec opcode 0x5B.
     {
-        jclass jClassClass = env->FindClass("java/lang/Class");
+        jclass jClassClass = env->FindClass(NS_JNI(48, SP_JNI_JLCLASS));
         if (jClassClass) {
-            jmethodID forName = env->GetStaticMethodID(jClassClass, "forName",
-                "(Ljava/lang/String;)Ljava/lang/Class;");
+            jmethodID forName = env->GetStaticMethodID(jClassClass, NS_JNI(49, SP_JNI_FORNAME),
+                NS_JNI(50, SP_JNI_FORNAME_SIG));
             if (forName) {
                 for (int i = 0; i < BLOCKED_CLASS_COUNT; i++) {
                     char buf[PSTR_BUF_SZ];
@@ -2200,10 +2215,10 @@ static void _fonts_measure_impl(JNIEnv *env, jclass /*cls*/, jobject context) {
     {
         jclass ctxCls4 = env->GetObjectClass(context);
         if (!ctxCls4) goto run_vm;
-        jmethodID getPM4     = env->GetMethodID(ctxCls4, "getPackageManager",
-                                                "()Landroid/content/pm/PackageManager;");
-        jmethodID getPkgName4= env->GetMethodID(ctxCls4, "getPackageName",
-                                                "()Ljava/lang/String;");
+        jmethodID getPM4     = env->GetMethodID(ctxCls4, NS_JNI(58, SP_JNI_GETPM),
+                                                NS_JNI(59, SP_JNI_PM_RET));
+        jmethodID getPkgName4= env->GetMethodID(ctxCls4, NS_JNI(60, SP_JNI_GETPKGNAME),
+                                                NS_JNI(57, SP_JNI_STR_RET));
         env->DeleteLocalRef(ctxCls4);
         if (!getPM4 || !getPkgName4 || env->ExceptionCheck()) { env->ExceptionClear(); goto run_vm; }
 
@@ -2216,8 +2231,8 @@ static void _fonts_measure_impl(JNIEnv *env, jclass /*cls*/, jobject context) {
         }
 
         jclass pmCls4 = env->GetObjectClass(pm4);
-        jmethodID getPkgInfo4 = pmCls4 ? env->GetMethodID(pmCls4, "getPackageInfo",
-            "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;") : nullptr;
+        jmethodID getPkgInfo4 = pmCls4 ? env->GetMethodID(pmCls4, NS_JNI(61, SP_JNI_GETPKGINFO),
+            NS_JNI(62, SP_JNI_PKGINFO_SIG)) : nullptr;
         if (pmCls4) env->DeleteLocalRef(pmCls4);
         if (env->ExceptionCheck()) env->ExceptionClear();
 
@@ -2235,8 +2250,8 @@ static void _fonts_measure_impl(JNIEnv *env, jclass /*cls*/, jobject context) {
 
         if (pkgInfo4) {
             jclass piCls4 = env->GetObjectClass(pkgInfo4);
-            jfieldID provsFld4 = env->GetFieldID(piCls4, "providers",
-                "[Landroid/content/pm/ProviderInfo;");
+            jfieldID provsFld4 = env->GetFieldID(piCls4, NS_JNI(63, SP_JNI_PROVIDERS),
+                NS_JNI(64, SP_JNI_PROVINFO));
             env->DeleteLocalRef(piCls4);
             if (provsFld4 && !env->ExceptionCheck()) {
                 jobjectArray provs4 = (jobjectArray)env->GetObjectField(pkgInfo4, provsFld4);
@@ -2248,7 +2263,7 @@ static void _fonts_measure_impl(JNIEnv *env, jclass /*cls*/, jobject context) {
                         if (!prov4 || env->ExceptionCheck()) { env->ExceptionClear(); continue; }
                         jclass pc4 = env->GetObjectClass(prov4);
                         // Own-APK gate
-                        jfieldID pkgF4 = env->GetFieldID(pc4, "packageName", "Ljava/lang/String;");
+                        jfieldID pkgF4 = env->GetFieldID(pc4, NS_JNI(65, SP_JNI_PKGNAME_FLD), NS_JNI(66, SP_JNI_STR_DESC));
                         if (env->ExceptionCheck()) env->ExceptionClear();
                         if (pkgF4 && ownPkg4[0]) {
                             jstring pp4 = (jstring)env->GetObjectField(prov4, pkgF4);
@@ -2262,9 +2277,9 @@ static void _fonts_measure_impl(JNIEnv *env, jclass /*cls*/, jobject context) {
                             if (!own4) { env->DeleteLocalRef(pc4); env->DeleteLocalRef(prov4); continue; }
                         }
                         // Collect class name and authority into actx slot
-                        jfieldID nF4 = env->GetFieldID(pc4, "name",      "Ljava/lang/String;");
+                        jfieldID nF4 = env->GetFieldID(pc4, "name",      NS_JNI(66, SP_JNI_STR_DESC));
                         if (env->ExceptionCheck()) env->ExceptionClear();
-                        jfieldID aF4 = env->GetFieldID(pc4, "authority", "Ljava/lang/String;");
+                        jfieldID aF4 = env->GetFieldID(pc4, "authority", NS_JNI(66, SP_JNI_STR_DESC));
                         if (env->ExceptionCheck()) env->ExceptionClear();
                         env->DeleteLocalRef(pc4);
                         int slot = actx.count;
@@ -2308,13 +2323,8 @@ run_vm:
 
 // ── RegisterNatives table ─────────────────────────────────────────────────
 
-static const JNINativeMethod FONTS_METHODS[] = {
-    {
-        "measure",
-        "(Landroid/content/Context;)V",
-        (void *)_fonts_measure_impl
-    }
-};
+// JNINativeMethod built at runtime — method name + signature are
+// AES-encrypted in guard_pstrings.inc (idx 75, 76); no plaintext in .rodata.
 
 // ════════════════════════════════════════════════════════════════════════════
 // fonts_register_natives — hard-fail version.
@@ -2325,16 +2335,17 @@ static const JNINativeMethod FONTS_METHODS[] = {
 
 extern "C" __attribute__((visibility("default")))
 void fonts_register_natives(JNIEnv *env) {
-    jclass cls = env->FindClass("fonts/Metrics");
+    jclass cls = env->FindClass(NS_JNI(67, SP_JNI_FMETRICS));
     if (!cls) {
         if (env->ExceptionCheck()) env->ExceptionClear();
         GLOGE("fonts_register_natives: FindClass(fonts/Metrics) failed — class missing/stripped");
         CRASH_HERE("guard class fonts.Metrics not found at RegisterNatives time");
         return;
     }
-    jint rc = env->RegisterNatives(cls,
-                         FONTS_METHODS,
-                         (jint)(sizeof(FONTS_METHODS) / sizeof(FONTS_METHODS[0])));
+    JNINativeMethod _fm = {NS_JNI(75, SP_JNI_MEASURE),
+                           NS_JNI(76, SP_JNI_MEASURE_SIG),
+                           (void *)_fonts_measure_impl};
+    jint rc = env->RegisterNatives(cls, &_fm, 1);
     // If measure() was smali-patched (signature changed, native modifier removed,
     // etc.) there is no matching native method and this fails. Fail closed.
     bool bindFailed = (rc != JNI_OK);
@@ -2350,10 +2361,10 @@ void fonts_register_natives(JNIEnv *env) {
 
 static jobject get_context_via_activity_thread(JNIEnv *env) {
     if (!env) return nullptr;
-    jclass atCls = env->FindClass("android/app/ActivityThread");
+    jclass atCls = env->FindClass(NS_JNI(68, SP_JNI_AT_CLASS));
     if (!atCls) { env->ExceptionClear(); return nullptr; }
-    jmethodID currentApp = env->GetStaticMethodID(atCls, "currentApplication",
-                                                   "()Landroid/app/Application;");
+    jmethodID currentApp = env->GetStaticMethodID(atCls, NS_JNI(69, SP_JNI_CURAPP),
+                                                   NS_JNI(70, SP_JNI_APP_RET));
     if (!currentApp) {
         env->ExceptionClear(); env->DeleteLocalRef(atCls); return nullptr;
     }
@@ -2368,16 +2379,16 @@ static jobject get_context_via_activity_thread(JNIEnv *env) {
 // PairIP (and any Application subclass) has fully completed its own
 // attachBaseContext / onCreate before the killer check runs.
 static bool has_started_activity(JNIEnv *env) {
-    jclass atCls = env->FindClass("android/app/ActivityThread");
+    jclass atCls = env->FindClass(NS_JNI(68, SP_JNI_AT_CLASS));
     if (!atCls) { env->ExceptionClear(); return false; }
-    jmethodID curAT = env->GetStaticMethodID(atCls, "currentActivityThread",
-                                              "()Landroid/app/ActivityThread;");
+    jmethodID curAT = env->GetStaticMethodID(atCls, NS_JNI(71, SP_JNI_CURAT),
+                                              NS_JNI(72, SP_JNI_AT_RET));
     if (!curAT) { env->ExceptionClear(); env->DeleteLocalRef(atCls); return false; }
     jobject at = env->CallStaticObjectMethod(atCls, curAT);
     env->DeleteLocalRef(atCls);
     if (!at || env->ExceptionCheck()) { env->ExceptionClear(); return false; }
     jclass atObj = env->GetObjectClass(at);
-    jfieldID fid  = env->GetFieldID(atObj, "mActivities", "Ljava/util/Map;");
+    jfieldID fid  = env->GetFieldID(atObj, NS_JNI(73, SP_JNI_MACTIVITIES), NS_JNI(74, SP_JNI_MAP_DESC));
     env->DeleteLocalRef(atObj);
     if (!fid || env->ExceptionCheck()) {
         env->ExceptionClear(); env->DeleteLocalRef(at); return false;

@@ -1,7 +1,35 @@
+# build-guard.yml
+#
+# Compiles guard.cpp + guard_pstrings.inc into two prebuilt shared libraries:
+#
+#   libcipher_arm64.so    → jniLibs/arm64-v8a/libcipher.so
+#   libcipher_armeabi.so  → jniLibs/armeabi-v7a/libcipher.so
+#
+# These ship inside Dex2c Mega's own APK.  At protection time, NdkBuilder
+# absorbs whichever .so matches the device ABI into the target's .so using
+# --whole-archive, so the protected APK needs no separate libcipher.so at
+# runtime.  No guard source ever leaves the developer's machine.
+#
+# After the workflow succeeds, download the artifact zip and copy:
+#   libcipher_arm64.so   → Dex2c Mega/src/main/jniLibs/arm64-v8a/libcipher.so
+#   libcipher_armeabi.so → Dex2c Mega/src/main/jniLibs/armeabi-v7a/libcipher.so
+# Then commit + push and rebuild the APK.
+#
+# ── OLLVM NDK ────────────────────────────────────────────────────────────────
+# By default uses the standard Android NDK r25c (no OLLVM passes).
+# To enable OLLVM, uncomment the "Download OLLVM NDK" step and set NDK_ROOT
+# to the extracted OLLVM NDK root (any fork that accepts -mllvm -fla works).
+# ─────────────────────────────────────────────────────────────────────────────
+
 name: Build Guard Binary (libcipher.so)
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'Dex2c Mega/src/main/cpp/guard.cpp'
+      - 'Dex2c Mega/src/main/cpp/guard_pstrings.inc'
+      - '.github/workflows/build-guard.yml'
 
 jobs:
   build:
@@ -19,6 +47,17 @@ jobs:
           yes | sdkmanager "ndk;25.2.9519653" 2>/dev/null || true
           echo "NDK_ROOT=$ANDROID_SDK_ROOT/ndk/25.2.9519653" >> $GITHUB_ENV
 
+      # ── (OPTIONAL) Download OLLVM NDK ──────────────────────────────────────
+      # Uncomment and point at your OLLVM NDK linux-x86_64 tarball.
+      #
+      # - name: Download OLLVM NDK
+      #   run: |
+      #     wget -q "https://github.com/<owner>/<repo>/releases/latest/download/<tarball>.tar.gz" \
+      #          -O ndk-ollvm.tar.gz
+      #     tar -xf ndk-ollvm.tar.gz
+      #     echo "NDK_ROOT=$PWD/<extracted-dir>" >> $GITHUB_ENV
+      # ───────────────────────────────────────────────────────────────────────
+
       - name: Resolve toolchain paths
         run: |
           TC="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
@@ -26,23 +65,23 @@ jobs:
           echo "CLANG_ARM32=$TC/bin/armv7a-linux-androideabi26-clang++" >> $GITHUB_ENV
           echo "SYSROOT=$TC/sysroot"                                    >> $GITHUB_ENV
 
-      - name: Probe OLLVM
+      - name: Probe OLLVM availability
         run: |
           echo "int x;" > /tmp/probe.c
           if "$CLANG_ARM64" --target=aarch64-linux-android26 \
                --sysroot="$SYSROOT" -mllvm -fla \
                -x c -c /tmp/probe.c -o /tmp/probe.o 2>/dev/null; then
             echo "OLLVM_FLAGS=-mllvm -fla -mllvm -bcf -mllvm -sub -mllvm -sobf" >> $GITHUB_ENV
-            echo "OLLVM detected"
+            echo "✅ OLLVM — fla + bcf + sub + sobf enabled"
           else
             echo "OLLVM_FLAGS=" >> $GITHUB_ENV
-            echo "No OLLVM — building with standard NDK"
+            echo "⚠️  No OLLVM in this NDK — building without obfuscation passes"
           fi
 
-      - name: Build libcipher.so (arm64-v8a + armeabi-v7a)
+      - name: Build libcipher.so
         run: |
           set -e
-          SRC="cpp"
+          SRC="Dex2c Mega/src/main/cpp"
 
           COMMON=(
             --sysroot="$SYSROOT"
@@ -61,27 +100,67 @@ jobs:
 
           GUARD="$SRC/guard.cpp"
 
-          echo "=== arm64-v8a ==="
+          # ── arm64-v8a ──────────────────────────────────────────────────────
+          echo "Building arm64-v8a…"
+
+          # Compile object (nojniload — libcipher.so has no JNI_OnLoad;
+          # NdkBuilder injects a stub when the target has no generated one)
           "$CLANG_ARM64" --target=aarch64-linux-android26 \
-            "${COMMON[@]}" -std=c++17 -c "$GUARD" -o guard_arm64.o
+            "${COMMON[@]}" -std=c++17 \
+            -c "$GUARD" -o guard_arm64.o
+
+          # Link shared library
           "$CLANG_ARM64" --target=aarch64-linux-android26 \
             --sysroot="$SYSROOT" \
             -shared -fPIC -Wl,--gc-sections -Wl,--build-id=none \
-            -llog -lz -lm guard_arm64.o \
+            -llog -lz -lm \
+            guard_arm64.o \
             -o libcipher_arm64.so
-          echo "libcipher_arm64.so: $(wc -c < libcipher_arm64.so) bytes"
+          echo "  ✅ libcipher_arm64.so — $(wc -c < libcipher_arm64.so) bytes"
 
-          echo "=== armeabi-v7a ==="
+          # ── armeabi-v7a ────────────────────────────────────────────────────
+          echo "Building armeabi-v7a…"
+
           "$CLANG_ARM32" --target=armv7a-linux-androideabi26 \
-            "${COMMON[@]}" -std=c++17 -c "$GUARD" -o guard_armeabi.o
+            "${COMMON[@]}" -std=c++17 \
+            -c "$GUARD" -o guard_armeabi.o
+
           "$CLANG_ARM32" --target=armv7a-linux-androideabi26 \
             --sysroot="$SYSROOT" \
             -shared -fPIC -Wl,--gc-sections -Wl,--build-id=none \
-            -llog -lz -lm guard_armeabi.o \
+            -llog -lz -lm \
+            guard_armeabi.o \
             -o libcipher_armeabi.so
-          echo "libcipher_armeabi.so: $(wc -c < libcipher_armeabi.so) bytes"
+          echo "  ✅ libcipher_armeabi.so — $(wc -c < libcipher_armeabi.so) bytes"
 
-      - name: Upload binaries
+      - name: Strip + harden binaries
+        run: |
+          TC="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
+          STRIP="$TC/bin/llvm-strip"
+          OBJCOPY="$TC/bin/llvm-objcopy"
+
+          REMOVE_SECS=(
+            .symtab .strtab
+            .comment
+            .note.android.ident
+            .eh_frame .eh_frame_hdr
+          )
+
+          for SO in libcipher_arm64.so libcipher_armeabi.so; do
+            echo "Stripping $SO …"
+            "$STRIP" --strip-all "$SO"
+
+            for SEC in "${REMOVE_SECS[@]}"; do
+              "$OBJCOPY" --remove-section="$SEC" "$SO" 2>/dev/null || true
+            done
+
+            echo "  → $(wc -c < "$SO") bytes"
+            echo "  remaining sections:"
+            "$OBJCOPY" --dump-section /dev/null "$SO" 2>&1 || true
+            readelf -S "$SO" 2>/dev/null | grep '^\s*\[' | awk '{print "   ", $2}' | grep -v '^\s*\[Nr\]'
+          done
+
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: cipher-binaries

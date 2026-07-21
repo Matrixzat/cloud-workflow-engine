@@ -81,7 +81,7 @@ jobs:
       - name: Build libcipher.so
         run: |
           set -e
-          SRC="Dex2c Mega/src/main/cpp"
+          SRC="cpp"
 
           COMMON=(
             --sysroot="$SYSROOT"

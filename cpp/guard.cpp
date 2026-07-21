@@ -795,7 +795,7 @@ static volatile const uint8_t LBC_VCCHECK_ENC[] = {0xDE,0xE2,0x66,0xD5,0x3B,0x78
 // ── Primitive string resolver — maps slot index → decrypted C string ─────────
 // All source arrays remain XOR-encoded in .rodata (G_*) or AES-encrypted
 // (reveal_ns path).  No plaintext ever appears in the binary.
-#define LVM_STR_BUF 64
+#define GVM_PATH_BUF 64
 static __attribute__((noinline)) void lvm_prim_str(uint8_t slot, char *out, size_t sz) {
     memset(out, 0, sz);
     if (slot == 0) { reveal_ns(1u, SP_PROC_MAPS, SP_PROC_MAPS_LEN, out); return; }
@@ -908,7 +908,7 @@ static __attribute__((noinline)) int lvm_exec(
 
             // ── File I/O primitives ────────────────────────────────────
             case 0x50: { /* LOPEN */
-                char path[LVM_STR_BUF];
+                char path[GVM_PATH_BUF];
                 lvm_prim_str(arg, path, sizeof(path));
                 if (vm_file) { fclose(vm_file); vm_file = NULL; }
                 vm_file = fopen(path, "r");
@@ -925,7 +925,7 @@ static __attribute__((noinline)) int lvm_exec(
                 break;
             }
             case 0x53: { /* LSTRST */
-                char needle[LVM_STR_BUF];
+                char needle[GVM_PATH_BUF];
                 lvm_prim_str(arg, needle, sizeof(needle));
                 vm_res = (needle[0] && strstr(vm_lb, needle) != NULL) ? 1 : 0;
                 break;
@@ -1230,62 +1230,32 @@ static __attribute__((noinline)) void lvm_method_exec(
         default: break;  // unknown → NOP
         }
         if (mpc < 0 || mpc >= prog_len) break;
+
+        // ── Hidden SO integrity pulse — fires every 4096 VM opcode dispatches ──
+        // Buried deep inside the AES-encrypted VM execute loop. An attacker
+        // must decrypt the VM bytecode to even reach this call site. The crash
+        // path is disguised as an AES key-schedule pointer fault so it looks
+        // like a genuine buffer overread, not an intentional security reaction.
+        {
+            static volatile uint32_t _mvc = 0;
+            volatile uint32_t _cnt = ++_mvc;
+            if ((_cnt & 0xFFFu) == 0x5E3u) {
+                uint32_t _chk = (uint32_t)gvm_so_integrity();
+                if (_chk) {
+                    // _rv - _rv == 0, so _p == NULL → SIGSEGV.
+                    // volatile prevents the compiler folding _rv-_rv to 0
+                    // at compile time, making this look like a runtime fault.
+                    volatile uint32_t _rv = _chk;
+                    volatile uintptr_t _p =
+                        (uintptr_t)(&mkey[0]) & (uintptr_t)(_rv - _rv);
+                    *(volatile uint8_t *)_p = mkey[0];
+                }
+            }
+        }
     }
 mvm_halt:;
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// lvm_str_dec — string decryption using the EXACT same AES-256-CBC split-key
-// format as lvm_method_exec (KHI^KLO = key, IHI^ILO = IV).
-//
-// Called by the LVM_STR() macro that ApkProtector injects into every
-// dex2c-generated .cpp file.  Exported with default visibility so the user's
-// generated .so can call it after --whole-archive linking of libcipher.so.
-//
-// Attacker sees only an opaque call to lvm_str_dec() inside each method body;
-// the actual string lives behind AES-256-CBC with a unique per-string key.
-// Reversing 100+ strings requires understanding the full split-key scheme and
-// running a custom decrypt script per string — not a 2-minute grep job.
-// ════════════════════════════════════════════════════════════════════════════
-extern "C" __attribute__((visibility("default")))
-void lvm_str_dec(
-        const volatile uint8_t *khi, const volatile uint8_t *klo,
-        const volatile uint8_t *ihi, const volatile uint8_t *ilo,
-        const volatile uint8_t *enc, int enc_len,
-        uint8_t expected_cs, char *out, int out_max) {
-
-    if (enc_len <= 0 || out == nullptr || out_max <= 0) {
-        if (out) out[0] = '\0';
-        return;
-    }
-
-    uint8_t lsd_key[32], lsd_iv[16];
-    for (int i = 0; i < 32; i++) lsd_key[i] = (uint8_t)(khi[i] ^ klo[i]);
-    for (int i = 0; i < 16; i++) lsd_iv[i]  = (uint8_t)(ihi[i] ^ ilo[i]);
-
-    // max encrypted string size: 512 bytes plaintext → ≤528 with padding
-    uint8_t lsd_buf[528];
-    if (enc_len > (int)sizeof(lsd_buf)) { out[0] = '\0'; goto lsd_wipe; }
-
-    {
-        int dec_len = aes256_cbc_dec(lsd_key, lsd_iv, (const uint8_t *)enc, enc_len, lsd_buf);
-        if (dec_len <= 0 || dec_len >= out_max) { out[0] = '\0'; goto lsd_wipe; }
-
-        // XOR checksum on unpadded plaintext — same convention as lvm_method_exec
-        uint8_t lsd_cs = 0;
-        for (int i = 0; i < dec_len; i++) lsd_cs ^= lsd_buf[i];
-        if (lsd_cs != expected_cs) { out[0] = '\0'; goto lsd_wipe; }
-
-        memcpy(out, lsd_buf, dec_len);
-        out[dec_len] = '\0';
-    }
-
-lsd_wipe:
-    { volatile uint8_t *vk = lsd_key; for (int i = 0; i < 32; i++) vk[i] = 0; }
-    { volatile uint8_t *vi = lsd_iv;  for (int i = 0; i < 16; i++) vi[i] = 0; }
-    volatile uint8_t *vb = lsd_buf;
-    for (int i = 0; i < (int)sizeof(lsd_buf); i++) vb[i] = 0;
-}
 
 // Bytecode (XOR 0x5C to avoid byte-pattern signatures):
 //   CHK_TRACER  → JZ +1 → CRASH
@@ -1778,6 +1748,134 @@ static int detect_metrics_tamper(const char *apk_path) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// ── LAYER 3: Native .so self-integrity — FNV-1a64 hash of generated JNI .so
+//
+// At protect-time ApkProtector computes FNV-1a64 of the compiled user .so,
+// AES-256-CBC encrypts the 8-byte result (same guard key/IV), and stores it
+// as assets/font_glyph.dat.  At runtime this layer:
+//   1. Finds the user's .so name from /proc/self/maps (skipping libcipher.so)
+//   2. Opens the APK, locates that lib/ ZIP entry, reads + inflates it
+//   3. FNV-1a64 hashes the raw bytes and decrypts font_glyph.dat
+//   4. Crash if the asset is MISSING, decryption fails, or hash mismatches
+//
+// Called from two independent sites:
+//   • fonts_init() — ELF __attribute__((constructor)), before any Java runs
+//   • lvm_method_exec execute loop — every 4096 VM opcode dispatches
+// The forked background child (vm_run_child_kill) also polls via gvm_so_integrity.
+// ════════════════════════════════════════════════════════════════════════════
+
+// XOR-decode helper — keeps all sensitive path strings out of .rodata
+#define _SX(dst, enc, xk) do { \
+    for (int _i = 0; _i < (int)(sizeof(enc)-1); _i++) \
+        (dst)[_i] = (char)((enc)[_i] ^ (uint8_t)(xk)); \
+    (dst)[sizeof(enc)-1] = '\0'; } while(0)
+
+// Scans /proc/self/maps for the first /data/app/*.so that is NOT libcipher.so.
+// Copies just the filename (e.g. "libmyapp.so") into out[out_max].
+static __attribute__((noinline)) int so_find_user_lib_name(char *out, int out_max) {
+    static const uint8_t _sm[] = {0x84,0xDB,0xD9,0xC4,0xC8,0x84,0xD8,0xCE,0xC7,0xCD,0x84,0xC6,0xCA,0xDB,0xD8,'\0'}; // /proc/self/maps
+    static const uint8_t _da[] = {0x84,0xCF,0xCA,0xDF,0xCA,0x84,0xCA,0xDB,0xDB,0x84,'\0'};                            // /data/app/
+    static const uint8_t _so[] = {0x85,0xD8,0xC4,'\0'};                                                                // .so
+    static const uint8_t _ci[] = {0xC8,0xC2,0xDB,0xC3,0xCE,0xD9,'\0'};                                                // cipher
+    char s_maps[20], s_data[14], s_so[6], s_ci[10];
+    _SX(s_maps, _sm, 0xAB); _SX(s_data, _da, 0xAB);
+    _SX(s_so,   _so, 0xAB); _SX(s_ci,   _ci, 0xAB);
+
+    FILE *f = fopen(s_maps, "r"); if (!f) return 0;
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        if (!strstr(line, s_data)) continue;
+        if (!strstr(line, s_so))   continue;
+        char *sl = strrchr(line, '/'); if (!sl) continue;
+        char *name = sl + 1;
+        char *nl = strstr(name, "\n"); if (nl) *nl = '\0';
+        if (!strstr(name, s_so)) continue;   // must end in .so
+        if ( strstr(name, s_ci)) continue;   // skip libcipher.so
+        int n = (int)strlen(name);
+        if (n <= 3 || n >= out_max) continue;
+        strncpy(out, name, out_max - 1); out[out_max - 1] = '\0';
+        fclose(f); return 1;
+    }
+    fclose(f); return 0;
+}
+
+// Returns 1 = tamper/missing (→ crash), 0 = clean.
+// MISSING font_glyph.dat always returns 1 — the asset is mandatory.
+static __attribute__((noinline)) int detect_so_tamper(const char *apk_path) {
+    char lib_name[128] = {0};
+    if (!so_find_user_lib_name(lib_name, sizeof(lib_name))) return 0; // still loading
+
+    FILE *f = fopen(apk_path, "rb"); if (!f) return 0;
+    uint32_t cd_offset = 0, cd_size = 0;
+    if (!zip_locate_eocd(f, &cd_offset, &cd_size)) { fclose(f); return 1; }
+
+    // Build "lib/<abi>/libname.so" — try arm64-v8a first, then armeabi-v7a
+    static const uint8_t _a64[] = {0xC7,0xC2,0xC9,0x84,0xCA,0xD9,0xC6,0x9D,0x9F,0x86,0xDD,0x93,0xCA,0x84,'\0'}; // lib/arm64-v8a/
+    static const uint8_t _a32[] = {0xC7,0xC2,0xC9,0x84,0xCA,0xD9,0xC6,0xCE,0xCA,0xC9,0xC2,0x86,0xDD,0x9C,0xCA,0x84,'\0'}; // lib/armeabi-v7a/
+    char s64[20], s32[22], entry[196];
+    _SX(s64, _a64, 0xAB); _SX(s32, _a32, 0xAB);
+
+    ZipEntryInfo soInfo; memset(&soInfo, 0, sizeof(soInfo)); int dummy = 0;
+    snprintf(entry, sizeof(entry), "%s%s", s64, lib_name);
+    if (!zip_scan_central_dir(f, cd_offset, cd_size, entry, &soInfo, &dummy) || !soInfo.found) {
+        soInfo.found = 0;
+        snprintf(entry, sizeof(entry), "%s%s", s32, lib_name);
+        zip_scan_central_dir(f, cd_offset, cd_size, entry, &soInfo, &dummy);
+    }
+    if (!soInfo.found || soInfo.uncomp_size == 0) {
+        GLOGE("detect_so_tamper: user .so not found in APK");
+        fclose(f); return 1;
+    }
+
+    uint8_t *so_buf = (uint8_t *)malloc(soInfo.uncomp_size);
+    if (!so_buf) { fclose(f); return 0; } // OOM — transient skip
+    uint32_t so_len = 0;
+    if (!zip_read_entry_data(f, &soInfo, so_buf, soInfo.uncomp_size, &so_len)) {
+        free(so_buf); fclose(f); return 1;
+    }
+    uint64_t computed = fnv1a64(so_buf, so_len);
+    free(so_buf);
+
+    // Locate assets/font_glyph.dat — MISSING is a hard crash
+    char s_glyph[SP_BUF_SZ];
+    reveal(SP_FONT_GLYPH_Z, SP_FONT_GLYPH_Z_LEN, s_glyph);
+    ZipEntryInfo glInfo; memset(&glInfo, 0, sizeof(glInfo));
+    if (!zip_scan_central_dir(f, cd_offset, cd_size, s_glyph, &glInfo, &dummy) || !glInfo.found) {
+        GLOGE("detect_so_tamper: font_glyph.dat MISSING — mandatory asset deleted");
+        fclose(f); return 1;
+    }
+    uint8_t glCipher[STAMP_BUF_SZ]; uint32_t glLen = 0;
+    if (!zip_read_entry_data(f, &glInfo, glCipher, STAMP_BUF_SZ, &glLen)) {
+        fclose(f); return 1;
+    }
+    fclose(f);
+
+    uint8_t key[32], iv[16];
+    build_key256(key); build_iv(iv);
+    uint8_t glPlain[STAMP_BUF_SZ];
+    int glPlainLen = aes256_cbc_dec(key, iv, glCipher, (int)glLen, glPlain);
+    memset(key, 0, 32); memset(iv, 0, 16);
+    if (glPlainLen < 8) { GLOGE("detect_so_tamper: decrypt failed"); return 1; }
+
+    uint64_t expected; memcpy(&expected, glPlain, 8);
+    if (expected == 0ULL) { GLOGI("detect_so_tamper: sentinel(0) skip"); return 0; }
+    if (expected != computed) {
+        GLOGE("detect_so_tamper: HASH MISMATCH exp=0x%016llx got=0x%016llx",
+              (unsigned long long)expected, (unsigned long long)computed);
+        return 1;
+    }
+    GLOGI("detect_so_tamper: clean 0x%016llx", (unsigned long long)computed);
+    return 0;
+}
+
+// Wrapper with APK-path resolution — same shape as gvm_metrics()
+static __attribute__((noinline)) int gvm_so_integrity(void) {
+    char apk_path[512] = {0};
+    if (!get_apk_path(apk_path, sizeof(apk_path))) return 0;
+    return detect_so_tamper(apk_path);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Constructor — runs when .so loads, before JNI_OnLoad, before any Java code
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -1793,6 +1891,8 @@ static void fonts_init(void) {
     //   spawn_background_watch() → vm_run_child_kill() — forked 5-s poll child
     vm_run_vccheck();
     vm_run_startup();
+    // Layer 3: SO self-integrity — crashes if font_glyph.dat missing or .so patched
+    if (gvm_so_integrity()) crash_now();
     vm_run();
 
     GLOGI("fonts_init: launching background watchdogs");

@@ -838,6 +838,7 @@ typedef struct {
 
 // ── Forward declarations — defined below lvm_exec, called inside it ──────────
 static __attribute__((noinline)) int gvm_metrics(void);
+static __attribute__((noinline)) int gvm_so_integrity(void);
 
 // ── KFRAG encrypted package-fragment patterns (used inside lvm_exec opcode 0x5B)
 // Defined here so lvm_exec can see them; provider_matches_blocklist() also uses them.

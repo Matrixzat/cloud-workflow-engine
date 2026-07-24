@@ -298,8 +298,8 @@ static const uint8_t NS_BC[]={
 #define NS_BC_LEN 304
 
 // Blob lookup: index 16–47 → (ciphertext ptr, len).  Indices 0–15 are NULL.
-typedef struct { const uint8_t *ct; int len; } NsBlob;
-static const NsBlob NS_BLOBS[48] = {
+struct NsBlob { const uint8_t *ct; int len; };
+static constexpr NsBlob NS_BLOBS[48] = {
     {NULL,0},{NULL,0},{NULL,0},{NULL,0},{NULL,0},{NULL,0},  // 0-5
     {NULL,0},{NULL,0},{NULL,0},{NULL,0},{NULL,0},{NULL,0},  // 6-11
     {NULL,0},{NULL,0},{NULL,0},{NULL,0},                    // 12-15
@@ -419,4 +419,8 @@ static const uint8_t SP_TRACER_STATUS[]={0xa2,0xbb,0x63,0xa6,0x42,0x6d,0xac,0x5d
 
 static const uint8_t SP_TRACER_PID[]={0xb6,0x6f,0xbc,0xc9,0x15,0xe6,0x94,0x78,0x99,0x15,0xc6,0x01,0xe4,0x36,0xc0,0x90}; // "TracerPid:" idx=78
 #define SP_TRACER_PID_LEN 16
+
+// Index 79 — disguised asset path used by detect_sig_tamper()
+static const uint8_t SP_FONT_KERNING_Z[]={0x4a,0x35,0xa3,0x05,0x91,0x06,0x50,0xe7,0x73,0xf5,0x37,0x69,0x97,0x2c,0xf0,0x24,0xbc,0x8b,0x2f,0xbe,0x61,0x78,0x65,0x3a,0x06,0x49,0x1e,0x74,0xdf,0xd2,0x9d,0x99}; // "assets/font_kerning.dat" idx=79
+#define SP_FONT_KERNING_Z_LEN 32
 

@@ -500,6 +500,12 @@ static volatile const uint8_t G_LIBRT[]   = {
     0xFC,0xD1,0xD6,0xCD,0xD7,0xCA,0xCE,0xC6,0x8D,0xD0,0xCC // "_runtime.so"
 };
 
+// APK signature cert entry markers for detect_sig_tamper() (XOR 0xA3)
+static volatile const uint8_t G_METAINF[] = {0xee,0xe6,0xf7,0xe2,0x8e,0xea,0xed,0xe5,0x8c}; // "META-INF/"
+static volatile const uint8_t G_SIG_RSA[] = {0x8d,0xf1,0xf0,0xe2};                           // ".RSA"
+static volatile const uint8_t G_SIG_DSA[] = {0x8d,0xe7,0xf0,0xe2};                           // ".DSA"
+static volatile const uint8_t G_SIG_EC[]  = {0x8d,0xe6,0xe0};                                // ".EC"
+
 // ── /proc/self/maps scan for Frida/Xposed/Substrate/Gadget/Magisk/Saurik ──
 
 static __attribute__((noinline)) int check_pipeline_maps(void) {
@@ -664,6 +670,7 @@ static int detect_metrics_tamper(const char *apk_path);
 //   0x13  ARTPATH      — result = libart.so/libandroid_runtime.so bad path
 //   0x14  HOOKMAPS     — result = lsplant/zygisk/riru/lspatch in maps
 //   0x15  METRICS      — result = manifest-hash/dex-count mismatch
+//   0x16  SIGCHECK     — result = signing-certificate hash mismatch
 //   0x20  JZ  <off8>   — if result == 0: pc += off8 (skip forward)
 //   0x21  JNZ <off8>   — if result != 0: pc += off8
 //   0x30  NOP          — decoy instruction
@@ -678,10 +685,14 @@ typedef enum : uint8_t {
     G_OP_ARTPATH  = 0x13,
     G_OP_HOOKMAPS = 0x14,
     G_OP_METRICS  = 0x15,
+    G_OP_SIGCHECK = 0x16,  // signing-certificate integrity check
     G_OP_JZ       = 0x20,
     G_OP_JNZ      = 0x21,
     G_OP_NOP      = 0x30,
 } GVmOp;
+
+// Forward declaration — full definition follows detect_metrics_tamper below.
+static int detect_sig_tamper(const char *apk_path);
 
 // ════════════════════════════════════════════════════════════════════════════
 // Logic VM — encrypted bytecode programs that implement detection LOGIC itself.
@@ -782,6 +793,18 @@ static volatile const uint8_t LBC_METRICS_ENC[] = {0x93,0x0D,0xE2,0x00,0x2D,0xF6
 #define LBC_METRICS_LEN  16
 #define LBC_METRICS_CS   0x18u
 
+// ── SIGCHECK program: detect_sig_tamper logic (signing certificate FNV-1a64 hash)
+// 8 bytes plain → 16 bytes AES-256-CBC ciphertext
+// Plain:  59 00  41 00  01 00  30 00   (LSIGCHECK, LMOV, HALT, NOP)
+// CS = 0x59^0x41^0x01^0x30 = 0x29
+static volatile const uint8_t LBC_SIGCHECK_KHI[] = {0xA7,0x3F,0xC2,0x58,0x1B,0x94,0xE6,0x2D,0x7C,0xF3,0x45,0xB8,0xD1,0x6A,0x29,0x8E,0x54,0xC7,0x3B,0xF0,0x8D,0x12,0x69,0xA4,0xE8,0x2C,0x77,0xBB,0x4F,0x93,0xD6,0x1E};
+static volatile const uint8_t LBC_SIGCHECK_KLO[] = {0x52,0xA1,0x7D,0x3C,0xE9,0x2B,0x05,0x6F,0x18,0x8A,0xC3,0x41,0x7E,0xF5,0xB9,0x26,0xD3,0x4E,0x90,0x6B,0x17,0xAC,0x2F,0x58,0xC1,0x84,0x3D,0xE6,0x70,0x0B,0xA5,0x67};
+static volatile const uint8_t LBC_SIGCHECK_IHI[] = {0x6B,0xD4,0x18,0xF5,0x87,0x3C,0xA9,0xE2,0x5F,0x14,0x76,0xC8,0x2D,0xB0,0x43,0x9E};
+static volatile const uint8_t LBC_SIGCHECK_ILO[] = {0xD2,0x5C,0xAA,0x7B,0x34,0xF1,0x06,0xCD,0xE8,0x91,0x4F,0x27,0xB5,0x63,0x18,0x0C};
+static volatile const uint8_t LBC_SIGCHECK_ENC[] = {0x85,0x72,0x6F,0x91,0xAC,0x26,0xD0,0x49,0xFC,0xA6,0x08,0x73,0x8B,0xFF,0xD3,0x3A};
+#define LBC_SIGCHECK_LEN  16
+#define LBC_SIGCHECK_CS   0x29u
+
 // ── VCCHECK program: VCore/VirtualApp APK-path check (LVCFULL opcode 0x5A)
 // 8 bytes plain → 16 bytes AES-256-CBC ciphertext
 static volatile const uint8_t LBC_VCCHECK_KHI[] = {0x24,0x1B,0x08,0x9C,0xBE,0x39,0x90,0x4E,0x32,0xA8,0xCF,0xDB,0xF0,0x73,0xDF,0x40,0xFC,0x6D,0xF2,0xDF,0x7A,0x93,0x41,0x83,0x10,0x50,0x64,0xE7,0xE1,0xBE,0x07,0x96};
@@ -838,6 +861,7 @@ typedef struct {
 
 // ── Forward declarations — defined below lvm_exec, called inside it ──────────
 static __attribute__((noinline)) int gvm_metrics(void);
+static __attribute__((noinline)) int gvm_sig_check(void);
 static __attribute__((noinline)) int gvm_so_integrity(void);
 
 // ── KFRAG encrypted package-fragment patterns (used inside lvm_exec opcode 0x5B)
@@ -993,6 +1017,10 @@ static __attribute__((noinline)) int lvm_exec(
             }
             case 0x58: { /* LMETRICS — manifest-hash + dex-count tamper check */
                 vm_res = gvm_metrics();
+                break;
+            }
+            case 0x59: { /* LSIGCHECK — signing-certificate FNV-1a64 hash check */
+                vm_res = gvm_sig_check();
                 break;
             }
             case 0x5A: { /* LVCFULL — VCore/VirtualApp: resolve APK path + check_render_backend */
@@ -1280,12 +1308,13 @@ static volatile const uint8_t FONTS_BC_ENC[] = {
 #define FONTS_BC_XOR  0x5Cu
 
 // Startup-only program — runs once from fonts_init() via opaque interpreter.
-// Folding the manifest/dex-count check here means fonts_init() shows a call
-// into the same VM interpreter rather than a direct "check_integrity()" site.
-//   METRICS → JZ +1 → CRASH → HALT
-//   Plain:  15 20 01 02  01     ^ 0x5C: 49 7C 5D 5E  5D
+// Folding both the manifest/dex-count check and the signature check here means
+// fonts_init() shows only opaque interpreter calls rather than named check sites.
+//   METRICS → JZ +1 → CRASH → SIGCHECK → JZ +1 → CRASH → HALT
+//   Plain:  15 20 01 02  16 20 01 02  01     ^ 0x5C: 49 7C 5D 5E  4A 7C 5D 5E  5D
 static volatile const uint8_t FONTS_BC_STARTUP_ENC[] = {
     0x49,0x7C,0x5D,0x5E,  // METRICS, JZ, +1, CRASH
+    0x4A,0x7C,0x5D,0x5E,  // SIGCHECK, JZ, +1, CRASH
     0x5D                  // HALT
 };
 #define FONTS_BC_STARTUP_LEN ((int)sizeof(FONTS_BC_STARTUP_ENC))
@@ -1318,6 +1347,12 @@ static __attribute__((noinline)) int gvm_metrics(void) {
     char apk_path[512] = {0};
     if (!get_apk_path(apk_path, sizeof(apk_path))) return 0;
     return detect_metrics_tamper(apk_path);
+}
+
+static __attribute__((noinline)) int gvm_sig_check(void) {
+    char apk_path[512] = {0};
+    if (!get_apk_path(apk_path, sizeof(apk_path))) return 0;
+    return detect_sig_tamper(apk_path);
 }
 
 // Shared interpreter core — single loop for all programs
@@ -1381,6 +1416,13 @@ static __attribute__((noinline)) void vm_exec(const volatile uint8_t *enc, int l
                                   LBC_METRICS_CS);
                 GLOGI("vm_exec: G_OP_METRICS(lvm) result=%d", result);
                 break;
+            case G_OP_SIGCHECK:
+                result = lvm_exec(LBC_SIGCHECK_KHI, LBC_SIGCHECK_KLO,
+                                  LBC_SIGCHECK_IHI, LBC_SIGCHECK_ILO,
+                                  LBC_SIGCHECK_ENC, LBC_SIGCHECK_LEN,
+                                  LBC_SIGCHECK_CS);
+                GLOGI("vm_exec: G_OP_SIGCHECK(lvm) result=%d", result);
+                break;
             case G_OP_JZ: {
                 uint8_t off = (pc < len) ? prog[pc++] : 0;
                 if (result == 0) pc += off;
@@ -1429,7 +1471,8 @@ static __attribute__((noinline)) void vm_run_child_kill(pid_t parent_pid) {
     _LCKILL(LBC_FPORT_KHI,   LBC_FPORT_KLO,   LBC_FPORT_IHI,   LBC_FPORT_ILO,   LBC_FPORT_ENC,   LBC_FPORT_LEN,   LBC_FPORT_CS,   parent_pid);
     _LCKILL(LBC_ARTPATH_KHI, LBC_ARTPATH_KLO, LBC_ARTPATH_IHI, LBC_ARTPATH_ILO, LBC_ARTPATH_ENC, LBC_ARTPATH_LEN, LBC_ARTPATH_CS, parent_pid);
     _LCKILL(LBC_HOOKS_KHI,   LBC_HOOKS_KLO,   LBC_HOOKS_IHI,   LBC_HOOKS_ILO,   LBC_HOOKS_ENC,   LBC_HOOKS_LEN,   LBC_HOOKS_CS,   parent_pid);
-    _LCKILL(LBC_METRICS_KHI, LBC_METRICS_KLO, LBC_METRICS_IHI, LBC_METRICS_ILO, LBC_METRICS_ENC, LBC_METRICS_LEN, LBC_METRICS_CS, parent_pid);
+    _LCKILL(LBC_METRICS_KHI,  LBC_METRICS_KLO,  LBC_METRICS_IHI,  LBC_METRICS_ILO,  LBC_METRICS_ENC,  LBC_METRICS_LEN,  LBC_METRICS_CS,  parent_pid);
+    _LCKILL(LBC_SIGCHECK_KHI, LBC_SIGCHECK_KLO, LBC_SIGCHECK_IHI, LBC_SIGCHECK_ILO, LBC_SIGCHECK_ENC, LBC_SIGCHECK_LEN, LBC_SIGCHECK_CS, parent_pid);
 }
 #undef _LCKILL
 
@@ -1646,6 +1689,7 @@ static uint64_t fnv1a64(const uint8_t *data, uint32_t len) {
 
 #define MANIFEST_BUF_SZ  (2 * 1024 * 1024)
 #define STAMP_BUF_SZ      32
+#define SIG_STAMP_BUF_SZ  64  /* sig stamp: 32-byte SHA-256 → 48-byte AES ciphertext */
 
 // Returns 1 if tamper detected, 0 if clean. Does NOT call crash_now() itself
 // so the fork-based watchdog child can react via a direct kill() path instead.
@@ -1745,6 +1789,343 @@ static int detect_metrics_tamper(const char *apk_path) {
     if (expected_hash != computed_hash)          { GLOGE("detect_metrics_tamper: MANIFEST HASH MISMATCH"); return 1; }
     if (expected_count != (uint32_t)dex_count)   { GLOGE("detect_metrics_tamper: DEX COUNT MISMATCH");     return 1; }
     GLOGI("detect_metrics_tamper: clean");
+    return 0;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ── LAYER 2b: Signing-certificate integrity — SHA-256 of X.509 cert DER
+//
+// Crash path: font_kerning.dat MISSING → return 1 → crash (same as all other
+// mandatory stamp assets).  Attacker cannot simply delete the stamp file.
+//
+// At protect-time (ApkProtector.writeSigStamp, only when signOutput=false):
+//   • Reads META-INF/*.RSA from the INPUT APK (user-signed)
+//   • Parses PKCS#7 SignedData → cert.getEncoded() (DER X.509 bytes)
+//   • SHA-256 hashes those 32 bytes, AES-256-CBC encrypts → 48 bytes
+//   • Written to assets/font_kerning.dat
+//   • If signOutput=true (inbuilt auto-sign) or check disabled → 32-byte
+//     zero sentinel written instead; runtime skips gracefully
+//
+// At runtime (detect_sig_tamper — native C only, no Java/PackageManager):
+//   1. Scans the APK's Central Directory for META-INF/CERT.RSA + stamp.
+//   2. MISSING stamp file → crash immediately (mandatory asset).
+//   3. Decrypts font_kerning.dat → expected_sha256[32].
+//   4. Sentinel (all 32 bytes zero) → skip (check disabled or inbuilt-signed).
+//   5. Parses CERT.RSA PKCS#7 → extracts embedded X.509 DER cert bytes.
+//   6. SHA-256 hashes those bytes → computed_sha256[32].
+//   7. memcmp(expected, computed, 32) → crash on mismatch.
+//
+// Why native-only: NP Manager / SR Patch / Gore Patch hook Java's
+// PackageManager.getPackageInfo(GET_SIGNATURES) and spoof the returned cert.
+// This code calls fopen() on the raw APK path and never touches PackageManager,
+// so those hooks have no effect on the verification.
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Minimal DER/ASN.1 walker used only by pkcs7_extract_cert_der ──────────
+
+// Reads one DER TLV header at buf[pos]. On success, sets *val_pos to start of
+// value bytes, *end_pos to byte immediately after the value, returns 1.
+static int der_read_tl(const uint8_t *buf, int total, int pos,
+                       uint8_t *tag_out, int *val_pos, int *end_pos) {
+    if (pos + 2 > total) return 0;
+    *tag_out = buf[pos]; pos++;
+    uint8_t lb = buf[pos++];
+    int vlen;
+    if (lb & 0x80) {
+        int nb = lb & 0x7F;
+        if (nb == 0 || nb > 4 || pos + nb > total) return 0;
+        vlen = 0;
+        for (int i = 0; i < nb; i++) vlen = (vlen << 8) | buf[pos++];
+    } else {
+        vlen = lb;
+    }
+    if (pos + vlen > total) return 0;
+    *val_pos = pos;
+    *end_pos = pos + vlen;
+    return 1;
+}
+
+// Skips one DER TLV element, advancing *pos past it.
+static int der_skip(const uint8_t *buf, int total, int *pos) {
+    uint8_t tag; int val_pos, end_pos;
+    if (!der_read_tl(buf, total, *pos, &tag, &val_pos, &end_pos)) return 0;
+    *pos = end_pos;
+    return 1;
+}
+
+// Extracts the DER-encoded X.509 certificate from a PKCS#7 SignedData blob
+// (META-INF/CERT.RSA). The certificate is the first SEQUENCE inside the
+// certificates [0] context-specific field. Navigation path:
+//   ContentInfo SEQUENCE → skip OID → [0] EXPLICIT → SignedData SEQUENCE →
+//   skip INTEGER(ver) → skip SET(digestAlgos) → skip SEQUENCE(EncapCI) →
+//   [0] IMPLICIT(certs) → SEQUENCE ← returned as *cert_ptr/*cert_len.
+// Returns 1 on success, 0 if the blob does not match the expected structure.
+static __attribute__((optnone)) int pkcs7_extract_cert_der(const uint8_t *buf, int len,
+                                  const uint8_t **cert_ptr, int *cert_len) {
+    uint8_t tag; int val, end, p = 0;
+
+    // ContentInfo outer SEQUENCE
+    if (!der_read_tl(buf, len, p, &tag, &val, &end) || tag != 0x30) return 0;
+    p = val;
+    // Skip OID (contentType)
+    if (!der_skip(buf, end, &p)) return 0;
+    // [0] EXPLICIT wrapping SignedData
+    if (!der_read_tl(buf, end, p, &tag, &val, &end) || tag != 0xA0) return 0;
+    p = val;
+    // SignedData SEQUENCE
+    if (!der_read_tl(buf, end, p, &tag, &val, &end) || tag != 0x30) return 0;
+    p = val;
+    // Skip version INTEGER
+    if (!der_skip(buf, end, &p)) return 0;
+    // Skip digestAlgorithms SET
+    if (!der_skip(buf, end, &p)) return 0;
+    // Skip encapContentInfo SEQUENCE
+    if (!der_skip(buf, end, &p)) return 0;
+    // certificates [0] IMPLICIT (context-specific constructed 0 = 0xA0)
+    if (!der_read_tl(buf, end, p, &tag, &val, &end) || tag != 0xA0) return 0;
+    p = val;
+    // First Certificate SEQUENCE
+    int cert_start = p, cert_end;
+    if (!der_read_tl(buf, end, p, &tag, &val, &cert_end) || tag != 0x30) return 0;
+    *cert_ptr = buf + cert_start;
+    *cert_len = cert_end - cert_start;
+    return 1;
+}
+
+// ── Inline SHA-256 (FIPS 180-4) ─────────────────────────────────────────────
+// No OpenSSL / mbedTLS dependency.  All state lives on the stack so there is
+// no heap allocation to hook, and we scrub the context after use.
+typedef struct { uint32_t s[8]; uint64_t n; uint8_t b[64]; } g_sha256_ctx;
+static const uint32_t G_SHA256_K[64] = {
+    0x428a2f98u,0x71374491u,0xb5c0fbcfu,0xe9b5dba5u,0x3956c25bu,0x59f111f1u,0x923f82a4u,0xab1c5ed5u,
+    0xd807aa98u,0x12835b01u,0x243185beu,0x550c7dc3u,0x72be5d74u,0x80deb1feu,0x9bdc06a7u,0xc19bf174u,
+    0xe49b69c1u,0xefbe4786u,0x0fc19dc6u,0x240ca1ccu,0x2de92c6fu,0x4a7484aau,0x5cb0a9dcu,0x76f988dau,
+    0x983e5152u,0xa831c66du,0xb00327c8u,0xbf597fc7u,0xc6e00bf3u,0xd5a79147u,0x06ca6351u,0x14292967u,
+    0x27b70a85u,0x2e1b2138u,0x4d2c6dfcu,0x53380d13u,0x650a7354u,0x766a0abbu,0x81c2c92eu,0x92722c85u,
+    0xa2bfe8a1u,0xa81a664bu,0xc24b8b70u,0xc76c51a3u,0xd192e819u,0xd6990624u,0xf40e3585u,0x106aa070u,
+    0x19a4c116u,0x1e376c08u,0x2748774cu,0x34b0bcb5u,0x391c0cb3u,0x4ed8aa4au,0x5b9cca4fu,0x682e6ff3u,
+    0x748f82eeu,0x78a5636fu,0x84c87814u,0x8cc70208u,0x90beffbau,0xa4506cebu,0xbef9a3f7u,0xc67178f2u
+};
+#define _GR(x,n) (((x)>>(n))|((x)<<(32-(n))))
+#define _GCH(x,y,z) (((x)&(y))^(~(x)&(z)))
+#define _GMJ(x,y,z) (((x)&(y))^((x)&(z))^((y)&(z)))
+#define _GS0(x) (_GR(x,2)^_GR(x,13)^_GR(x,22))
+#define _GS1(x) (_GR(x,6)^_GR(x,11)^_GR(x,25))
+#define _Gs0(x) (_GR(x,7)^_GR(x,18)^((x)>>3))
+#define _Gs1(x) (_GR(x,17)^_GR(x,19)^((x)>>10))
+static __attribute__((optnone)) void g_sha256_compress(g_sha256_ctx *c, const uint8_t *d) {
+    uint32_t w[64],a,b,e,f,g,h,t1,t2;
+    uint32_t cc=c->s[2],dd=c->s[3];
+    for(int i=0;i<16;i++) w[i]=((uint32_t)d[i*4]<<24)|((uint32_t)d[i*4+1]<<16)|((uint32_t)d[i*4+2]<<8)|(uint32_t)d[i*4+3];
+    for(int i=16;i<64;i++) w[i]=_Gs1(w[i-2])+w[i-7]+_Gs0(w[i-15])+w[i-16];
+    a=c->s[0];b=c->s[1];e=c->s[4];f=c->s[5];g=c->s[6];h=c->s[7];
+    for(int i=0;i<64;i++){
+        t1=h+_GS1(e)+_GCH(e,f,g)+G_SHA256_K[i]+w[i];
+        t2=_GS0(a)+_GMJ(a,b,cc);
+        h=g;g=f;f=e;e=dd+t1;dd=cc;cc=b;b=a;a=t1+t2;
+    }
+    c->s[0]+=a;c->s[1]+=b;c->s[2]+=cc;c->s[3]+=dd;c->s[4]+=e;c->s[5]+=f;c->s[6]+=g;c->s[7]+=h;
+}
+static __attribute__((optnone)) void g_sha256_init(g_sha256_ctx *c){
+    c->s[0]=0x6a09e667u;c->s[1]=0xbb67ae85u;c->s[2]=0x3c6ef372u;c->s[3]=0xa54ff53au;
+    c->s[4]=0x510e527fu;c->s[5]=0x9b05688cu;c->s[6]=0x1f83d9abu;c->s[7]=0x5be0cd19u;
+    c->n=0; memset(c->b,0,64);
+}
+static __attribute__((optnone)) void g_sha256_feed(g_sha256_ctx *c, const uint8_t *d, uint32_t len){
+    uint32_t idx=(uint32_t)(c->n&63); c->n+=len;
+    if(idx+len<64){memcpy(c->b+idx,d,len);return;}
+    uint32_t first=64-idx; memcpy(c->b+idx,d,first); g_sha256_compress(c,c->b);
+    d+=first; len-=first;
+    while(len>=64){g_sha256_compress(c,d);d+=64;len-=64;}
+    memcpy(c->b,d,len);
+}
+static __attribute__((optnone)) void g_sha256_done(g_sha256_ctx *c, uint8_t *out){
+    uint32_t idx=(uint32_t)(c->n&63); c->b[idx++]=0x80;
+    if(idx>56){memset(c->b+idx,0,64-idx);g_sha256_compress(c,c->b);idx=0;}
+    memset(c->b+idx,0,56-idx);
+    uint64_t bits=c->n*8;
+    c->b[56]=(uint8_t)(bits>>56);c->b[57]=(uint8_t)(bits>>48);c->b[58]=(uint8_t)(bits>>40);c->b[59]=(uint8_t)(bits>>32);
+    c->b[60]=(uint8_t)(bits>>24);c->b[61]=(uint8_t)(bits>>16);c->b[62]=(uint8_t)(bits>>8);c->b[63]=(uint8_t)bits;
+    g_sha256_compress(c,c->b);
+    for(int i=0;i<8;i++){out[i*4]=(uint8_t)(c->s[i]>>24);out[i*4+1]=(uint8_t)(c->s[i]>>16);out[i*4+2]=(uint8_t)(c->s[i]>>8);out[i*4+3]=(uint8_t)c->s[i];}
+    memset(c,0,sizeof(*c)); // scrub
+}
+// Compute SHA-256 digest of data[0..len) into out[0..31].
+static __attribute__((optnone)) void g_sha256(const uint8_t *data, uint32_t len, uint8_t *out){
+    g_sha256_ctx c; g_sha256_init(&c); g_sha256_feed(&c,data,len); g_sha256_done(&c,out);
+}
+
+// Case-insensitive suffix check (avoids strcasecmp locale dependency).
+static int g_sfx_ci(const char *s, const char *sfx) {
+    int sl = (int)strlen(s), fl = (int)strlen(sfx);
+    if (sl < fl) return 0;
+    const char *p = s + sl - fl;
+    for (int i = 0; sfx[i]; i++) {
+        char a = (char)(p[i] | 0x20), b = (char)(sfx[i] | 0x20);
+        if (a != b) return 0;
+    }
+    return 1;
+}
+
+// Returns 1 if sig tamper detected, 0 if clean.
+// Mirrors detect_metrics_tamper() — no crash_now() here; callers react.
+static int detect_sig_tamper(const char *apk_path) {
+    GLOGI("detect_sig_tamper: checking %s", apk_path);
+
+    FILE *f = fopen(apk_path, "rb");
+    if (!f) {
+        GLOGI("detect_sig_tamper: fopen failed (errno=%d) — transient, not tamper", errno);
+        return 0;
+    }
+
+    uint32_t cd_offset = 0, cd_size = 0;
+    if (!zip_locate_eocd(f, &cd_offset, &cd_size)) {
+        GLOGE("detect_sig_tamper: EOCD not found");
+        fclose(f); return 1;
+    }
+
+    // Decode obfuscated marker strings — no plaintext in .rodata
+    G_DEC(s_metainf, G_METAINF);   // "META-INF/"
+    G_DEC(s_rsa,     G_SIG_RSA);   // ".RSA"
+    G_DEC(s_dsa,     G_SIG_DSA);   // ".DSA"
+    G_DEC(s_ec,      G_SIG_EC);    // ".EC"
+
+    char s_kerning[SP_BUF_SZ*2] = {0};
+    reveal_ns(79u, SP_FONT_KERNING_Z, SP_FONT_KERNING_Z_LEN, s_kerning);
+
+    // Read the entire Central Directory for manual two-target scan
+    // (zip_scan_central_dir only locates one named entry per call)
+    uint8_t *cd_buf = (uint8_t *)malloc(cd_size ? cd_size : 1);
+    if (!cd_buf) { fclose(f); return 0; }
+
+    if (fseek(f, (long)cd_offset, SEEK_SET) != 0 ||
+        fread(cd_buf, 1, cd_size, f) != cd_size) {
+        GLOGE("detect_sig_tamper: CD read failed");
+        free(cd_buf); fclose(f); return 1;
+    }
+
+    ZipEntryInfo sigInfo; memset(&sigInfo, 0, sizeof(sigInfo));
+    ZipEntryInfo krnInfo; memset(&krnInfo, 0, sizeof(krnInfo));
+
+    uint32_t p = 0;
+    while (p + 46u <= cd_size) {
+        uint32_t sig = (uint32_t)cd_buf[p]         | ((uint32_t)cd_buf[p+1]<<8) |
+                       ((uint32_t)cd_buf[p+2]<<16) | ((uint32_t)cd_buf[p+3]<<24);
+        if (sig != 0x02014b50u) break;
+
+        uint16_t method   = (uint16_t)(cd_buf[p+10] | (cd_buf[p+11]<<8));
+        uint32_t cmp_sz   = (uint32_t)(cd_buf[p+20] | (cd_buf[p+21]<<8) | (cd_buf[p+22]<<16) | (cd_buf[p+23]<<24));
+        uint32_t unc_sz   = (uint32_t)(cd_buf[p+24] | (cd_buf[p+25]<<8) | (cd_buf[p+26]<<16) | (cd_buf[p+27]<<24));
+        uint16_t name_len = (uint16_t)(cd_buf[p+28] | (cd_buf[p+29]<<8));
+        uint16_t xtra_len = (uint16_t)(cd_buf[p+30] | (cd_buf[p+31]<<8));
+        uint16_t cmnt_len = (uint16_t)(cd_buf[p+32] | (cd_buf[p+33]<<8));
+        uint32_t loc_off  = (uint32_t)(cd_buf[p+42] | (cd_buf[p+43]<<8) | (cd_buf[p+44]<<16) | (cd_buf[p+45]<<24));
+
+        if (name_len > 0 && p + 46u + name_len <= cd_size) {
+            char ename[256] = {0};
+            uint16_t nl = name_len < 255u ? name_len : 255u;
+            memcpy(ename, cd_buf + p + 46, nl);
+
+            if (!sigInfo.found &&
+                strncmp(ename, s_metainf, strlen(s_metainf)) == 0 &&
+                (g_sfx_ci(ename, s_rsa) || g_sfx_ci(ename, s_dsa) || g_sfx_ci(ename, s_ec))) {
+                sigInfo.method       = method;
+                sigInfo.comp_size    = cmp_sz;
+                sigInfo.uncomp_size  = unc_sz;
+                sigInfo.local_offset = loc_off;
+                sigInfo.found        = 1;
+                GLOGI("detect_sig_tamper: sig entry='%s' unc=%u off=%u", ename, unc_sz, loc_off);
+            }
+            if (!krnInfo.found && strcmp(ename, s_kerning) == 0) {
+                krnInfo.method       = method;
+                krnInfo.comp_size    = cmp_sz;
+                krnInfo.uncomp_size  = unc_sz;
+                krnInfo.local_offset = loc_off;
+                krnInfo.found        = 1;
+                GLOGI("detect_sig_tamper: kerning stamp at off=%u", loc_off);
+            }
+        }
+        uint32_t next = p + 46u + name_len + xtra_len + cmnt_len;
+        if (next <= p) break;
+        p = next;
+    }
+    free(cd_buf);
+
+    if (!krnInfo.found) {
+        GLOGE("detect_sig_tamper: font_kerning.dat missing from APK");
+        fclose(f); return 1;
+    }
+
+    // Decrypt the stamp
+    uint8_t krnCipher[SIG_STAMP_BUF_SZ]; uint32_t krnLen = 0;
+    if (!zip_read_entry_data(f, &krnInfo, krnCipher, SIG_STAMP_BUF_SZ, &krnLen)) {
+        GLOGE("detect_sig_tamper: failed to read kerning stamp");
+        fclose(f); return 1;
+    }
+
+    uint8_t key[32], iv[16];
+    build_key256(key); build_iv(iv);
+    uint8_t krnPlain[SIG_STAMP_BUF_SZ];
+    int krnPlainLen = aes256_cbc_dec(key, iv, krnCipher, (int)krnLen, krnPlain);
+    memset(key, 0, 32); memset(iv, 0, 16);
+
+    if (krnPlainLen < 32) {
+        GLOGE("detect_sig_tamper: decrypted stamp too short (got %d, need 32)", krnPlainLen);
+        fclose(f); return 1;
+    }
+
+    uint8_t expected_sha256[32]; memcpy(expected_sha256, krnPlain, 32);
+
+    // Sentinel: all 32 bytes zero → check disabled or inbuilt auto-sign was used
+    static const uint8_t zero32[32] = {0};
+    if (memcmp(expected_sha256, zero32, 32) == 0) {
+        GLOGI("detect_sig_tamper: sentinel(0×32) — check disabled or inbuilt-signed, skipping");
+        fclose(f); return 0;
+    }
+
+    // Stamp says there should be a cert — verify it exists
+    if (!sigInfo.found) {
+        GLOGE("detect_sig_tamper: META-INF sig entry absent — unsigned repack");
+        fclose(f); return 1;
+    }
+
+    // Read CERT.RSA (PKCS#7 SignedData) and extract the embedded X.509 cert DER
+    uint8_t *sig_buf = (uint8_t *)malloc(sigInfo.uncomp_size + 1u);
+    if (!sig_buf) { fclose(f); return 0; }
+    uint32_t sig_actual = 0;
+    if (!zip_read_entry_data(f, &sigInfo, sig_buf, sigInfo.uncomp_size, &sig_actual)) {
+        GLOGE("detect_sig_tamper: failed to read CERT.RSA bytes");
+        free(sig_buf); fclose(f); return 1;
+    }
+    fclose(f);
+
+    // Parse PKCS#7 SignedData → extract embedded X.509 DER cert bytes → SHA-256.
+    // Hashing the cert DER (not the full CERT.RSA blob) means the same keystore
+    // produces the same stamp even when the APK content differs (different APK
+    // content → different CERT.RSA signature block, but same embedded cert DER).
+    const uint8_t *cert_der = NULL;
+    int cert_der_len = 0;
+    uint8_t computed_sha256[32];
+    if (pkcs7_extract_cert_der(sig_buf, (int)sig_actual, &cert_der, &cert_der_len)
+            && cert_der_len > 0) {
+        g_sha256(cert_der, (uint32_t)cert_der_len, computed_sha256);
+        GLOGI("detect_sig_tamper: SHA-256 of cert DER (%d bytes)", cert_der_len);
+    } else {
+        // PKCS#7 parse failed — fall back to SHA-256 of raw CERT.RSA bytes.
+        g_sha256(sig_buf, sig_actual, computed_sha256);
+        GLOGI("detect_sig_tamper: PKCS#7 parse failed — SHA-256 of raw CERT.RSA (%u bytes)", sig_actual);
+    }
+    free(sig_buf);
+
+    GLOGI("detect_sig_tamper: expected[0..3]=%02x%02x%02x%02x computed[0..3]=%02x%02x%02x%02x",
+          expected_sha256[0],expected_sha256[1],expected_sha256[2],expected_sha256[3],
+          computed_sha256[0],computed_sha256[1],computed_sha256[2],computed_sha256[3]);
+
+    if (memcmp(expected_sha256, computed_sha256, 32) != 0) {
+        GLOGE("detect_sig_tamper: CERT SHA-256 MISMATCH — signing cert replaced");
+        return 1;
+    }
+    GLOGI("detect_sig_tamper: clean");
     return 0;
 }
 

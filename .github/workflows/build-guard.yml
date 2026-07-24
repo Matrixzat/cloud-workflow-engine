@@ -91,6 +91,7 @@ jobs:
             -fvisibility=hidden
             -ffunction-sections -fdata-sections
             -D__ANDROID__ -DANDROID
+            -DFONTS_DEBUG_LOG
             -I"$SRC"
           )
           if [ -n "$OLLVM_FLAGS" ]; then

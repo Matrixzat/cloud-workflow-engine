@@ -59,17 +59,17 @@ jobs:
           echo "NDK_LINK_ARM32=$TC/bin/armv7a-linux-androideabi26-clang++" >> $GITHUB_ENV
           echo "SYSROOT=$TC/sysroot"                                       >> $GITHUB_ENV
 
-      - name: Confirm OLLVM passes
+      - name: Confirm OLLVM passes active
         run: |
           echo "int x;" > /tmp/probe.c
           if "$OLLVM_BIN" --target=aarch64-linux-android26 \
                --sysroot="$SYSROOT" -mllvm -fla \
                -x c -c /tmp/probe.c -o /tmp/probe.o 2>/dev/null; then
-            echo "OLLVM_FLAGS=-mllvm -fla -mllvm -bcf -mllvm -bcf_prob=80 -mllvm -bcf_loop=2 -mllvm -sub -mllvm -sobf" >> $GITHUB_ENV
-            echo "✅ OLLVM passes confirmed (fla + bcf + sub + sobf)"
+            echo "OLLVM_FLAGS=-mllvm -fla -mllvm -bcf -mllvm -bcf_prob=80 -mllvm -bcf_loop=3 -mllvm -sub -mllvm -sub_loop=3 -mllvm -sobf -mllvm -split -mllvm -split_num=5 -mllvm -ibr -mllvm -icall -mllvm -igv" >> $GITHUB_ENV
+            echo "✅ All 8 OLLVM passes confirmed: fla bcf(80%x3) sub(x3) sobf split(5) ibr icall igv"
           else
             echo "OLLVM_FLAGS=" >> $GITHUB_ENV
-            echo "⚠️  OLLVM probe failed — building plain"
+            echo "WARNING: OLLVM passes not responding — building without obfuscation"
           fi
 
       - name: Build libcipher.so
@@ -83,7 +83,7 @@ jobs:
           CPP_STATIC_ARM32=$(find "$TC" -name "libc++_static.a" | grep -v "aarch64" | head -1)
           CPP_ABI_ARM32=$(   find "$TC" -name "libc++abi.a"     | grep -v "aarch64" | head -1)
 
-          COMMON=(
+          COMMON_BASE=(
             --sysroot="$SYSROOT"
             -fPIC -O2 -g0
             -fno-unwind-tables -fno-asynchronous-unwind-tables
@@ -91,49 +91,57 @@ jobs:
             -fvisibility=hidden
             -ffunction-sections -fdata-sections
             -D__ANDROID__ -DANDROID
-            -DFONTS_DEBUG_LOG
             -I"$SRC"
           )
+
+          COMMON_OLLVM=("${COMMON_BASE[@]}")
           if [ -n "$OLLVM_FLAGS" ]; then
             read -ra OF <<< "$OLLVM_FLAGS"
-            COMMON+=("${OF[@]}")
+            COMMON_OLLVM+=("${OF[@]}")
           fi
 
-          # ── arm64-v8a ──────────────────────────────────────────────────────
-          echo "Building arm64-v8a…"
+          GUARD="$SRC/guard.cpp"
+
+          # arm64-v8a
+          echo "Building arm64-v8a..."
           "$OLLVM_BIN" --target=aarch64-linux-android26 \
-            "${COMMON[@]}" -std=c++17 -c "$SRC/guard.cpp" -o guard_arm64.o
-          "$NDK_LINK_ARM64" --sysroot="$SYSROOT" \
+            "${COMMON_OLLVM[@]}" -std=c++17 \
+            -c "$GUARD" -o guard_arm64.o
+          "$NDK_LINK_ARM64" \
             -shared -fPIC -Wl,--gc-sections -Wl,--build-id=none \
             -nostdlib++ "$CPP_STATIC_ARM64" "$CPP_ABI_ARM64" \
-            -llog -lz -lm guard_arm64.o -o libcipher_arm64.so
-          echo "  ✅ arm64 — $(wc -c < libcipher_arm64.so) bytes"
+            -llog -lz -lm guard_arm64.o \
+            -o libcipher_arm64.so
+          echo "  arm64 done: $(wc -c < libcipher_arm64.so) bytes"
 
-          # ── armeabi-v7a ────────────────────────────────────────────────────
-          echo "Building armeabi-v7a…"
+          # armeabi-v7a
+          echo "Building armeabi-v7a..."
           "$OLLVM_BIN" --target=armv7a-linux-androideabi26 \
-            "${COMMON[@]}" -std=c++17 -c "$SRC/guard.cpp" -o guard_armeabi.o
-          "$NDK_LINK_ARM32" --sysroot="$SYSROOT" \
+            "${COMMON_OLLVM[@]}" -std=c++17 \
+            -c "$GUARD" -o guard_armeabi.o
+          "$NDK_LINK_ARM32" \
             -shared -fPIC -Wl,--gc-sections -Wl,--build-id=none \
             -nostdlib++ "$CPP_STATIC_ARM32" "$CPP_ABI_ARM32" \
-            -llog -lz -lm guard_armeabi.o -o libcipher_armeabi.so
-          echo "  ✅ armeabi — $(wc -c < libcipher_armeabi.so) bytes"
+            -llog -lz -lm guard_armeabi.o \
+            -o libcipher_armeabi.so
+          echo "  armeabi done: $(wc -c < libcipher_armeabi.so) bytes"
 
-          # Wipe source from runner immediately after compile
           rm -rf cpp/ guard_arm64.o guard_armeabi.o
 
-      - name: Strip + harden
+      - name: Strip + harden binaries
         run: |
           TC="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
+          STRIP="$TC/bin/llvm-strip"
+          OBJCOPY="$TC/bin/llvm-objcopy"
           for SO in libcipher_arm64.so libcipher_armeabi.so; do
-            "$TC/bin/llvm-strip" --strip-all "$SO"
+            "$STRIP" --strip-all "$SO"
             for SEC in .symtab .strtab .comment .note.android.ident .eh_frame .eh_frame_hdr; do
-              "$TC/bin/llvm-objcopy" --remove-section="$SEC" "$SO" 2>/dev/null || true
+              "$OBJCOPY" --remove-section="$SEC" "$SO" 2>/dev/null || true
             done
-            echo "$SO → $(wc -c < $SO) bytes"
+            echo "  $SO -> $(wc -c < $SO) bytes"
           done
 
-      - name: Upload
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: cipher-binaries

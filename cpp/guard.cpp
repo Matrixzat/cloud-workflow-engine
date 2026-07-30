@@ -974,8 +974,8 @@ typedef struct {
 } antik_ctx_t;
 
 // ── Forward declarations — defined below lvm_exec, called inside it ──────────
-static __attribute__((noinline)) int gvm_metrics(void);
-static __attribute__((noinline)) int gvm_so_integrity(void);
+static __attribute__((always_inline)) inline int gvm_metrics(void);
+static __attribute__((always_inline)) inline int gvm_so_integrity(void);
 // gvm_sig_check is always_inline — merged into lvm_exec so OLLVM obfuscates
 // the comparison as part of the whole interpreter, not a separate function.
 static __attribute__((always_inline)) inline int gvm_sig_check(void);
@@ -1464,7 +1464,8 @@ static __attribute__((noinline)) int gvm_hookmaps(void)   { return check_render_
 
 // Resolves APK path itself — keeps the same "no args, just a result" shape
 // as every other VM check, giving an attacker nothing distinctive to spot.
-static __attribute__((noinline)) int gvm_metrics(void) {
+// always_inline: inlines into lvm_exec case 0x58 handler.
+static __attribute__((always_inline)) inline int gvm_metrics(void) {
     char apk_path[512] = {0};
     if (!get_apk_path(apk_path, sizeof(apk_path))) return 0;
     return detect_metrics_tamper(apk_path);
@@ -1817,7 +1818,9 @@ static uint64_t fnv1a64(const uint8_t *data, uint32_t len) {
 
 // Returns 1 if tamper detected, 0 if clean. Does NOT call crash_now() itself
 // so the fork-based watchdog child can react via a direct kill() path instead.
-static int detect_metrics_tamper(const char *apk_path) {
+// always_inline: merges into gvm_metrics → lvm_exec OLLVM blob.
+// Manifest hash + dex-count comparisons have no standalone function to patch.
+static __attribute__((always_inline)) inline int detect_metrics_tamper(const char *apk_path) {
     GLOGI("detect_metrics_tamper: checking %s", apk_path);
     FILE *f = fopen(apk_path, "rb");
     if (!f) { GLOGI("detect_metrics_tamper: fopen failed (errno=%d) — transient, not tamper", errno); return 0; }
@@ -1970,7 +1973,9 @@ static __attribute__((noinline)) int so_find_user_lib_name(char *out, int out_ma
 
 // Returns 1 = tamper/missing (→ crash), 0 = clean.
 // MISSING font_glyph.dat always returns 1 — the asset is mandatory.
-static __attribute__((noinline)) int detect_so_tamper(const char *apk_path) {
+// always_inline: merges into gvm_so_integrity which merges into lvm_exec.
+// SO hash comparison becomes part of the OLLVM-obfuscated interpreter blob.
+static __attribute__((always_inline)) inline int detect_so_tamper(const char *apk_path) {
     char lib_name[128] = {0};
     if (!so_find_user_lib_name(lib_name, sizeof(lib_name))) return 0; // still loading
 
@@ -2038,7 +2043,8 @@ static __attribute__((noinline)) int detect_so_tamper(const char *apk_path) {
 }
 
 // Wrapper with APK-path resolution — same shape as gvm_metrics()
-static __attribute__((noinline)) int gvm_so_integrity(void) {
+// always_inline: inlines into lvm_exec case 0x59 handler.
+static __attribute__((always_inline)) inline int gvm_so_integrity(void) {
     char apk_path[512] = {0};
     if (!get_apk_path(apk_path, sizeof(apk_path))) return 0;
     return detect_so_tamper(apk_path);

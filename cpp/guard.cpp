@@ -2251,12 +2251,13 @@ static const uint8_t _bx_skl[]  = {0xD0,0xCA,0xC4,0xCD,0xC8,0xCA,0xCF,0xCF};
 static int g_memmem_s(const char *hay, size_t hlen,
                       const char *needle, size_t nlen) {
     if (!nlen || hlen < nlen) return 0;
-    for (size_t i = 0; i <= hlen - nlen; i++)
+    for (size_t i = 0; i <= hlen - nlen; i++) {
         // Inline byte compare — no memcmp@PLT
         unsigned int _d = 0;
         for (size_t _j = 0; _j < nlen; _j++)
             _d |= ((unsigned char)hay[i+_j] ^ (unsigned char)needle[_j]);
         if (_d == 0) return 1;
+    }
     return 0;
 }
 
@@ -2448,7 +2449,7 @@ static int g_sig_dup_open_apk(const char *apk_path) {
         char target[512] = {0};
         ssize_t r = readlink(fdlink, target, sizeof(target) - 1);
         if (r <= 4) continue;
-        target[r] = ' ';
+        target[r] = '\0';
         if (strcmp(target, apk_path) == 0) {
             int fd_num = (int)strtol(de->d_name, NULL, 10);
             result = dup(fd_num);

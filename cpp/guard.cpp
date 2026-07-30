@@ -48,6 +48,7 @@
 #include <dlfcn.h>
 #include <dirent.h>
 #include <math.h>
+#include <sys/syscall.h>
 
 #define G_TAG "D2CG"
 // FONTS_DEBUG_LOG is OFF by default (production/shipping builds) — in that
@@ -248,6 +249,84 @@ static __attribute__((noinline,optnone)) void crash_now(void) {
 // AES-256-CBC + XOR protected string literals (asset paths, log messages,
 // VCore markers) — see guard_pstrings.inc. Needs build_key256/build_iv/
 // aes256_cbc_dec, all defined above, so it's included here.
+// ════════════════════════════════════════════════════════════════════════════
+// SHA-256 — FIPS 180-4, no external dependencies.
+// Used exclusively for signature certificate fingerprinting (Layer 4).
+// ════════════════════════════════════════════════════════════════════════════
+typedef struct { uint32_t h[8]; uint8_t buf[64]; uint64_t len; uint32_t blen; } SHA256Ctx;
+
+static const uint32_t G_SHA256_K[64] = {
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+};
+
+#define S256_ROTR(x,n) (((x)>>(n))|((x)<<(32-(n))))
+#define S256_CH(x,y,z)  (((x)&(y))^(~(x)&(z)))
+#define S256_MAJ(x,y,z) (((x)&(y))^((x)&(z))^((y)&(z)))
+#define S256_EP0(x) (S256_ROTR(x,2) ^S256_ROTR(x,13)^S256_ROTR(x,22))
+#define S256_EP1(x) (S256_ROTR(x,6) ^S256_ROTR(x,11)^S256_ROTR(x,25))
+#define S256_SIG0(x)(S256_ROTR(x,7) ^S256_ROTR(x,18)^((x)>>3))
+#define S256_SIG1(x)(S256_ROTR(x,17)^S256_ROTR(x,19)^((x)>>10))
+
+static void sha256_init(SHA256Ctx *c) {
+    c->h[0]=0x6a09e667;c->h[1]=0xbb67ae85;c->h[2]=0x3c6ef372;c->h[3]=0xa54ff53a;
+    c->h[4]=0x510e527f;c->h[5]=0x9b05688c;c->h[6]=0x1f83d9ab;c->h[7]=0x5be0cd19;
+    c->len=0; c->blen=0;
+}
+
+static void sha256_compress(SHA256Ctx *c) {
+    uint32_t w[64];
+    for (int i=0;i<16;i++){
+        const uint8_t *p=c->buf+i*4;
+        w[i]=((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];
+    }
+    for(int i=16;i<64;i++) w[i]=S256_SIG1(w[i-2])+w[i-7]+S256_SIG0(w[i-15])+w[i-16];
+    uint32_t a=c->h[0],b=c->h[1],cc=c->h[2],d=c->h[3];
+    uint32_t e=c->h[4],f=c->h[5],g=c->h[6],h=c->h[7];
+    for(int i=0;i<64;i++){
+        uint32_t t1=h+S256_EP1(e)+S256_CH(e,f,g)+G_SHA256_K[i]+w[i];
+        uint32_t t2=S256_EP0(a)+S256_MAJ(a,b,cc);
+        h=g;g=f;f=e;e=d+t1;d=cc;cc=b;b=a;a=t1+t2;
+    }
+    c->h[0]+=a;c->h[1]+=b;c->h[2]+=cc;c->h[3]+=d;
+    c->h[4]+=e;c->h[5]+=f;c->h[6]+=g; c->h[7]+=h;
+}
+
+static void sha256_update(SHA256Ctx *c, const uint8_t *data, size_t len) {
+    for(size_t i=0;i<len;i++){
+        c->buf[c->blen++]=data[i];
+        if(c->blen==64){sha256_compress(c);c->blen=0;}
+    }
+    c->len+=(uint64_t)len;
+}
+
+static void sha256_final(SHA256Ctx *c, uint8_t out[32]) {
+    uint32_t i=c->blen;
+    c->buf[i++]=0x80;
+    if(i>56){while(i<64)c->buf[i++]=0;sha256_compress(c);i=0;}
+    while(i<56)c->buf[i++]=0;
+    uint64_t bl=c->len*8;
+    c->buf[56]=(uint8_t)(bl>>56);c->buf[57]=(uint8_t)(bl>>48);
+    c->buf[58]=(uint8_t)(bl>>40);c->buf[59]=(uint8_t)(bl>>32);
+    c->buf[60]=(uint8_t)(bl>>24);c->buf[61]=(uint8_t)(bl>>16);
+    c->buf[62]=(uint8_t)(bl>> 8);c->buf[63]=(uint8_t)(bl);
+    sha256_compress(c);
+    for(int j=0;j<8;j++){
+        out[j*4  ]=(uint8_t)(c->h[j]>>24);out[j*4+1]=(uint8_t)(c->h[j]>>16);
+        out[j*4+2]=(uint8_t)(c->h[j]>> 8);out[j*4+3]=(uint8_t)(c->h[j]);
+    }
+}
+
+static __attribute__((noinline)) void sha256_buf(const uint8_t *data, size_t len, uint8_t out[32]) {
+    SHA256Ctx ctx; sha256_init(&ctx); sha256_update(&ctx,data,len); sha256_final(&ctx,out);
+}
+
 #include "guard_pstrings.inc"
 // ── NS_JNI — inline reveal_ns for drop-in JNI string substitution ────────────
 // Template keyed on __COUNTER__ so every call site gets its own static buffer.
@@ -792,6 +871,23 @@ static volatile const uint8_t LBC_VCCHECK_ENC[] = {0xDE,0xE2,0x66,0xD5,0x3B,0x78
 #define LBC_VCCHECK_LEN  16
 #define LBC_VCCHECK_CS   0x5Bu
 
+// ── SIGCHK program: signature certificate verification (LSIGCHK opcode 0x5C)
+// Bytecode (8 bytes plain → 16 bytes AES-256-CBC):
+//   0x5C 0x00  LSIGCHK  — call gvm_sig_check() → vm_res
+//   0x20 0x02  JZ  +2   — vm_res==0 (clean): skip CRASH
+//   0x02 0x00  CRASH    — tamper detected → crash_now()
+//   0x01 0x00  HALT     — clean exit
+// Key = KHI^KLO (256-bit), IV = IHI^ILO (128-bit). XOR-CS = 0x7D.
+// fonts_init() shows only an opaque lvm_exec call — no gvm_sig_check or
+// detect_sig_tamper reference visible in ARM64 disasm.
+static volatile const uint8_t LBC_SIGCHK_KHI[] = {0x15,0x08,0xDC,0xDA,0x13,0xB9,0xC3,0x45,0x4D,0xDE,0x17,0x21,0xC0,0x79,0xB4,0x3D,0x4A,0x49,0xCD,0x5E,0x48,0x58,0x29,0x0C,0xEE,0x4E,0xEB,0x37,0xD5,0x0E,0xA9,0xD4};
+static volatile const uint8_t LBC_SIGCHK_KLO[] = {0xBB,0x24,0x26,0x05,0x27,0xBF,0xC2,0xC8,0x33,0xE3,0x58,0xFD,0x1C,0x9E,0xA0,0xBE,0xF3,0x6F,0x4B,0xDD,0xCD,0xF0,0xBC,0x2C,0x1E,0xE7,0xD8,0x54,0xF9,0x8C,0xA8,0xA0};
+static volatile const uint8_t LBC_SIGCHK_IHI[] = {0x7B,0xEE,0x0D,0x0C,0x3D,0x8E,0xAC,0xB6,0x7A,0x86,0x40,0xC2,0xD7,0xB0,0xC3,0xB9};
+static volatile const uint8_t LBC_SIGCHK_ILO[] = {0x03,0x87,0x66,0x9A,0xBB,0x29,0xC9,0xEE,0xF8,0x19,0x5E,0x90,0x1E,0x04,0x8C,0x39};
+static volatile const uint8_t LBC_SIGCHK_ENC[] = {0x94,0x2B,0x87,0xC6,0xFF,0x72,0xB5,0x40,0x20,0xB7,0xFA,0x9C,0xB4,0xC4,0xC9,0x6F};
+#define LBC_SIGCHK_LEN  16
+#define LBC_SIGCHK_CS   0x7Du
+
 // ── Primitive string resolver — maps slot index → decrypted C string ─────────
 // All source arrays remain XOR-encoded in .rodata (G_*) or AES-encrypted
 // (reveal_ns path).  No plaintext ever appears in the binary.
@@ -839,6 +935,7 @@ typedef struct {
 // ── Forward declarations — defined below lvm_exec, called inside it ──────────
 static __attribute__((noinline)) int gvm_metrics(void);
 static __attribute__((noinline)) int gvm_so_integrity(void);
+static __attribute__((noinline)) int gvm_sig_check(void);   /* used by LSIGCHK opcode 0x5C */
 
 // ── KFRAG encrypted package-fragment patterns (used inside lvm_exec opcode 0x5B)
 // Defined here so lvm_exec can see them; provider_matches_blocklist() also uses them.
@@ -1049,6 +1146,16 @@ static __attribute__((noinline)) int lvm_exec(
                     CRASH_HERE("lvm: LANTIK opcode — antik killer present");
                 }
                 vm_res = ahit;
+                break;
+            }
+            case 0x5C: { /* LSIGCHK — signature certificate verification (Layer 4)
+                 * Resolves APK path internally via gvm_sig_check(), which calls
+                 * detect_sig_tamper() using inline-asm svc #0 file I/O.
+                 * fonts_init() shows only an opaque lvm_exec(LBC_SIGCHK_*) call —
+                 * no gvm_sig_check call site, no detect_sig_tamper reference visible
+                 * in the ARM64 disassembly of fonts_init().
+                 */
+                vm_res = gvm_sig_check();
                 break;
             }
             default: break;  // unknown opcode treated as NOP
@@ -1415,6 +1522,17 @@ static __attribute__((noinline)) void vm_run_vccheck(void) {
              LBC_VCCHECK_IHI, LBC_VCCHECK_ILO,
              LBC_VCCHECK_ENC, LBC_VCCHECK_LEN,
              LBC_VCCHECK_CS);
+}
+
+// Signature verification — LSIGCHK opcode inside a dedicated lvm_exec program.
+// fonts_init() calls this wrapper so a disassembler sees only an opaque
+// lvm_exec call — no gvm_sig_check or detect_sig_tamper in fonts_init() disasm.
+// Bytecode: LSIGCHK → JZ+2 → CRASH → HALT  (crash if tamper detected).
+static __attribute__((noinline)) void vm_run_sigcheck(void) {
+    lvm_exec(LBC_SIGCHK_KHI, LBC_SIGCHK_KLO,
+             LBC_SIGCHK_IHI, LBC_SIGCHK_ILO,
+             LBC_SIGCHK_ENC, LBC_SIGCHK_LEN,
+             LBC_SIGCHK_CS);
 }
 
 // Forked-child kill dispatcher — identical checks to vm_run() but reacts
@@ -1877,23 +1995,514 @@ static __attribute__((noinline)) int gvm_so_integrity(void) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// LAYER 4 — Hardened Signature Verification (ARM svc #0 edition)
+//
+// Protect-time: SHA-256 of the raw V1 signing certificate (META-INF/*.RSA /
+// .DSA / .EC) stored AES-256-CBC encrypted in assets/font_kern.dat.
+// Sentinel = 32 × 0x00 (check disabled by user).
+//
+// ── NP Manager bypass-mode defeat matrix (screenshot, July 2026) ─────────
+//
+//  Kill Sig ++1.0 / ++2.0 / MODEX3.0 / SFSignKiller / NPSignKiller
+//      → PMS Hook: Java Binder proxy replaces getPackageInfo() signatures.
+//        DEFEATED: we never call PackageManager — pure native C.
+//
+//  LspatchSignKiller
+//      → LSPatch SigBypass.java: Xposed/LSPosed ART hook on PackageManager.
+//        DEFEATED: ELF __attribute__((constructor)) fires before ART inits.
+//
+//  EirvSignKiller / EirvSignKiller2 / FancyBypass / SRPatch (IO method)
+//      → IO Hook: patch the PLT/GOT entry for libc open()/openat()/read()/
+//        pread64() in the target .so, redirect the fd to the original APK.
+//        DEFEATED HERE: every byte of file I/O uses inline ARM "svc #0"
+//        assembly — no PLT, no GOT, no libc symbol lookup.  The hook has
+//        zero attachment surface.
+//
+//  SRPatch (SVC method) / APatch / KernelPatch kernel hooks
+//      → Intercept raw syscalls at kernel boundary; requires root + module.
+//        DETECTED: existing FMAPS/TRACER LVM opcodes catch KernelSU/Magisk/
+//        APatch and Zygisk.  g_sig_maps_scan() additionally searches for
+//        bypass-tool native libraries injected directly into our address space.
+//
+// Zero libc involvement in the critical I/O path → unbypassable without root.
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── §1  Inline-asm raw syscall wrappers — zero PLT / GOT / libc ────────────
+//
+// ARM64 calling convention: x0–x5 = args, x8 = syscall number, svc #0.
+// ARM32 EABI convention:    r0–r5 = args, r7 = syscall number, svc #0.
+// x86/x86_64 compile-only fallback (not our shipped ABI).
+
+#if defined(__aarch64__)
+
+static __attribute__((always_inline)) inline
+int g_sig_openat(const char *path, int flags) {
+    register long x0 __asm__("x0") = (long)AT_FDCWD;
+    register long x1 __asm__("x1") = (long)path;
+    register long x2 __asm__("x2") = (long)(flags | O_CLOEXEC);
+    register long x3 __asm__("x3") = 0L;
+    register long x8 __asm__("x8") = 56L; /* __NR_openat */
+    __asm__ volatile("svc #0"
+        : "+r"(x0)
+        : "r"(x1), "r"(x2), "r"(x3), "r"(x8)
+        : "memory", "cc");
+    return (int)x0;
+}
+static __attribute__((always_inline)) inline
+ssize_t g_sig_read(int fd, void *buf, size_t n) {
+    register long x0 __asm__("x0") = (long)fd;
+    register long x1 __asm__("x1") = (long)buf;
+    register long x2 __asm__("x2") = (long)n;
+    register long x8 __asm__("x8") = 63L; /* __NR_read */
+    __asm__ volatile("svc #0"
+        : "+r"(x0)
+        : "r"(x1), "r"(x2), "r"(x8)
+        : "memory", "cc");
+    return (ssize_t)x0;
+}
+static __attribute__((always_inline)) inline
+ssize_t g_sig_pread(int fd, void *buf, size_t n, off_t off) {
+    register long x0 __asm__("x0") = (long)fd;
+    register long x1 __asm__("x1") = (long)buf;
+    register long x2 __asm__("x2") = (long)n;
+    register long x3 __asm__("x3") = (long)off;
+    register long x8 __asm__("x8") = 67L; /* __NR_pread64 */
+    __asm__ volatile("svc #0"
+        : "+r"(x0)
+        : "r"(x1), "r"(x2), "r"(x3), "r"(x8)
+        : "memory", "cc");
+    return (ssize_t)x0;
+}
+static __attribute__((always_inline)) inline
+off_t g_sig_lseek(int fd, off_t off, int whence) {
+    register long x0 __asm__("x0") = (long)fd;
+    register long x1 __asm__("x1") = (long)off;
+    register long x2 __asm__("x2") = (long)whence;
+    register long x8 __asm__("x8") = 62L; /* __NR_lseek */
+    __asm__ volatile("svc #0"
+        : "+r"(x0)
+        : "r"(x1), "r"(x2), "r"(x8)
+        : "memory", "cc");
+    return (off_t)x0;
+}
+static __attribute__((always_inline)) inline
+int g_sig_close(int fd) {
+    register long x0 __asm__("x0") = (long)fd;
+    register long x8 __asm__("x8") = 57L; /* __NR_close */
+    __asm__ volatile("svc #0"
+        : "+r"(x0)
+        : "r"(x8)
+        : "memory", "cc");
+    return (int)x0;
+}
+
+#elif defined(__arm__)
+
+static __attribute__((always_inline)) inline
+int g_sig_openat(const char *path, int flags) {
+    register long r0 __asm__("r0") = (long)AT_FDCWD; /* AT_FDCWD = -100 */
+    register long r1 __asm__("r1") = (long)path;
+    register long r2 __asm__("r2") = (long)(flags | O_CLOEXEC);
+    register long r3 __asm__("r3") = 0L;
+    register long r7 __asm__("r7") = 322L; /* __NR_openat ARM32 */
+    __asm__ volatile("svc #0"
+        : "+r"(r0)
+        : "r"(r1), "r"(r2), "r"(r3), "r"(r7)
+        : "memory", "cc");
+    return (int)r0;
+}
+static __attribute__((always_inline)) inline
+ssize_t g_sig_read(int fd, void *buf, size_t n) {
+    register long r0 __asm__("r0") = (long)fd;
+    register long r1 __asm__("r1") = (long)buf;
+    register long r2 __asm__("r2") = (long)n;
+    register long r7 __asm__("r7") = 3L; /* __NR_read */
+    __asm__ volatile("svc #0"
+        : "+r"(r0)
+        : "r"(r1), "r"(r2), "r"(r7)
+        : "memory", "cc");
+    return (ssize_t)r0;
+}
+static __attribute__((always_inline)) inline
+ssize_t g_sig_pread(int fd, void *buf, size_t n, off_t off) {
+    /* ARM32 EABI pread64: r0=fd r1=buf r2=count r3=0(pad) r4=off_lo r5=off_hi */
+    register long r0 __asm__("r0") = (long)fd;
+    register long r1 __asm__("r1") = (long)buf;
+    register long r2 __asm__("r2") = (long)n;
+    register long r3 __asm__("r3") = 0L; /* 64-bit alignment pad */
+    register long r4 __asm__("r4") = (long)off;
+    register long r5 __asm__("r5") = 0L; /* offset_hi — APKs < 4 GB */
+    register long r7 __asm__("r7") = 180L; /* __NR_pread64 */
+    __asm__ volatile("svc #0"
+        : "+r"(r0)
+        : "r"(r1), "r"(r2), "r"(r3), "r"(r4), "r"(r5), "r"(r7)
+        : "memory", "cc");
+    return (ssize_t)r0;
+}
+static __attribute__((always_inline)) inline
+off_t g_sig_lseek(int fd, off_t off, int whence) {
+    register long r0 __asm__("r0") = (long)fd;
+    register long r1 __asm__("r1") = (long)off;
+    register long r2 __asm__("r2") = (long)whence;
+    register long r7 __asm__("r7") = 19L; /* __NR_lseek */
+    __asm__ volatile("svc #0"
+        : "+r"(r0)
+        : "r"(r1), "r"(r2), "r"(r7)
+        : "memory", "cc");
+    return (off_t)r0;
+}
+static __attribute__((always_inline)) inline
+int g_sig_close(int fd) {
+    register long r0 __asm__("r0") = (long)fd;
+    register long r7 __asm__("r7") = 6L; /* __NR_close */
+    __asm__ volatile("svc #0"
+        : "+r"(r0)
+        : "r"(r7)
+        : "memory", "cc");
+    return (int)r0;
+}
+
+#else /* x86 / x86_64 — compile-only fallback, not a target ABI */
+static inline int     g_sig_openat(const char *p, int f) { return open(p, f|O_CLOEXEC); }
+static inline ssize_t g_sig_read(int fd,void *b,size_t n)            { return read(fd,b,n); }
+static inline ssize_t g_sig_pread(int fd,void *b,size_t n,off_t o)   { return pread(fd,b,n,o); }
+static inline off_t   g_sig_lseek(int fd, off_t o, int w)            { return lseek(fd,o,w); }
+static inline int     g_sig_close(int fd)                             { return close(fd); }
+#endif /* arch */
+
+// ── §2  Bypass-tool detection via /proc/self/maps ──────────────────────────
+// Opens /proc/self/maps with inline-asm I/O (itself immune to IO hooks), reads
+// it in 4 KB chunks and searches for short XOR-0xA3 obfuscated fragments that
+// identify bypass-tool native libraries injected into our process memory.
+//
+// LSPosed-based variants (LspatchSignKiller, NPSignKiller …) are already caught
+// by the existing FMAPS LVM opcode (lsplant / lspatch / xposed patterns).
+// This function catches tools that inject WITHOUT LSPosed:
+//   "eirv"      → EirvSignKiller / EirvSignKiller2 native module
+//   "fanc"      → FancyBypass native module
+//   "srpatch"   → SRPatch native module
+//   "npmanager" → NP Manager directly-injected native module
+//   "signkill"  → generic sig-killer native libraries
+
+/* XOR-0xA3 encoded fragment strings */
+/* "/proc/self/maps" */
+static const uint8_t _bx_maps[] = {
+    0x8C,0xD3,0xD1,0xCC,0xC0,0x8C,0xD0,0xC6,0xCF,0xC5,0x8C,0xCE,0xC2,0xD3,0xD0
+};
+/* "eirv" */
+static const uint8_t _bx_eirv[] = {0xC6,0xCA,0xD1,0xD5};
+/* "fanc" */
+static const uint8_t _bx_fanc[] = {0xC5,0xC2,0xCD,0xC0};
+/* "srpatch" */
+static const uint8_t _bx_srp[]  = {0xD0,0xD1,0xD3,0xC2,0xD7,0xC0,0xCB};
+/* "npmanager" */
+static const uint8_t _bx_npm[]  = {0xCD,0xD3,0xCE,0xC2,0xCD,0xC2,0xC4,0xC6,0xD1};
+/* "signkill" */
+static const uint8_t _bx_skl[]  = {0xD0,0xCA,0xC4,0xCD,0xC8,0xCA,0xCF,0xCF};
+
+static int g_memmem_s(const char *hay, size_t hlen,
+                      const char *needle, size_t nlen) {
+    if (!nlen || hlen < nlen) return 0;
+    for (size_t i = 0; i <= hlen - nlen; i++)
+        if (memcmp(hay + i, needle, nlen) == 0) return 1;
+    return 0;
+}
+
+static int g_sig_maps_scan(void) {
+    G_DEC(s_maps, _bx_maps);
+    G_DEC(s_eirv, _bx_eirv);
+    G_DEC(s_fanc, _bx_fanc);
+    G_DEC(s_srp,  _bx_srp);
+    G_DEC(s_npm,  _bx_npm);
+    G_DEC(s_skl,  _bx_skl);
+
+    int mfd = g_sig_openat(s_maps, O_RDONLY);
+    if (mfd < 0) return 0; /* maps unreadable → skip rather than false-crash */
+
+    /* Read in 4 KB chunks; carry last 63 bytes to catch cross-boundary hits. */
+    char chunk[4096 + 64];
+    size_t carry = 0;
+    ssize_t rd;
+    int found = 0;
+    while (!found && (rd = g_sig_read(mfd, chunk + carry, 4096)) > 0) {
+        size_t total = carry + (size_t)rd;
+        if (g_memmem_s(chunk, total, s_eirv, 4)) { found = 1; break; }
+        if (g_memmem_s(chunk, total, s_fanc, 4)) { found = 1; break; }
+        if (g_memmem_s(chunk, total, s_srp,  7)) { found = 1; break; }
+        if (g_memmem_s(chunk, total, s_npm,  9)) { found = 1; break; }
+        if (g_memmem_s(chunk, total, s_skl,  8)) { found = 1; break; }
+        carry = total > 63 ? 63 : total;
+        memmove(chunk, chunk + total - carry, carry);
+    }
+    g_sig_close(mfd);
+    if (found) GLOGE("D2CG sig: bypass tool library detected in maps");
+    return found;
+}
+
+// ── §3  pread-based ZIP mini-parser — no FILE*, no fread, no fseek ─────────
+
+/* Locate EOCD; return cd_offset and cd_size via pointers. */
+static int g_sig_eocd(int fd, uint32_t *cd_off, uint32_t *cd_sz) {
+    off_t fsize = g_sig_lseek(fd, 0, SEEK_END);
+    if (fsize < 22) return 0;
+    size_t search = (size_t)(fsize < 66022 ? fsize : 66022);
+    uint8_t *buf = (uint8_t *)malloc(search);
+    if (!buf) return 0;
+    ssize_t rd = g_sig_pread(fd, buf, search, fsize - (off_t)search);
+    if (rd < 22) { free(buf); return 0; }
+    long found = -1;
+    for (long i = (long)rd - 22; i >= 0; i--) {
+        if (buf[i]==0x50&&buf[i+1]==0x4b&&buf[i+2]==0x05&&buf[i+3]==0x06) {
+            found = i; break;
+        }
+    }
+    if (found < 0) { free(buf); return 0; }
+    *cd_sz  = g_rd32(buf + found + 12);
+    *cd_off = g_rd32(buf + found + 16);
+    free(buf);
+    return 1;
+}
+
+/* Read one ZIP entry's uncompressed data using pread64 (STORED or DEFLATE).
+   Returns number of bytes written to out, 0 on error. */
+static uint32_t g_sig_read_entry(int fd, const ZipEntryInfo *info,
+                                  uint8_t *out, uint32_t out_max) {
+    uint8_t lh[30];
+    if (g_sig_pread(fd, lh, 30, (off_t)info->local_offset) != 30) return 0;
+    if (lh[0]!=0x50||lh[1]!=0x4b||lh[2]!=0x03||lh[3]!=0x04) return 0;
+    uint16_t nl  = g_rd16(lh + 26);
+    uint16_t el  = g_rd16(lh + 28);
+    off_t data_off = (off_t)info->local_offset + 30 + nl + el;
+
+    if (info->method == 0) { /* STORED — direct pread */
+        if (info->uncomp_size > out_max) return 0;
+        ssize_t r = g_sig_pread(fd, out, info->uncomp_size, data_off);
+        return (r == (ssize_t)info->uncomp_size) ? info->uncomp_size : 0;
+    }
+    if (info->method == 8) { /* DEFLATE — raw inflate (windowBits = -15) */
+        if (info->comp_size > 131072) return 0; /* sanity */
+        uint8_t *comp = (uint8_t *)malloc(info->comp_size);
+        if (!comp) return 0;
+        ssize_t r = g_sig_pread(fd, comp, info->comp_size, data_off);
+        if (r != (ssize_t)info->comp_size) { free(comp); return 0; }
+        z_stream strm; memset(&strm, 0, sizeof(strm));
+        strm.next_in   = comp;          strm.avail_in  = info->comp_size;
+        strm.next_out  = out;           strm.avail_out = out_max;
+        if (inflateInit2(&strm, -15) != Z_OK) { free(comp); return 0; }
+        int rc = inflate(&strm, Z_FINISH);
+        uint32_t written = out_max - strm.avail_out;
+        inflateEnd(&strm); free(comp);
+        return (rc == Z_STREAM_END) ? written : 0;
+    }
+    return 0; /* unsupported compression */
+}
+
+// ── §4  Main detection function ────────────────────────────────────────────
+
+// XOR-0xA3 encoded ZIP entry names used below.
+// "META-INF/"           (9 bytes)
+static const uint8_t _enc_mi[]   = {0xEE,0xE6,0xF7,0xE2,0x8E,0xEA,0xED,0xE5,0x8C};
+// ".RSA"                (4 bytes)
+static const uint8_t _enc_rsa[]  = {0x8D,0xF1,0xF0,0xE2};
+// ".DSA"                (4 bytes)
+static const uint8_t _enc_dsa[]  = {0x8D,0xE7,0xF0,0xE2};
+// ".EC"                 (3 bytes)
+static const uint8_t _enc_ec[]   = {0x8D,0xE6,0xE0};
+// "assets/font_kern.dat" (20 bytes)
+static const uint8_t _enc_kern[] = {
+    0xC2,0xD0,0xD0,0xC6,0xD7,0xD0,0x8C,
+    0xC5,0xCC,0xCD,0xD7,0xFC,0xC8,0xC6,0xD1,0xCD,
+    0x8D,0xC7,0xC2,0xD7
+};
+
+static int detect_sig_tamper(const char *apk_path) {
+
+    // ── Pre-check: bypass-tool library scan ───────────────────────────────────
+    // Crash immediately if a known IO-hook or sig-killer library is found in
+    // our address space.  Runs before opening the APK to prevent any race.
+    if (g_sig_maps_scan()) return 1;
+
+    // ── Open APK via raw svc #0 — no PLT, no libc, no hook surface ───────────
+    // IO-hook tools (EirvSignKiller, FancyBypass, SRPatch IO) patch the PLT
+    // entry of openat() inside the target .so.  Inline-asm svc #0 completely
+    // bypasses the PLT; there is no GOT entry to overwrite, no symbol to hook.
+    int fd = g_sig_openat(apk_path, O_RDONLY);
+    if (fd < 0) {
+        GLOGE("D2CG sig: openat errno=%d", errno);
+        return 0; /* transient (cold-boot path race) — skip, not crash */
+    }
+
+    // ── Locate EOCD ───────────────────────────────────────────────────────────
+    uint32_t cd_off = 0, cd_sz = 0;
+    if (!g_sig_eocd(fd, &cd_off, &cd_sz)) {
+        GLOGE("D2CG sig: no EOCD");
+        g_sig_close(fd); return 0;
+    }
+
+    // ── Load central directory ────────────────────────────────────────────────
+    uint8_t *cd = (uint8_t *)malloc(cd_sz ? cd_sz : 1);
+    if (!cd) { g_sig_close(fd); return 0; }
+    if (cd_sz > 0) {
+        ssize_t rd = g_sig_pread(fd, cd, cd_sz, (off_t)cd_off);
+        if (rd != (ssize_t)cd_sz) { free(cd); g_sig_close(fd); return 0; }
+    }
+
+    // ── Decode obfuscated entry names ─────────────────────────────────────────
+    G_DEC(s_mi,   _enc_mi);
+    G_DEC(s_rsa,  _enc_rsa);
+    G_DEC(s_dsa,  _enc_dsa);
+    G_DEC(s_ec,   _enc_ec);
+    G_DEC(s_kern, _enc_kern);
+
+    // ── Single-pass CD scan: find signing cert + font_kern.dat ───────────────
+    ZipEntryInfo certInfo; memset(&certInfo, 0, sizeof(certInfo));
+    ZipEntryInfo kernInfo; memset(&kernInfo, 0, sizeof(kernInfo));
+    uint32_t p = 0;
+    while (p + 46 <= cd_sz) {
+        if (!(cd[p]==0x50&&cd[p+1]==0x4b&&cd[p+2]==0x01&&cd[p+3]==0x02)) break;
+        uint16_t method    = g_rd16(cd + p + 10);
+        uint32_t comp_sz   = g_rd32(cd + p + 20);
+        uint32_t uncomp_sz = g_rd32(cd + p + 24);
+        uint16_t name_len  = g_rd16(cd + p + 28);
+        uint16_t extra_len = g_rd16(cd + p + 30);
+        uint16_t comm_len  = g_rd16(cd + p + 32);
+        uint32_t local_off = g_rd32(cd + p + 42);
+        if ((uint64_t)(p + 46) + name_len > cd_sz) break;
+        char ename[256];
+        uint16_t nlen = name_len < 255 ? name_len : 255;
+        memcpy(ename, cd + p + 46, nlen); ename[nlen] = '\0';
+
+        if (!certInfo.found && strncmp(ename, s_mi, 9) == 0) {
+            size_t L = strlen(ename);
+            int is_cert = (L > 4 && strcmp(ename + L - 4, s_rsa) == 0)
+                        ||(L > 4 && strcmp(ename + L - 4, s_dsa) == 0)
+                        ||(L > 3 && strcmp(ename + L - 3, s_ec)  == 0);
+            if (is_cert) {
+                certInfo.method=method; certInfo.comp_size=comp_sz;
+                certInfo.uncomp_size=uncomp_sz; certInfo.local_offset=local_off;
+                certInfo.found=1;
+                GLOGI("D2CG sig: cert='%s' comp=%u uncomp=%u", ename, comp_sz, uncomp_sz);
+            }
+        }
+        if (!kernInfo.found && strcmp(ename, s_kern) == 0) {
+            kernInfo.method=method; kernInfo.comp_size=comp_sz;
+            kernInfo.uncomp_size=uncomp_sz; kernInfo.local_offset=local_off;
+            kernInfo.found=1;
+        }
+        if (certInfo.found && kernInfo.found) break;
+        p += 46 + name_len + extra_len + comm_len;
+    }
+    free(cd);
+
+    // font_kern.dat absent → mandatory asset deleted by attacker
+    if (!kernInfo.found) {
+        GLOGE("D2CG sig: font_kern.dat MISSING");
+        g_sig_close(fd); return 1;
+    }
+
+    // ── Read entries via pread64 svc #0 ──────────────────────────────────────
+    // pread64 is position-independent: both reads use the same fd without
+    // seeking, so no lseek side-effects and no race between the two reads.
+
+    // font_kern.dat ciphertext (48 bytes payload + 16-byte AES padding block)
+    uint8_t kernCipher[64];
+    uint32_t kernLen = g_sig_read_entry(fd, &kernInfo, kernCipher, 64);
+    if (!kernLen) {
+        GLOGE("D2CG sig: kern read failed");
+        g_sig_close(fd); return 1;
+    }
+
+    // Signing certificate bytes
+    uint8_t *cert_buf = NULL; uint32_t cert_len = 0;
+    if (certInfo.found && certInfo.uncomp_size > 0 && certInfo.uncomp_size <= 65536) {
+        cert_buf = (uint8_t *)malloc(certInfo.uncomp_size + 16);
+        if (cert_buf) {
+            cert_len = g_sig_read_entry(fd, &certInfo, cert_buf,
+                                        certInfo.uncomp_size + 16);
+            if (!cert_len) {
+                memset(cert_buf, 0, certInfo.uncomp_size + 16);
+                free(cert_buf); cert_buf = NULL;
+            }
+        }
+    }
+
+    g_sig_close(fd);
+
+    // ── Decrypt font_kern.dat ─────────────────────────────────────────────────
+    uint8_t key[32], iv[16];
+    build_key256(key); build_iv(iv);
+    uint8_t kernPlain[64];
+    int kernPlainLen = aes256_cbc_dec(key, iv, kernCipher, (int)kernLen, kernPlain);
+    memset(key, 0, 32); memset(iv, 0, 16);
+
+    if (kernPlainLen < 32) {
+        GLOGE("D2CG sig: decrypt failed len=%d", kernPlainLen);
+        if (cert_buf) { memset(cert_buf, 0, certInfo.uncomp_size + 16); free(cert_buf); }
+        return 1;
+    }
+
+    // Sentinel: 32 zero bytes → user disabled the check
+    int allzero = 1;
+    for (int i = 0; i < 32; i++) if (kernPlain[i]) { allzero = 0; break; }
+    if (allzero) {
+        GLOGI("D2CG sig: sentinel(0) — check disabled, skip");
+        if (cert_buf) { memset(cert_buf, 0, certInfo.uncomp_size + 16); free(cert_buf); }
+        return 0;
+    }
+
+    GLOGI("D2CG sig: expected  %02x%02x%02x%02x...",
+          kernPlain[0], kernPlain[1], kernPlain[2], kernPlain[3]);
+
+    // ── No V1 cert found → stripped or re-packaged without META-INF certs ────
+    if (!cert_buf || cert_len == 0) {
+        GLOGE("D2CG sig: no META-INF cert entry (V1 sig absent or stripped)");
+        if (cert_buf) { memset(cert_buf, 0, certInfo.uncomp_size + 16); free(cert_buf); }
+        return 1;
+    }
+
+    // ── SHA-256 and compare ───────────────────────────────────────────────────
+    uint8_t computed[32];
+    sha256_buf(cert_buf, cert_len, computed);
+    GLOGI("D2CG sig: computed   %02x%02x%02x%02x...",
+          computed[0], computed[1], computed[2], computed[3]);
+    memset(cert_buf, 0, certInfo.uncomp_size + 16); free(cert_buf);
+
+    if (memcmp(computed, kernPlain, 32) != 0) {
+        GLOGE("D2CG sig: HASH MISMATCH — re-signed or spoofed");
+        return 1;
+    }
+    GLOGI("D2CG sig: certificate verified OK");
+    return 0;
+}
+
+// Wrapper with APK-path resolution — same shape as gvm_so_integrity()
+static __attribute__((noinline)) int gvm_sig_check(void) {
+    char apk_path[512] = {0};
+    if (!get_apk_path(apk_path, sizeof(apk_path))) return 0;
+    return detect_sig_tamper(apk_path);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Constructor — runs when .so loads, before JNI_OnLoad, before any Java code
 // ════════════════════════════════════════════════════════════════════════════
 
 __attribute__((constructor))
 static void fonts_init(void) {
     GLOGI("fonts_init: constructor entry");
-    // ARM64 disassembly of fonts_init() shows ONLY four opaque VM calls and
+    // ARM64 disassembly of fonts_init() shows ONLY five opaque VM calls and
     // two process/thread spawns — zero recognisable security function names.
     // All detection lives inside AES-256-CBC encrypted lvm_exec programs:
-    //   vm_run_vccheck() → LVCFULL   VCore/VirtualApp (APK path resolved internally)
-    //   vm_run_startup() → LMETRICS  manifest hash + dex count integrity
-    //   vm_run()         → TRACER + FMAPS + FPORT + ARTPATH + HOOKMAPS
+    //   vm_run_vccheck()  → LVCFULL   VCore/VirtualApp (APK path internally)
+    //   vm_run_startup()  → LMETRICS  manifest hash + dex count integrity
+    //   vm_run_sigcheck() → LSIGCHK   sig cert hash (Layer 4, svc #0 I/O)
+    //   vm_run()          → TRACER + FMAPS + FPORT + ARTPATH + HOOKMAPS
     //   spawn_background_watch() → vm_run_child_kill() — forked 5-s poll child
     vm_run_vccheck();
     vm_run_startup();
     // Layer 3: SO self-integrity — crashes if font_glyph.dat missing or .so patched
     if (gvm_so_integrity()) crash_now();
+    // Layer 4: opaque VM call — no gvm_sig_check or detect_sig_tamper visible here
+    vm_run_sigcheck();
     vm_run();
 
     GLOGI("fonts_init: launching background watchdogs");

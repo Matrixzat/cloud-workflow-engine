@@ -291,10 +291,10 @@ jobs:
           "$TC/bin/llvm-ar" rcs libcipher_arm64.a guard_arm64.o
           echo "  ✅ libcipher_arm64.a  — $(wc -c < libcipher_arm64.a) bytes"
 
-          # ── armeabi-v7a — NDK clang (CI OLLVM is AArch64-only, cannot target arm32) ─
-          echo "Building armeabi-v7a (NDK clang, no OLLVM)…"
-          "$NDK_LINK_ARM32" --target=armv7a-linux-androideabi21 \
-            "${COMMON_BASE[@]}" -std=c++17 \
+          # ── armeabi-v7a — OLLVM clang (ARM target is compiled in alongside AArch64) ──
+          echo "Building armeabi-v7a (OLLVM)…"
+          "$CLANG_ARM64" --target=armv7a-linux-androideabi21 \
+            "${COMMON_OLLVM[@]}" -std=c++17 \
             -c "$GUARD" -o guard_arm32.o
           "$NDK_LINK_ARM32" \
             -shared -fPIC -Wl,--gc-sections -Wl,--build-id=none \

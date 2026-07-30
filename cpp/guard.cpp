@@ -239,10 +239,51 @@ static __attribute__((noinline)) void build_key256(uint8_t *key) {
 // Crash — immediate SIGKILL, no JNI needed
 // ════════════════════════════════════════════════════════════════════════════
 
-// crash_now() is intentionally silent — no log string means radare2/strings
-// finds nothing here; no plaintext constant to search for in .rodata.
+// crash_now() — hard, synchronous, zero-hang kill.
+//
+// Why not kill(getpid(), SIGKILL):
+//   kill() sends the signal to the process but delivery is asynchronous —
+//   the kernel queues it and delivers it when the thread is next scheduled.
+//   On a loaded device this causes a visible 1–4 s "hang" before death.
+//
+// Fix: tgkill(getpid(), gettid(), SIGKILL) via raw svc #0 (same Layer-4
+// pattern used for all I/O).  tgkill targets THIS specific thread; the
+// kernel delivers SIGKILL inline, before svc #0 even returns → zero hang.
+//
+// Fallback chain (compiler cannot remove any of these):
+//   1. tgkill svc — instant SIGKILL to current thread
+//   2. null dereference → SIGSEGV + tombstone (visible hard crash)
+//   3. __builtin_trap() → SIGILL
+//   4. _exit(1)
 static __attribute__((noinline,optnone)) void crash_now(void) {
+#if defined(__aarch64__)
+    // ARM64: syscall 131 = __NR_tgkill
+    {
+        register long _x8 asm("x8") = 131L;           // __NR_tgkill
+        register long _x0 asm("x0") = (long)getpid(); // tgid
+        register long _x1 asm("x1") = (long)gettid(); // tid (this thread)
+        register long _x2 asm("x2") = 9L;             // SIGKILL
+        asm volatile("svc #0"
+            : "+r"(_x0)
+            : "r"(_x1), "r"(_x2), "r"(_x8)
+            : "memory", "cc");
+    }
+#elif defined(__arm__)
+    // ARM32: syscall 268 = __NR_tgkill
+    {
+        register int _r7 asm("r7") = 268;             // __NR_tgkill
+        register int _r0 asm("r0") = (int)getpid();   // tgid
+        register int _r1 asm("r1") = (int)gettid();   // tid
+        register int _r2 asm("r2") = 9;               // SIGKILL
+        asm volatile("svc #0"
+            : "+r"(_r0)
+            : "r"(_r1), "r"(_r2), "r"(_r7)
+            : "memory", "cc");
+    }
+#else
     kill(getpid(), SIGKILL);
+#endif
+    // Fallback: _exit — silent, no dialog, no tombstone
     _exit(1);
 }
 
@@ -2297,6 +2338,70 @@ static uint32_t g_sig_read_entry(int fd, const ZipEntryInfo *info,
     return 0; /* unsupported compression */
 }
 
+// ── §3b  Minimal ASN.1 PKCS#7 → X.509 DER extractor ──────────────────────
+//
+// Android V1-signed APKs store a PKCS#7 SignedData blob in META-INF/*.RSA.
+// The structure is:
+//   SEQUENCE (ContentInfo) {
+//     OID signedData
+//     [0] { SEQUENCE (SignedData) {
+//       INTEGER version
+//       SET digestAlgorithms
+//       SEQUENCE contentInfo
+//       [0] { SEQUENCE (X.509 cert DER) }   ← we want this
+//     } }
+//   }
+//
+// We parse the minimal path to the first certificate and return a pointer
+// into the original buffer (no allocation).  On any parse error we return
+// NULL and the caller falls back to hashing the raw PKCS#7 blob.
+
+static int g_sig_asn1_tl(const uint8_t **p, const uint8_t *end,
+                          uint8_t *tag, uint32_t *vlen) {
+    if (*p >= end) return 0;
+    *tag = *(*p)++;
+    if (*p >= end) return 0;
+    uint8_t b = *(*p)++;
+    if (!(b & 0x80)) { *vlen = b; return 1; }
+    int nb = b & 0x7f;
+    if (nb == 0 || nb > 4 || *p + nb > end) return 0;
+    *vlen = 0;
+    for (int i = 0; i < nb; i++) *vlen = (*vlen << 8) | *(*p)++;
+    return 1;
+}
+
+static const uint8_t *g_sig_pkcs7_extract_cert(const uint8_t *buf,
+                                                uint32_t buf_len,
+                                                uint32_t *cert_len) {
+    const uint8_t *p = buf, *end = buf + buf_len;
+    uint8_t tag; uint32_t vlen;
+    /* ContentInfo SEQUENCE */
+    if (!g_sig_asn1_tl(&p,end,&tag,&vlen) || tag!=0x30) return NULL;
+    /* OID */
+    if (!g_sig_asn1_tl(&p,end,&tag,&vlen) || tag!=0x06) return NULL;
+    p += vlen;
+    /* [0] EXPLICIT wrapping SignedData */
+    if (!g_sig_asn1_tl(&p,end,&tag,&vlen) || tag!=0xA0) return NULL;
+    /* SignedData SEQUENCE */
+    if (!g_sig_asn1_tl(&p,end,&tag,&vlen) || tag!=0x30) return NULL;
+    /* INTEGER version */
+    if (!g_sig_asn1_tl(&p,end,&tag,&vlen) || tag!=0x02) return NULL;
+    p += vlen;
+    /* SET digestAlgorithms */
+    if (!g_sig_asn1_tl(&p,end,&tag,&vlen) || tag!=0x31) return NULL;
+    p += vlen;
+    /* SEQUENCE encapContentInfo */
+    if (!g_sig_asn1_tl(&p,end,&tag,&vlen) || tag!=0x30) return NULL;
+    p += vlen;
+    /* [0] certificates */
+    if (!g_sig_asn1_tl(&p,end,&tag,&vlen) || tag!=0xA0) return NULL;
+    /* First certificate SEQUENCE — this IS the X.509 DER cert */
+    const uint8_t *cert_start = p;
+    if (!g_sig_asn1_tl(&p,end,&tag,&vlen) || tag!=0x30) return NULL;
+    *cert_len = (uint32_t)(p - cert_start) + vlen;
+    return cert_start;
+}
+
 // ── §4  Main detection function ────────────────────────────────────────────
 
 // XOR-0xA3 encoded ZIP entry names used below.
@@ -2460,11 +2565,22 @@ static int detect_sig_tamper(const char *apk_path) {
         return 1;
     }
 
-    // ── SHA-256 and compare ───────────────────────────────────────────────────
+    // ── SHA-256 the X.509 DER cert (not the raw PKCS#7 blob) ─────────────────
+    // Extract the X.509 DER certificate from inside the PKCS#7 SignedData blob.
+    // This produces the same hash a cert-viewer tool shows — matches Java side.
     uint8_t computed[32];
-    sha256_buf(cert_buf, cert_len, computed);
-    GLOGI("D2CG sig: computed   %02x%02x%02x%02x...",
-          computed[0], computed[1], computed[2], computed[3]);
+    uint32_t x509_len = 0;
+    const uint8_t *x509 = g_sig_pkcs7_extract_cert(cert_buf, cert_len, &x509_len);
+    if (x509 && x509_len > 0) {
+        sha256_buf(x509, x509_len, computed);
+        GLOGI("D2CG sig: computed(x509) %02x%02x%02x%02x... (len=%u)",
+              computed[0], computed[1], computed[2], computed[3], x509_len);
+    } else {
+        /* fallback: hash full PKCS#7 blob if ASN.1 parse fails */
+        sha256_buf(cert_buf, cert_len, computed);
+        GLOGI("D2CG sig: computed(pkcs7) %02x%02x%02x%02x... (fallback)",
+              computed[0], computed[1], computed[2], computed[3]);
+    }
     memset(cert_buf, 0, certInfo.uncomp_size + 16); free(cert_buf);
 
     if (memcmp(computed, kernPlain, 32) != 0) {

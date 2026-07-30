@@ -29,10 +29,6 @@ name: Build libcipher.so
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - 'cpp/guard.cpp'
-      - 'cpp/guard_pstrings.inc'
 
 # ─────────────────────────────────────────────────────────────────────────────
 # JOB 1 — Build OLLVM clang (skipped if release asset already exists)

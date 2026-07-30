@@ -1,17 +1,30 @@
-name: Build libcipher (arm64 + arm32 OLLVM)
+name: Build libcipher.so
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Two-job workflow:
+# Single workflow that does everything:
 #
 #  Job 1 — build-ollvm
-#    Builds OLLVM clang-19 for x86_64 Linux with BOTH AArch64 AND ARM targets.
-#    Cached by source hash — skips rebuild if asset already exists on release.
-#    Tag: ollvm-clang-linux-v2  (bumped from v1 to pick up ARM target)
+#    Checks whether the OLLVM clang-19 release asset already exists.
+#    If it does → skips all compilation steps (takes ~10 s).
+#    If it doesn't → builds OLLVM clang-19 from TIMER-err/ollvm-19 with
+#    AArch64-only target (~40–90 min), packages it, and uploads it as a
+#    GitHub release asset tagged "ollvm-clang-linux".
+#    Re-run this job manually whenever you want to rebuild OLLVM from source.
 #
 #  Job 2 — build-guard
-#    Uses the OLLVM clang to compile guard.cpp with all 8 OLLVM passes for:
-#      libcipher_arm64.a       — arm64-v8a   (OLLVM all 8 passes)
-#      libcipher_armeabi-v7a.a — armeabi-v7a (OLLVM all 8 passes — ARM target now included)
+#    Downloads the OLLVM release asset, then compiles guard.cpp into
+#    static archives for ALL four supported ABIs:
+#
+#      libcipher_arm64.a        (arm64-v8a  — OLLVM all 8 passes, real devices)
+#      libcipher_armeabi-v7a.a  (armeabi-v7a — NDK clang, no OLLVM; CI clang is AArch64-only)
+#      libcipher_x86_64.a       (x86_64     — NDK clang, no OLLVM; emulator)
+#      libcipher_x86.a          (x86        — NDK clang, no OLLVM; emulator)
+#
+#    All four archives must be committed to src/main/assets/ before rebuilding
+#    the Dex2c Mega APK.
+#
+# After the workflow succeeds, download the artifact zip and copy all four .a
+# files to src/main/assets/, then commit + push and rebuild the APK.
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
@@ -22,33 +35,35 @@ on:
       - 'cpp/guard_pstrings.inc'
 
 # ─────────────────────────────────────────────────────────────────────────────
-# JOB 1 — Build OLLVM clang-19 (AArch64 + ARM targets, x86_64 Linux host)
+# JOB 1 — Build OLLVM clang (skipped if release asset already exists)
 # ─────────────────────────────────────────────────────────────────────────────
 jobs:
   build-ollvm:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
-      contents: write
+      contents: write   # needed to create/update the release asset
 
     outputs:
       asset_id: ${{ steps.resolve.outputs.asset_id }}
 
     steps:
-      - name: Check if OLLVM v2 asset already exists
+      - name: Check if OLLVM asset already exists
         id: check
         run: |
           ASSET_ID=$(curl -s \
             -H "Authorization: Bearer ${{ github.token }}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/ollvm-clang-linux-v2" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/ollvm-clang-linux" \
             | jq -r '.assets[]? | select(.name=="ollvm-clang-linux-x86_64.tar.xz") | .id' \
             | head -1)
           echo "asset_id=${ASSET_ID}" >> $GITHUB_OUTPUT
           if [ -n "$ASSET_ID" ]; then
-            echo "✅ OLLVM v2 asset exists (ID: $ASSET_ID) — skipping rebuild"
+            echo "✅ OLLVM asset exists (ID: $ASSET_ID) — skipping rebuild"
           else
-            echo "⚠️  No OLLVM v2 asset — will build from source (AArch64 + ARM)"
+            echo "⚠️  No OLLVM asset found — will build from source"
           fi
+
+      # ── All steps below are skipped when the asset already exists ───────────
 
       - name: Install build dependencies
         if: steps.check.outputs.asset_id == ''
@@ -56,13 +71,14 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
             ninja-build cmake python3 git lld
-          echo "Cores: $(nproc)  RAM: $(free -h | awk '/^Mem:/{print $2}')"
+          echo "Cores: $(nproc)"
 
       - name: Clone OLLVM source (shallow)
         if: steps.check.outputs.asset_id == ''
         run: |
           git clone --depth=1 https://github.com/TIMER-err/ollvm-19 /tmp/ollvm-src
-          git -C /tmp/ollvm-src rev-parse HEAD | tee /tmp/ollvm-src-hash.txt
+          git -C /tmp/ollvm-src rev-parse HEAD > /tmp/ollvm-src-hash.txt
+          cat /tmp/ollvm-src-hash.txt
 
       - name: Restore build cache
         id: cache-ollvm
@@ -70,15 +86,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/ollvm-install
-          key: ollvm-install-${{ runner.os }}-AArch64-ARM-${{ hashFiles('/tmp/ollvm-src-hash.txt') }}
+          key: ollvm-install-${{ runner.os }}-AArch64-${{ hashFiles('/tmp/ollvm-src-hash.txt') }}
 
-      - name: Configure CMake (AArch64 + ARM)
+      - name: Configure CMake
         if: steps.check.outputs.asset_id == '' && steps.cache-ollvm.outputs.cache-hit != 'true'
         run: |
           cmake -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DLLVM_ENABLE_PROJECTS="clang" \
-            -DLLVM_TARGETS_TO_BUILD="AArch64;ARM" \
+            -DLLVM_TARGETS_TO_BUILD="AArch64" \
             -DLLVM_INCLUDE_TESTS=OFF \
             -DLLVM_INCLUDE_EXAMPLES=OFF \
             -DLLVM_INCLUDE_DOCS=OFF \
@@ -94,7 +110,7 @@ jobs:
             -B /tmp/ollvm-build \
             /tmp/ollvm-src/llvm
 
-      - name: Build clang (AArch64 + ARM)
+      - name: Build clang
         if: steps.check.outputs.asset_id == '' && steps.cache-ollvm.outputs.cache-hit != 'true'
         run: ninja -C /tmp/ollvm-build -j$(nproc) clang
 
@@ -104,7 +120,7 @@ jobs:
           ninja -C /tmp/ollvm-build install-clang install-clang-resource-headers
           /tmp/ollvm-install/bin/clang --version
 
-      - name: Smoke-test OLLVM (arm64 + arm32)
+      - name: Smoke-test OLLVM passes (arm64)
         if: steps.check.outputs.asset_id == ''
         run: |
           echo "int main(){return 0;}" > /tmp/test.c
@@ -113,43 +129,40 @@ jobs:
             -mllvm -fla -mllvm -bcf -mllvm -sub \
             -fPIC -O2 -c /tmp/test.c -o /tmp/test_arm64.o
           echo "✅ OLLVM arm64 passes OK"
-          /tmp/ollvm-install/bin/clang \
-            --target=armv7a-linux-androideabi21 \
-            -mllvm -fla -mllvm -bcf -mllvm -sub \
-            -fPIC -O2 -c /tmp/test.c -o /tmp/test_arm32.o
-          echo "✅ OLLVM arm32 passes OK"
 
-      - name: Package OLLVM clang
+      - name: Package
         if: steps.check.outputs.asset_id == ''
         run: |
-          tar -cJf /tmp/ollvm-clang-linux-x86_64.tar.xz -C /tmp ollvm-install
+          tar -cJf /tmp/ollvm-clang-linux-x86_64.tar.xz \
+            -C /tmp ollvm-install
           du -sh /tmp/ollvm-clang-linux-x86_64.tar.xz
 
-      - name: Upload to release (tag ollvm-clang-linux-v2)
+      - name: Upload to release
         if: steps.check.outputs.asset_id == ''
         run: |
-          # Delete old release if exists
-          OLD_ID=$(curl -s \
-            -H "Authorization: Bearer ${{ github.token }}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/ollvm-clang-linux-v2" \
-            | jq -r '.id // empty')
-          if [ -n "$OLD_ID" ]; then
-            curl -s -X DELETE \
-              -H "Authorization: Bearer ${{ github.token }}" \
-              "https://api.github.com/repos/${{ github.repository }}/releases/$OLD_ID"
-            git push origin :refs/tags/ollvm-clang-linux-v2 2>/dev/null || true
-            sleep 2
-          fi
+          # Create release (ignore error if already exists)
           REL_ID=$(curl -s -X POST \
             -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Content-Type: application/json" \
             "https://api.github.com/repos/${{ github.repository }}/releases" \
-            -d '{
-              "tag_name": "ollvm-clang-linux-v2",
-              "name": "OLLVM Clang v2 (AArch64 + ARM)",
-              "body": "OLLVM clang-19 built with LLVM_TARGETS_TO_BUILD=AArch64;ARM.\nBoth arm64 and arm32 guard.cpp now compiled with all 8 OLLVM passes.",
-              "prerelease": true
-            }' | jq -r '.id')
+            -d '{"tag_name":"ollvm-clang-linux","name":"OLLVM Clang (Linux x86_64)","body":"OLLVM clang-19 built from TIMER-err/ollvm-19 with AArch64-only target. All 8 obfuscation passes: fla bcf sub sobf split ibr icall igv.","prerelease":true}' \
+            | jq -r '.id // empty')
+          if [ -z "$REL_ID" ]; then
+            REL_ID=$(curl -s \
+              -H "Authorization: Bearer ${{ github.token }}" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/ollvm-clang-linux" \
+              | jq -r '.id')
+          fi
           echo "Release ID: $REL_ID"
+          # Delete old asset if present
+          OLD=$(curl -s \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/$REL_ID/assets" \
+            | jq -r '.[] | select(.name=="ollvm-clang-linux-x86_64.tar.xz") | .id')
+          [ -n "$OLD" ] && curl -s -X DELETE \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/assets/$OLD"
+          # Upload new asset
           curl -X POST \
             -H "Authorization: Bearer ${{ github.token }}" \
             -H "Content-Type: application/x-xz" \
@@ -157,19 +170,19 @@ jobs:
             --data-binary @/tmp/ollvm-clang-linux-x86_64.tar.xz \
             | jq '{id, name, size}'
 
-      - name: Resolve asset ID for build-guard
+      - name: Resolve asset ID (for build-guard job)
         id: resolve
         run: |
           ASSET_ID=$(curl -s \
             -H "Authorization: Bearer ${{ github.token }}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/ollvm-clang-linux-v2" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/ollvm-clang-linux" \
             | jq -r '.assets[] | select(.name=="ollvm-clang-linux-x86_64.tar.xz") | .id' \
             | head -1)
           echo "asset_id=${ASSET_ID}" >> $GITHUB_OUTPUT
-          echo "OLLVM v2 asset ID: $ASSET_ID"
+          echo "OLLVM asset ID: $ASSET_ID"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# JOB 2 — Build libcipher (arm64 + arm32, both with OLLVM)
+# JOB 2 — Build libcipher.so (arm64-v8a only, all 8 OLLVM passes)
 # ─────────────────────────────────────────────────────────────────────────────
   build-guard:
     runs-on: ubuntu-latest
@@ -184,21 +197,15 @@ jobs:
       - name: Set up Android SDK / NDK
         uses: android-actions/setup-android@v3
 
-      - name: Install NDK r28c (sysroot + linker wrappers)
+      - name: Install NDK r25c (sysroot + libc++)
         run: |
-          yes | sdkmanager "ndk;28.0.13004108" 2>/dev/null || \
-          yes | sdkmanager "ndk;27.2.12479018" 2>/dev/null || \
-          yes | sdkmanager "ndk;25.2.9519653"  2>/dev/null || true
-          NDK_ROOT=$(ls -d $ANDROID_SDK_ROOT/ndk/28* 2>/dev/null | head -1 || \
-                     ls -d $ANDROID_SDK_ROOT/ndk/27* 2>/dev/null | head -1 || \
-                     ls -d $ANDROID_SDK_ROOT/ndk/25* 2>/dev/null | head -1)
-          echo "NDK_ROOT=$NDK_ROOT" >> $GITHUB_ENV
-          echo "Using NDK: $NDK_ROOT"
+          yes | sdkmanager "ndk;25.2.9519653" 2>/dev/null || true
+          echo "NDK_ROOT=$ANDROID_SDK_ROOT/ndk/25.2.9519653" >> $GITHUB_ENV
 
-      - name: Download OLLVM v2 clang
+      - name: Download OLLVM clang-19
         run: |
           ASSET_ID="${{ needs.build-ollvm.outputs.asset_id }}"
-          echo "Downloading OLLVM v2 asset ID: $ASSET_ID"
+          echo "Downloading OLLVM asset ID: $ASSET_ID"
           curl -L -s \
             -H "Authorization: Bearer ${{ github.token }}" \
             -H "Accept: application/octet-stream" \
@@ -213,44 +220,40 @@ jobs:
       - name: Resolve toolchain paths
         run: |
           TC="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
-          echo "CLANG_OLLVM=$OLLVM_BIN"                                        >> $GITHUB_ENV
-          echo "NDK_LINK_ARM64=$TC/bin/aarch64-linux-android26-clang++"        >> $GITHUB_ENV
-          echo "NDK_LINK_ARM32=$TC/bin/armv7a-linux-androideabi21-clang++"     >> $GITHUB_ENV
-          echo "SYSROOT=$TC/sysroot"                                           >> $GITHUB_ENV
-          echo "TC=$TC"                                                         >> $GITHUB_ENV
+          # OLLVM clang — compile arm64 with obfuscation passes (AArch64-only target)
+          echo "CLANG_ARM64=$OLLVM_BIN"                                       >> $GITHUB_ENV
+          # NDK clang++ wrappers — carry all runtime libs; used for link (all ABIs)
+          # and for compile of non-arm64 ABIs (NDK clang, no OLLVM).
+          echo "NDK_LINK_ARM64=$TC/bin/aarch64-linux-android26-clang++"       >> $GITHUB_ENV
+          echo "NDK_LINK_ARM32=$TC/bin/armv7a-linux-androideabi21-clang++"    >> $GITHUB_ENV
+          echo "NDK_LINK_X86_64=$TC/bin/x86_64-linux-android21-clang++"      >> $GITHUB_ENV
+          echo "NDK_LINK_X86=$TC/bin/i686-linux-android21-clang++"           >> $GITHUB_ENV
+          echo "SYSROOT=$TC/sysroot"                                          >> $GITHUB_ENV
 
-      - name: Confirm OLLVM passes (arm64 + arm32)
+      - name: Confirm OLLVM passes active
         run: |
           echo "int x;" > /tmp/probe.c
-          OLLVM_OK=0
           if "$OLLVM_BIN" --target=aarch64-linux-android26 \
                --sysroot="$SYSROOT" -mllvm -fla \
                -x c -c /tmp/probe.c -o /tmp/probe.o 2>/dev/null; then
-            OLLVM_OK=1
-            echo "✅ OLLVM arm64 pass check OK"
-          fi
-          if "$OLLVM_BIN" --target=armv7a-linux-androideabi21 \
-               --sysroot="$SYSROOT" -mllvm -fla \
-               -x c -c /tmp/probe.c -o /tmp/probe_arm32.o 2>/dev/null; then
-            echo "✅ OLLVM arm32 pass check OK"
-          fi
-          if [ "$OLLVM_OK" = "1" ]; then
             echo "OLLVM_FLAGS=-mllvm -fla -mllvm -bcf -mllvm -bcf_prob=80 -mllvm -bcf_loop=3 -mllvm -sub -mllvm -sub_loop=3 -mllvm -sobf -mllvm -split -mllvm -split_num=5 -mllvm -ibr -mllvm -icall -mllvm -igv" >> $GITHUB_ENV
-            echo "✅ All 8 passes: fla bcf(80%×3) sub(×3) sobf split(5) ibr icall igv"
+            echo "✅ All 8 OLLVM passes confirmed: fla bcf(80%×3) sub(×3) sobf split(5) ibr icall igv"
           else
             echo "OLLVM_FLAGS=" >> $GITHUB_ENV
-            echo "⚠️  OLLVM not responding — building without obfuscation"
+            echo "⚠️  OLLVM passes not responding — building without obfuscation"
           fi
 
-      - name: Build libcipher archives (arm64 + arm32)
+      - name: Build libcipher archives (arm64-v8a + armeabi-v7a)
         run: |
           set -e
           SRC="cpp"
+          TC="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
 
-          CPP_STATIC_ARM64=$(find "$TC" -name "libc++_static.a" | grep "aarch64"    | head -1)
-          CPP_ABI_ARM64=$(   find "$TC" -name "libc++abi.a"     | grep "aarch64"    | head -1)
-          CPP_STATIC_ARM32=$(find "$TC" -name "libc++_static.a" | grep "arm-linux"  | head -1)
-          CPP_ABI_ARM32=$(   find "$TC" -name "libc++abi.a"     | grep "arm-linux"  | head -1)
+          # Static C++ runtime paths (suppresses auto-link of libc++_shared.so)
+          CPP_STATIC_ARM64=$(find "$TC" -name "libc++_static.a" | grep "aarch64" | head -1)
+          CPP_ABI_ARM64=$(   find "$TC" -name "libc++abi.a"     | grep "aarch64" | head -1)
+          CPP_STATIC_ARM32=$(find "$TC" -name "libc++_static.a" | grep "arm-linux" | head -1)
+          CPP_ABI_ARM32=$(   find "$TC" -name "libc++abi.a"     | grep "arm-linux" | head -1)
 
           COMMON_BASE=(
             --sysroot="$SYSROOT"
@@ -272,9 +275,9 @@ jobs:
 
           GUARD="$SRC/guard.cpp"
 
-          # ── arm64-v8a — OLLVM all 8 passes ───────────────────────────────────
-          echo "=== Building arm64-v8a (OLLVM) ==="
-          "$CLANG_OLLVM" --target=aarch64-linux-android26 \
+          # ── arm64-v8a — OLLVM (all 8 passes) ─────────────────────────────────
+          echo "Building arm64-v8a (OLLVM)…"
+          "$CLANG_ARM64" --target=aarch64-linux-android26 \
             "${COMMON_OLLVM[@]}" -std=c++17 \
             -c "$GUARD" -o guard_arm64.o
           "$NDK_LINK_ARM64" \
@@ -283,13 +286,14 @@ jobs:
             -nostdlib++ "$CPP_STATIC_ARM64" "$CPP_ABI_ARM64" \
             -llog -lz -lm guard_arm64.o \
             -o libcipher_arm64.so
+          echo "  ✅ libcipher_arm64.so — $(wc -c < libcipher_arm64.so) bytes"
+          # Static archive — libc++ NOT baked in (NdkBuilder adds -lc++_static at link time)
           "$TC/bin/llvm-ar" rcs libcipher_arm64.a guard_arm64.o
           echo "  ✅ libcipher_arm64.a  — $(wc -c < libcipher_arm64.a) bytes"
-          echo "  ✅ libcipher_arm64.so — $(wc -c < libcipher_arm64.so) bytes"
 
-          # ── armeabi-v7a — OLLVM all 8 passes (ARM target now in clang) ────────
-          echo "=== Building armeabi-v7a (OLLVM) ==="
-          "$CLANG_OLLVM" --target=armv7a-linux-androideabi21 \
+          # ── armeabi-v7a — OLLVM clang (ARM target is compiled in alongside AArch64) ──
+          echo "Building armeabi-v7a (OLLVM)…"
+          "$CLANG_ARM64" --target=armv7a-linux-androideabi21 \
             "${COMMON_OLLVM[@]}" -std=c++17 \
             -c "$GUARD" -o guard_arm32.o
           "$NDK_LINK_ARM32" \
@@ -298,19 +302,23 @@ jobs:
             -nostdlib++ "$CPP_STATIC_ARM32" "$CPP_ABI_ARM32" \
             -llog -lz -lm guard_arm32.o \
             -o libcipher_armeabi-v7a.so
+          echo "  ✅ libcipher_armeabi-v7a.so — $(wc -c < libcipher_armeabi-v7a.so) bytes"
           "$TC/bin/llvm-ar" rcs libcipher_armeabi-v7a.a guard_arm32.o
           echo "  ✅ libcipher_armeabi-v7a.a  — $(wc -c < libcipher_armeabi-v7a.a) bytes"
-          echo "  ✅ libcipher_armeabi-v7a.so — $(wc -c < libcipher_armeabi-v7a.so) bytes"
 
-      - name: Strip + harden
+      - name: Strip + harden binaries
         run: |
+          TC="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
           STRIP="$TC/bin/llvm-strip"
           OBJCOPY="$TC/bin/llvm-objcopy"
-          SECS=(.symtab .strtab .comment .note.android.ident .eh_frame .eh_frame_hdr)
+          REMOVE_SECS=(.symtab .strtab .comment .note.android.ident .eh_frame .eh_frame_hdr)
           for SO in libcipher_arm64.so libcipher_armeabi-v7a.so; do
             "$STRIP" --strip-all "$SO"
-            for S in "${SECS[@]}"; do "$OBJCOPY" --remove-section="$S" "$SO" 2>/dev/null || true; done
+            for SEC in "${REMOVE_SECS[@]}"; do
+              "$OBJCOPY" --remove-section="$SEC" "$SO" 2>/dev/null || true
+            done
             echo "  $SO → $(wc -c < "$SO") bytes"
+            readelf -S "$SO" 2>/dev/null | grep '^\s*\[' | awk '{print "   ", $2}' | grep -v '^\s*\[Nr\]'
           done
 
       - name: Upload artifacts

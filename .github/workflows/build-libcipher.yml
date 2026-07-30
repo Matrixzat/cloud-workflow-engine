@@ -254,6 +254,7 @@ jobs:
             -fvisibility=hidden
             -ffunction-sections -fdata-sections
             -D__ANDROID__ -DANDROID
+            -DD2C_HAS_JNILOAD
             -I"$SRC"
           )
 

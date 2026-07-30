@@ -12,15 +12,19 @@ name: Build libcipher.so
 #    Re-run this job manually whenever you want to rebuild OLLVM from source.
 #
 #  Job 2 — build-guard
-#    Downloads the OLLVM release asset, then compiles guard.cpp into:
-#      libcipher_arm64.so   (OLLVM: all 8 passes — fla bcf sub sobf split ibr icall igv)
-#    NDK r25c provides the sysroot + libc++ static libs; OLLVM clang compiles;
-#    NDK clang wrappers link (they carry all runtime libs).
-#    Artifact is uploaded and stays for 90 days.
+#    Downloads the OLLVM release asset, then compiles guard.cpp into
+#    static archives for ALL four supported ABIs:
 #
-# After the workflow succeeds, download the artifact zip and copy:
-#   libcipher_arm64.so → Dex2c Mega/src/main/jniLibs/arm64-v8a/libcipher.so
-# Then commit + push and rebuild the APK.
+#      libcipher_arm64.a        (arm64-v8a  — OLLVM all 8 passes, real devices)
+#      libcipher_armeabi-v7a.a  (armeabi-v7a — NDK clang, no OLLVM; CI clang is AArch64-only)
+#      libcipher_x86_64.a       (x86_64     — NDK clang, no OLLVM; emulator)
+#      libcipher_x86.a          (x86        — NDK clang, no OLLVM; emulator)
+#
+#    All four archives must be committed to src/main/assets/ before rebuilding
+#    the Dex2c Mega APK.
+#
+# After the workflow succeeds, download the artifact zip and copy all four .a
+# files to src/main/assets/, then commit + push and rebuild the APK.
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
@@ -217,11 +221,15 @@ jobs:
       - name: Resolve toolchain paths
         run: |
           TC="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
-          # OLLVM clang — compile (obfuscation passes)
-          echo "CLANG_ARM64=$OLLVM_BIN"                                 >> $GITHUB_ENV
-          # NDK clang wrapper — link only (carries all runtime libs)
-          echo "NDK_LINK_ARM64=$TC/bin/aarch64-linux-android26-clang++" >> $GITHUB_ENV
-          echo "SYSROOT=$TC/sysroot"                                    >> $GITHUB_ENV
+          # OLLVM clang — compile arm64 with obfuscation passes (AArch64-only target)
+          echo "CLANG_ARM64=$OLLVM_BIN"                                       >> $GITHUB_ENV
+          # NDK clang++ wrappers — carry all runtime libs; used for link (all ABIs)
+          # and for compile of non-arm64 ABIs (NDK clang, no OLLVM).
+          echo "NDK_LINK_ARM64=$TC/bin/aarch64-linux-android26-clang++"       >> $GITHUB_ENV
+          echo "NDK_LINK_ARM32=$TC/bin/armv7a-linux-androideabi21-clang++"    >> $GITHUB_ENV
+          echo "NDK_LINK_X86_64=$TC/bin/x86_64-linux-android21-clang++"      >> $GITHUB_ENV
+          echo "NDK_LINK_X86=$TC/bin/i686-linux-android21-clang++"           >> $GITHUB_ENV
+          echo "SYSROOT=$TC/sysroot"                                          >> $GITHUB_ENV
 
       - name: Confirm OLLVM passes active
         run: |
@@ -236,15 +244,17 @@ jobs:
             echo "⚠️  OLLVM passes not responding — building without obfuscation"
           fi
 
-      - name: Build libcipher.so
+      - name: Build libcipher archives (arm64-v8a + armeabi-v7a)
         run: |
           set -e
           SRC="cpp"
           TC="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
 
-          # Static C++ runtime (suppresses auto-link of libc++_shared.so)
+          # Static C++ runtime paths (suppresses auto-link of libc++_shared.so)
           CPP_STATIC_ARM64=$(find "$TC" -name "libc++_static.a" | grep "aarch64" | head -1)
           CPP_ABI_ARM64=$(   find "$TC" -name "libc++abi.a"     | grep "aarch64" | head -1)
+          CPP_STATIC_ARM32=$(find "$TC" -name "libc++_static.a" | grep "arm-linux" | head -1)
+          CPP_ABI_ARM32=$(   find "$TC" -name "libc++abi.a"     | grep "arm-linux" | head -1)
 
           COMMON_BASE=(
             --sysroot="$SYSROOT"
@@ -266,8 +276,8 @@ jobs:
 
           GUARD="$SRC/guard.cpp"
 
-          # ── arm64-v8a ────────────────────────────────────────────────────────
-          echo "Building arm64-v8a…"
+          # ── arm64-v8a — OLLVM (all 8 passes) ─────────────────────────────────
+          echo "Building arm64-v8a (OLLVM)…"
           "$CLANG_ARM64" --target=aarch64-linux-android26 \
             "${COMMON_OLLVM[@]}" -std=c++17 \
             -c "$GUARD" -o guard_arm64.o
@@ -278,14 +288,24 @@ jobs:
             -llog -lz -lm guard_arm64.o \
             -o libcipher_arm64.so
           echo "  ✅ libcipher_arm64.so — $(wc -c < libcipher_arm64.so) bytes"
-
-          # Static archive — used by NdkBuilder when --whole-archive must work
-          # for real. llvm-ar creates a thin archive of guard_arm64.o alone;
-          # libc++_static.a symbols are already added via -lc++_static in the
-          # NdkBuilder link command, so they must NOT be baked in here (that
-          # would duplicate them and inflate every protected .so by ~3 MB).
+          # Static archive — libc++ NOT baked in (NdkBuilder adds -lc++_static at link time)
           "$TC/bin/llvm-ar" rcs libcipher_arm64.a guard_arm64.o
           echo "  ✅ libcipher_arm64.a  — $(wc -c < libcipher_arm64.a) bytes"
+
+          # ── armeabi-v7a — NDK clang (CI OLLVM is AArch64-only, cannot target arm32) ─
+          echo "Building armeabi-v7a (NDK clang, no OLLVM)…"
+          "$NDK_LINK_ARM32" --target=armv7a-linux-androideabi21 \
+            "${COMMON_BASE[@]}" -std=c++17 \
+            -c "$GUARD" -o guard_arm32.o
+          "$NDK_LINK_ARM32" \
+            -shared -fPIC -Wl,--gc-sections -Wl,--build-id=none \
+            -Wl,-soname,libcipher.so \
+            -nostdlib++ "$CPP_STATIC_ARM32" "$CPP_ABI_ARM32" \
+            -llog -lz -lm guard_arm32.o \
+            -o libcipher_armeabi-v7a.so
+          echo "  ✅ libcipher_armeabi-v7a.so — $(wc -c < libcipher_armeabi-v7a.so) bytes"
+          "$TC/bin/llvm-ar" rcs libcipher_armeabi-v7a.a guard_arm32.o
+          echo "  ✅ libcipher_armeabi-v7a.a  — $(wc -c < libcipher_armeabi-v7a.a) bytes"
 
       - name: Strip + harden binaries
         run: |
@@ -293,7 +313,7 @@ jobs:
           STRIP="$TC/bin/llvm-strip"
           OBJCOPY="$TC/bin/llvm-objcopy"
           REMOVE_SECS=(.symtab .strtab .comment .note.android.ident .eh_frame .eh_frame_hdr)
-          for SO in libcipher_arm64.so; do
+          for SO in libcipher_arm64.so libcipher_armeabi-v7a.so; do
             "$STRIP" --strip-all "$SO"
             for SEC in "${REMOVE_SECS[@]}"; do
               "$OBJCOPY" --remove-section="$SEC" "$SO" 2>/dev/null || true
@@ -310,3 +330,5 @@ jobs:
           path: |
             libcipher_arm64.so
             libcipher_arm64.a
+            libcipher_armeabi-v7a.so
+            libcipher_armeabi-v7a.a

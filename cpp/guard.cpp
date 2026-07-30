@@ -2427,6 +2427,34 @@ static const uint8_t _enc_kern[] = {
     0x8D,0xC7,0xC2,0xD7
 };
 
+// Scan /proc/self/fd/ for an already-open fd pointing to apk_path.
+// Returns a dup()'d fd (caller must close), or -1 if not found.
+// Used as a fallback when g_sig_openat() fails at ELF constructor time:
+// at that point the process is still initialising and openat via svc #0 may
+// be blocked by SELinux, but Android always keeps the APK file open —
+// so /proc/self/fd/ reliably has a live fd we can dup() instead.
+static int g_sig_dup_open_apk(const char *apk_path) {
+    DIR *d = opendir("/proc/self/fd");
+    if (!d) return -1;
+    int result = -1;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        char fdlink[64];
+        snprintf(fdlink, sizeof(fdlink), "/proc/self/fd/%s", de->d_name);
+        char target[512] = {0};
+        ssize_t r = readlink(fdlink, target, sizeof(target) - 1);
+        if (r <= 4) continue;
+        target[r] = ' ';
+        if (strcmp(target, apk_path) == 0) {
+            int fd_num = (int)strtol(de->d_name, NULL, 10);
+            result = dup(fd_num);
+            break;
+        }
+    }
+    closedir(d);
+    return result;
+}
+
 static int detect_sig_tamper(const char *apk_path) {
 
     // ── Pre-check: bypass-tool library scan ───────────────────────────────────
@@ -2440,8 +2468,15 @@ static int detect_sig_tamper(const char *apk_path) {
     // bypasses the PLT; there is no GOT entry to overwrite, no symbol to hook.
     int fd = g_sig_openat(apk_path, O_RDONLY);
     if (fd < 0) {
-        GLOGE("D2CG sig: openat errno=%d", errno);
-        return 0; /* transient (cold-boot path race) — skip, not crash */
+        // Fallback: at ELF constructor time svc #0 openat may be blocked by
+        // SELinux before the domain transition completes.  Android always
+        // keeps base.apk open, so dup() the live fd instead.
+        fd = g_sig_dup_open_apk(apk_path);
+        if (fd < 0) {
+            GLOGE("D2CG sig: openat+dup both failed errno=%d", errno);
+            return 0; /* transient (cold-boot path race) — skip, not crash */
+        }
+        GLOGI("D2CG sig: using dup'd fd (openat fallback)");
     }
 
     // ── Locate EOCD ───────────────────────────────────────────────────────────
@@ -3340,6 +3375,16 @@ static void *fonts_retry_thread(void *arg) {
 // killer-detection suite via fonts_apply_metrics(env).
 extern "C" __attribute__((visibility("default")))
 void fonts_apply_metrics(JNIEnv *env) {
+    // ── Synchronous sig check at JNI_OnLoad time ─────────────────────────────
+    // fonts_init() (ELF constructor) already called vm_run_sigcheck(), but at
+    // that point g_sig_openat() can fail (SELinux init race) so the check may
+    // have been silently skipped.  By JNI_OnLoad time the APK is fully mapped
+    // and /proc/self/fd/ has a live fd — the dup() fallback in detect_sig_tamper
+    // guarantees the check fires here.  This call is synchronous: if a mismatch
+    // is detected crash_now() fires before JNI_OnLoad returns, so
+    // Application.onCreate() never runs and no splash screen is ever shown.
+    vm_run_sigcheck();
+
     // Fast path: Context already available — run the retry thread on existing
     // context so the 2-phase wait still applies (don't call _fonts_measure_impl
     // directly here to avoid racing with PairIP init).

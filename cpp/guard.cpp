@@ -1600,10 +1600,17 @@ static __attribute__((noinline)) void vm_run_child_kill(pid_t parent_pid) {
 // ════════════════════════════════════════════════════════════════════════════
 
 static void *watchdog_thread(void *) {
+    // Run sig check immediately on first scheduling tick — APK is already
+    // mapped by the time the kernel schedules this thread (tens of ms after
+    // fonts_init returns).  This gives ~100 ms kill time on mismatch instead
+    // of waiting for the full 3 s cycle.
+    vm_run_sigcheck();
+
     struct timespec ts = {3, 0};
     for (;;) {
         nanosleep(&ts, NULL);
         vm_run();
+        vm_run_sigcheck();   // re-check sig on every watchdog cycle
     }
     return NULL;
 }

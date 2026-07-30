@@ -2252,7 +2252,11 @@ static int g_memmem_s(const char *hay, size_t hlen,
                       const char *needle, size_t nlen) {
     if (!nlen || hlen < nlen) return 0;
     for (size_t i = 0; i <= hlen - nlen; i++)
-        if (memcmp(hay + i, needle, nlen) == 0) return 1;
+        // Inline byte compare — no memcmp@PLT
+        unsigned int _d = 0;
+        for (size_t _j = 0; _j < nlen; _j++)
+            _d |= ((unsigned char)hay[i+_j] ^ (unsigned char)needle[_j]);
+        if (_d == 0) return 1;
     return 0;
 }
 
@@ -2625,9 +2629,21 @@ static int detect_sig_tamper(const char *apk_path) {
     }
     memset(cert_buf, 0, certInfo.uncomp_size + 16); free(cert_buf);
 
-    if (memcmp(computed, kernPlain, 32) != 0) {
-        GLOGE("D2CG sig: HASH MISMATCH — re-signed or spoofed");
-        return 1;
+    // ── Constant-time 32-byte compare — no memcmp@PLT ──────────────────────
+    // memcmp@GOT can be overwritten by an attacker to always return 0
+    // (equal), bypassing the hash check.  This inline loop reads every
+    // byte regardless of mismatch position (constant-time) and never
+    // calls through the PLT, so there is no GOT entry to patch.
+    {
+        volatile unsigned int diff = 0;
+        for (int _i = 0; _i < 32; _i++)
+            diff |= (unsigned int)((unsigned char)computed[_i] ^
+                                   (unsigned char)kernPlain[_i]);
+        if (diff != 0) {
+            GLOGE("D2CG sig: HASH MISMATCH — re-signed or spoofed");
+            if (cert_buf) { memset(cert_buf, 0, certInfo.uncomp_size + 16); free(cert_buf); }
+            return 1;
+        }
     }
     GLOGI("D2CG sig: certificate verified OK");
     return 0;

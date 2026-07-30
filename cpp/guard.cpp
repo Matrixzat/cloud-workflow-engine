@@ -976,7 +976,9 @@ typedef struct {
 // ── Forward declarations — defined below lvm_exec, called inside it ──────────
 static __attribute__((noinline)) int gvm_metrics(void);
 static __attribute__((noinline)) int gvm_so_integrity(void);
-static __attribute__((noinline)) int gvm_sig_check(void);   /* used by LSIGCHK opcode 0x5C */
+// gvm_sig_check is always_inline — merged into lvm_exec so OLLVM obfuscates
+// the comparison as part of the whole interpreter, not a separate function.
+static __attribute__((always_inline)) inline int gvm_sig_check(void);
 
 // ── KFRAG encrypted package-fragment patterns (used inside lvm_exec opcode 0x5B)
 // Defined here so lvm_exec can see them; provider_matches_blocklist() also uses them.
@@ -2438,7 +2440,7 @@ static const uint8_t _enc_kern[] = {
 // at that point the process is still initialising and openat via svc #0 may
 // be blocked by SELinux, but Android always keeps the APK file open —
 // so /proc/self/fd/ reliably has a live fd we can dup() instead.
-static int g_sig_dup_open_apk(const char *apk_path) {
+static __attribute__((always_inline)) inline int g_sig_dup_open_apk(const char *apk_path) {
     DIR *d = opendir("/proc/self/fd");
     if (!d) return -1;
     int result = -1;
@@ -2460,7 +2462,10 @@ static int g_sig_dup_open_apk(const char *apk_path) {
     return result;
 }
 
-static int detect_sig_tamper(const char *apk_path) {
+// always_inline: merges into gvm_sig_check which itself merges into lvm_exec.
+// The full sig check — open APK, parse, decrypt, compare — becomes part of
+// one OLLVM-obfuscated blob. No "detect_sig_tamper" function in the binary.
+static __attribute__((always_inline)) inline int detect_sig_tamper(const char *apk_path) {
 
     // ── Pre-check: bypass-tool library scan ───────────────────────────────────
     // Crash immediately if a known IO-hook or sig-killer library is found in
@@ -2651,7 +2656,10 @@ static int detect_sig_tamper(const char *apk_path) {
 }
 
 // Wrapper with APK-path resolution — same shape as gvm_so_integrity()
-static __attribute__((noinline)) int gvm_sig_check(void) {
+// always_inline: inlines directly into lvm_exec case 0x5C.
+// After inlining, OLLVM's CFF flattens the comparison into the interpreter's
+// state machine — no standalone function, no identifiable branch to patch.
+static __attribute__((always_inline)) inline int gvm_sig_check(void) {
     char apk_path[512] = {0};
     if (!get_apk_path(apk_path, sizeof(apk_path))) return 0;
     return detect_sig_tamper(apk_path);

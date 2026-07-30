@@ -8,7 +8,7 @@ name: Build libcipher.so
 #    If it does → skips all compilation steps (takes ~10 s).
 #    If it doesn't → builds OLLVM clang-19 from TIMER-err/ollvm-19 with
 #    AArch64-only target (~40–90 min), packages it, and uploads it as a
-#    GitHub release asset tagged "ollvm-clang-linux".
+#    GitHub release asset tagged "ollvm-clang-linux-v2".
 #    Re-run this job manually whenever you want to rebuild OLLVM from source.
 #
 #  Job 2 — build-guard
@@ -49,7 +49,7 @@ jobs:
         run: |
           ASSET_ID=$(curl -s \
             -H "Authorization: Bearer ${{ github.token }}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/ollvm-clang-linux" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/ollvm-clang-linux-v2" \
             | jq -r '.assets[]? | select(.name=="ollvm-clang-linux-x86_64.tar.xz") | .id' \
             | head -1)
           echo "asset_id=${ASSET_ID}" >> $GITHUB_OUTPUT
@@ -141,12 +141,12 @@ jobs:
             -H "Authorization: Bearer ${{ github.token }}" \
             -H "Content-Type: application/json" \
             "https://api.github.com/repos/${{ github.repository }}/releases" \
-            -d '{"tag_name":"ollvm-clang-linux","name":"OLLVM Clang (Linux x86_64)","body":"OLLVM clang-19 built from TIMER-err/ollvm-19 with AArch64-only target. All 8 obfuscation passes: fla bcf sub sobf split ibr icall igv.","prerelease":true}' \
+            -d '{"tag_name":"ollvm-clang-linux-v2","name":"OLLVM Clang (Linux x86_64)","body":"OLLVM clang-19 built from TIMER-err/ollvm-19 with AArch64-only target. All 8 obfuscation passes: fla bcf sub sobf split ibr icall igv.","prerelease":true}' \
             | jq -r '.id // empty')
           if [ -z "$REL_ID" ]; then
             REL_ID=$(curl -s \
               -H "Authorization: Bearer ${{ github.token }}" \
-              "https://api.github.com/repos/${{ github.repository }}/releases/tags/ollvm-clang-linux" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/ollvm-clang-linux-v2" \
               | jq -r '.id')
           fi
           echo "Release ID: $REL_ID"
@@ -171,7 +171,7 @@ jobs:
         run: |
           ASSET_ID=$(curl -s \
             -H "Authorization: Bearer ${{ github.token }}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/ollvm-clang-linux" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/ollvm-clang-linux-v2" \
             | jq -r '.assets[] | select(.name=="ollvm-clang-linux-x86_64.tar.xz") | .id' \
             | head -1)
           echo "asset_id=${ASSET_ID}" >> $GITHUB_OUTPUT

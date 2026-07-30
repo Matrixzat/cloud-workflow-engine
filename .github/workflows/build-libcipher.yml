@@ -33,7 +33,6 @@ on:
     paths:
       - 'cpp/guard.cpp'
       - 'cpp/guard_pstrings.inc'
-      - '.github/workflows/build-libcipher.yml'
 
 # ─────────────────────────────────────────────────────────────────────────────
 # JOB 1 — Build OLLVM clang (skipped if release asset already exists)

@@ -5,8 +5,11 @@ import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Environment;
 import com.android.tools.smali.dexlib2.Opcodes;
+import com.android.tools.smali.dexlib2.dexbacked.DexBackedClassDef;
 import com.android.tools.smali.dexlib2.dexbacked.DexBackedDexFile;
+import com.android.tools.smali.dexlib2.dexbacked.DexBackedMethod;
 import com.android.tools.smali.dexlib2.iface.ClassDef;
+import com.android.tools.smali.dexlib2.iface.Method;
 import com.android.tools.smali.dexlib2.writer.io.FileDataStore;
 import com.android.tools.smali.dexlib2.writer.pool.DexPool;
 import com.dex2c.mega.engine.vmp.Dex2c;
@@ -748,6 +751,16 @@ public class ApkProtector {
                 resultPools.get(i).writeTo(new FileDataStore(target));
                 android.util.Log.i("ApkProtector",
                         "VMP: wrote injected DEX → " + target.getName());
+
+                // ── Post-strip verification ───────────────────────────────────
+                // Confirm every method selected for VMP is actually ACC_NATIVE
+                // in the output DEX.  Methods that were ALREADY native/abstract
+                // in the original APK are skipped (null impl in implDex = not
+                // our job).  Logs a warning per leaked method so nothing slips
+                // through silently.
+                if (cfg.getImplDexFile().exists()) {
+                    verifyVmpStripping(cfg, target);
+                }
             }
 
             // ── Sentinel key per converted class ─────────────────────────────
@@ -793,6 +806,98 @@ public class ApkProtector {
         }
 
         return keys;
+    }
+
+    /**
+     * Post-strip verification for VMP mode.
+     *
+     * Reads the impl DEX (original bytecode of selected methods) and the
+     * output DEX (shell DEX after classesInit0 injection) and confirms that
+     * every method which HAD bytecode in the impl DEX is now ACC_NATIVE in
+     * the output.
+     *
+     * Methods that were already native/abstract in the original APK have a
+     * null implementation in the impl DEX — they are intentionally skipped
+     * (we never touched them, and flagging them would be a false positive).
+     *
+     * Results go to Logcat under the "ApkProtector" tag so you can filter by
+     * "VMP verify" to audit any run.
+     */
+    private void verifyVmpStripping(DexConfig cfg, File outputDex) {
+        try {
+            DexBackedDexFile implDex = DexBackedDexFile.fromInputStream(
+                    null,
+                    new java.io.BufferedInputStream(
+                            new java.io.FileInputStream(cfg.getImplDexFile())));
+
+            DexBackedDexFile outDex = DexBackedDexFile.fromInputStream(
+                    null,
+                    new java.io.BufferedInputStream(
+                            new java.io.FileInputStream(outputDex)));
+
+            // Build index: classType → { methodKey → accessFlags }
+            Map<String, Map<String, Integer>> outIndex = new HashMap<>();
+            for (ClassDef cls : outDex.getClasses()) {
+                Map<String, Integer> mmap = new HashMap<>();
+                for (Method m : cls.getMethods()) {
+                    mmap.put(vmpMethodKey(m), m.getAccessFlags());
+                }
+                outIndex.put(cls.getType(), mmap);
+            }
+
+            int ok = 0, warned = 0;
+            for (DexBackedClassDef cls : implDex.getClasses()) {
+                Map<String, Integer> outClass = outIndex.get(cls.getType());
+                for (DexBackedMethod m : cls.getMethods()) {
+                    if (m.getImplementation() == null) {
+                        // Already native/abstract in original APK — not our job, skip
+                        continue;
+                    }
+                    String key = vmpMethodKey(m);
+                    if (outClass == null) {
+                        android.util.Log.w("ApkProtector",
+                                "VMP verify ✗ class missing from output DEX: " + cls.getType());
+                        warned++;
+                        continue;
+                    }
+                    Integer flags = outClass.get(key);
+                    if (flags == null) {
+                        android.util.Log.w("ApkProtector",
+                                "VMP verify ✗ method missing from output DEX: "
+                                        + cls.getType() + "->" + key);
+                        warned++;
+                    } else if ((flags & 0x0100 /* ACC_NATIVE */) == 0) {
+                        android.util.Log.w("ApkProtector",
+                                "VMP verify ✗ bytecode NOT stripped — still has implementation: "
+                                        + cls.getType() + "->" + key);
+                        warned++;
+                    } else {
+                        ok++;
+                    }
+                }
+            }
+
+            if (warned == 0) {
+                android.util.Log.i("ApkProtector",
+                        "VMP verify ✓ all " + ok + " converted method(s) confirmed native in "
+                                + outputDex.getName());
+            } else {
+                android.util.Log.w("ApkProtector",
+                        "VMP verify ✗ " + warned + " method(s) NOT stripped in "
+                                + outputDex.getName() + " (" + ok + " ok)");
+            }
+        } catch (Exception e) {
+            android.util.Log.w("ApkProtector",
+                    "VMP verify: could not verify output DEX — " + e.getMessage());
+        }
+    }
+
+    /** Builds a unique key for a method: "name(Lparam1;Lparam2;)Lreturn;" */
+    private static String vmpMethodKey(Method m) {
+        StringBuilder sb = new StringBuilder(m.getName()).append('(');
+        for (CharSequence p : m.getParameterTypes()) sb.append(p);
+        sb.append(')').append(m.getReturnType());
+        return sb.toString();
     }
 
     private void copyFile(File src, File dst) throws IOException {

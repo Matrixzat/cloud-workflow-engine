@@ -70,6 +70,13 @@ public class ProtectFragment extends Fragment {
     private TextView btnProtectLabel;
     private SwitchMaterial switchSign;
     private SwitchMaterial switchVmp;
+    private TextView tvModeTitle;
+    private TextView tvModeSubtitle;
+
+    private static final String DEX2C_TITLE    = "Dex2C Mode";
+    private static final String DEX2C_SUBTITLE = "Compiles Java to hardened native C++ code";
+    private static final String VMP_TITLE      = "VMP Mode";
+    private static final String VMP_SUBTITLE   = "Bytecode-level protection, harder to reverse-engineer";
 
     // Progress state
     private ProgressBar progressBar;
@@ -232,9 +239,16 @@ public class ProtectFragment extends Fragment {
         switchSign.setChecked(viewModel.isSignEnabled());
         switchSign.setOnCheckedChangeListener((b, c) -> viewModel.setSignEnabled(c));
 
-        switchVmp       = view.findViewById(R.id.switch_vmp);
+        tvModeTitle    = view.findViewById(R.id.tv_mode_title);
+        tvModeSubtitle = view.findViewById(R.id.tv_mode_subtitle);
+
+        switchVmp = view.findViewById(R.id.switch_vmp);
         switchVmp.setChecked(viewModel.isVmpEnabled());
-        switchVmp.setOnCheckedChangeListener((b, c) -> viewModel.setVmpEnabled(c));
+        updateModeLabels(viewModel.isVmpEnabled());
+        switchVmp.setOnCheckedChangeListener((b, vmpOn) -> {
+            viewModel.setVmpEnabled(vmpOn);
+            updateModeLabels(vmpOn);
+        });
         btnProtect.setOnClickListener(v -> onRunClicked(view));
         btnCancel.setOnClickListener(v -> {
             viewModel.cancel();
@@ -543,6 +557,13 @@ public class ProtectFragment extends Fragment {
             if (!line.trim().isEmpty()) count++;
         }
         tvClassListCount.setText(count == 1 ? "1 class" : count + " classes");
+    }
+
+    private void updateModeLabels(boolean vmpOn) {
+        if (tvModeTitle    == null) return;
+        if (tvModeSubtitle == null) return;
+        tvModeTitle.setText(vmpOn    ? VMP_TITLE    : DEX2C_TITLE);
+        tvModeSubtitle.setText(vmpOn ? VMP_SUBTITLE : DEX2C_SUBTITLE);
     }
 
     private String buildFilterFromClassList() {

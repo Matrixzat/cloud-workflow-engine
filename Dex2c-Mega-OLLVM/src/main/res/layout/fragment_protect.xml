@@ -679,16 +679,18 @@
                 android:orientation="vertical">
 
                 <TextView
+                    android:id="@+id/tv_mode_title"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="VMP Mode"
+                    android:text="Dex2C Mode"
                     android:textColor="@color/text_secondary"
                     android:textSize="13sp" />
 
                 <TextView
+                    android:id="@+id/tv_mode_subtitle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Slower but harder to reverse-engineer"
+                    android:text="Compiles Java to hardened native C++ code"
                     android:textColor="@color/text_secondary"
                     android:textSize="11sp" />
 

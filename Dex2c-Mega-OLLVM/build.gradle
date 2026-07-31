@@ -125,7 +125,7 @@ dependencies {
     // ── VMP (maoabc/nmmp port) dependencies ─────────────────────────────────
     // smali/dexlib2 — DEX parser used by the VMP converter to walk method
     // bytecode and rewrite Dalvik opcodes to the randomised custom opcode set.
-    implementation 'com.android.tools.smali:smali-dexlib2:3.0.3'
+    implementation 'com.android.tools.smali:smali-dexlib2:3.0.9'
 
     // Guava — used by JniCodeGenerator (HashMultimap, Ordering, Iterables, etc.)
     implementation 'com.google.guava:guava:33.2.1-android'

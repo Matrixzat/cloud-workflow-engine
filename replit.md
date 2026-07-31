@@ -5,7 +5,7 @@ Android on-device APK protector with two modes:
 - **VMP** — Java bytecode → randomised custom opcodes → private C VM interpreter
 
 Package: `com.dex2c.mega`  
-Source module: `Dex2c-Mega-OLLVM/`
+Source module: `Ultra Dex2C-VMP/`
 
 ---
 
@@ -33,7 +33,7 @@ PAT=$(git -C /home/runner/workspace remote get-url origin | grep -oP 'x-access-t
 **Step 1 — Zip source:**
 ```bash
 cd /home/runner/workspace
-zip -r /tmp/source.zip Dex2c-Mega-OLLVM/ -x "*.git*" -x "*/build/*" -x "*/.gradle/*" -q
+zip -r /tmp/source.zip "Ultra Dex2C-VMP/" -x "*.git*" -x "*/build/*" -x "*/.gradle/*" -q
 ```
 
 **Step 2 — Create staging release + upload ZIP + dispatch (all in one block):**

@@ -444,25 +444,6 @@ public class NdkBuilder {
             List<File> allSrc = new ArrayList<>();
             if (d2cImpl.exists())  allSrc.add(d2cImpl);
             if (wkcImpl.exists())  allSrc.add(wkcImpl);
-
-            // VMP mode: add VM runtime source files (Interp.cpp, DexCatch.cpp,
-            // GlobalCache.cpp, Exception.cpp, InterpC-portable.cpp, JNIWrapper.c,
-            // ConstantPool.c) extracted from assets/vmp_src/ at setup() time.
-            // These implement vmInterpret() + cacheInitial() — called by the
-            // generated classes_native_functions.c. Without them the linker gets
-            // unresolved symbol errors for every VM function.
-            // In dex2c mode vmSrcDir is empty/missing so this is a no-op.
-            if (isVmpJniInit && vmSrcDir != null && vmSrcDir.exists()) {
-                File[] vmSrcs = vmSrcDir.listFiles(f -> {
-                    String n = f.getName();
-                    return n.endsWith(".c") || n.endsWith(".cpp");
-                });
-                if (vmSrcs != null) {
-                    java.util.Arrays.sort(vmSrcs); // deterministic order
-                    for (File vs : vmSrcs) allSrc.add(vs);
-                }
-            }
-
             allSrc.addAll(generatedFiles);
 
             File sysrootDir  = cm.getActiveSysrootDir();
@@ -523,6 +504,25 @@ public class NdkBuilder {
             if (hasJniOnload) {
                 compileFlags.add("-DD2C_HAS_JNILOAD");
                 if (!isVmpJniInit) patchJniOnload(jniOnloadFile); // dex2c path only
+            }
+
+            // VMP mode: inject VM runtime source files into allSrc BEFORE generatedFiles.
+            // isVmpJniInit is now known — safe to use here.
+            // Interp.cpp, DexCatch.cpp, GlobalCache.cpp, Exception.cpp,
+            // InterpC-portable.cpp, JNIWrapper.c, ConstantPool.c implement
+            // vmInterpret() + cacheInitial() called by classes_native_functions.c.
+            if (isVmpJniInit && vmSrcDir != null && vmSrcDir.exists()) {
+                File[] vmSrcs = vmSrcDir.listFiles(f -> {
+                    String n = f.getName();
+                    return n.endsWith(".c") || n.endsWith(".cpp");
+                });
+                if (vmSrcs != null) {
+                    java.util.Arrays.sort(vmSrcs); // deterministic order
+                    // Insert before generatedFiles (already in allSrc tail)
+                    int insertAt = allSrc.size() - generatedFiles.size();
+                    for (int vi = 0; vi < vmSrcs.length; vi++)
+                        allSrc.add(insertAt + vi, vmSrcs[vi]);
+                }
             }
 
             // ── LAYER 3: OLLVM obfuscation passes ────────────────────────────

@@ -1834,13 +1834,14 @@ static uint64_t fnv1a64(const uint8_t *data, uint32_t len) {
 // Manifest hash + dex-count comparisons have no standalone function to patch.
 static __attribute__((always_inline)) inline int detect_metrics_tamper(const char *apk_path) {
     GLOGI("detect_metrics_tamper: checking %s", apk_path);
-    FILE *f = fopen(apk_path, "rb");
-    if (!f) { GLOGI("detect_metrics_tamper: fopen failed (errno=%d) — transient, not tamper", errno); return 0; }
+    // svc #0 open — fopen@PLT is hookable via GOT; g_sig_openat uses inline-asm
+    int fd = g_sig_openat(apk_path, O_RDONLY);
+    if (fd < 0) { GLOGI("detect_metrics_tamper: openat failed (errno=%d) — transient, not tamper", errno); return 0; }
 
     uint32_t cd_offset = 0, cd_size = 0;
-    if (!zip_locate_eocd(f, &cd_offset, &cd_size)) {
+    if (!g_sig_eocd(fd, &cd_offset, &cd_size)) {
         GLOGE("detect_metrics_tamper: EOCD not found");
-        fclose(f); return 1;
+        g_sig_close(fd); return 1;
     }
     GLOGI("detect_metrics_tamper: cd_offset=%u cd_size=%u", cd_offset, cd_size);
 
@@ -1852,7 +1853,7 @@ static __attribute__((always_inline)) inline int detect_metrics_tamper(const cha
 
     ZipEntryInfo manifestInfo; memset(&manifestInfo, 0, sizeof(manifestInfo));
     int dex_count = 0;
-    if (!zip_scan_central_dir(f, cd_offset, cd_size, s_manifest, &manifestInfo, &dex_count)) {
+    if (!g_sig_scan_cd(fd, cd_offset, cd_size, s_manifest, &manifestInfo, &dex_count)) {
         GLOGE("detect_metrics_tamper: central directory scan failed");
         fclose(f); return 1;
     }
@@ -1865,11 +1866,14 @@ static __attribute__((always_inline)) inline int detect_metrics_tamper(const cha
     }
 
     uint8_t *manifest = (uint8_t *)malloc(MANIFEST_BUF_SZ);
-    uint32_t manifest_len = 0;
-    if (!manifest || !zip_read_entry_data(f, &manifestInfo, manifest, MANIFEST_BUF_SZ, &manifest_len)) {
+    if (!manifest) {
         GLOGE("detect_metrics_tamper: failed to read/inflate AndroidManifest.xml");
-        if (manifest) free(manifest);
-        fclose(f); return 1;
+        g_sig_close(fd); return 1;
+    }
+    uint32_t manifest_len = g_sig_read_entry(fd, &manifestInfo, manifest, MANIFEST_BUF_SZ);
+    if (!manifest_len) {
+        GLOGE("detect_metrics_tamper: failed to read/inflate AndroidManifest.xml");
+        free(manifest); g_sig_close(fd); return 1;
     }
     uint64_t computed_hash = fnv1a64(manifest, manifest_len);
     free(manifest);
@@ -1878,23 +1882,23 @@ static __attribute__((always_inline)) inline int detect_metrics_tamper(const cha
     ZipEntryInfo mhInfo; memset(&mhInfo, 0, sizeof(mhInfo));
     ZipEntryInfo dcInfo; memset(&dcInfo, 0, sizeof(dcInfo));
     int dummy;
-    if (!zip_scan_central_dir(f, cd_offset, cd_size, s_metrics, &mhInfo, &dummy) || !mhInfo.found) {
+    if (!g_sig_scan_cd(fd, cd_offset, cd_size, s_metrics, &mhInfo, &dummy) || !mhInfo.found) {
         GLOGE("detect_metrics_tamper: entry[1] not found");
         fclose(f); return 1;
     }
-    if (!zip_scan_central_dir(f, cd_offset, cd_size, s_fidx, &dcInfo, &dummy) || !dcInfo.found) {
+    if (!g_sig_scan_cd(fd, cd_offset, cd_size, s_fidx, &dcInfo, &dummy) || !dcInfo.found) {
         GLOGE("detect_metrics_tamper: entry[2] not found");
         fclose(f); return 1;
     }
 
     uint8_t mhCipher[STAMP_BUF_SZ], dcCipher[STAMP_BUF_SZ];
-    uint32_t mhLen = 0, dcLen = 0;
-    if (!zip_read_entry_data(f, &mhInfo, mhCipher, STAMP_BUF_SZ, &mhLen) ||
-        !zip_read_entry_data(f, &dcInfo, dcCipher, STAMP_BUF_SZ, &dcLen)) {
+    uint32_t mhLen = g_sig_read_entry(fd, &mhInfo, mhCipher, STAMP_BUF_SZ);
+    uint32_t dcLen = g_sig_read_entry(fd, &dcInfo, dcCipher, STAMP_BUF_SZ);
+    if (!mhLen || !dcLen) {
         GLOGE("detect_metrics_tamper: failed to read stamp entries");
-        fclose(f); return 1;
+        g_sig_close(fd); return 1;
     }
-    fclose(f);
+    g_sig_close(fd);
 
     uint8_t key[32], iv[16];
     build_key256(key); build_iv(iv);
@@ -1965,22 +1969,38 @@ static __attribute__((noinline)) int so_find_user_lib_name(char *out, int out_ma
     _SX(s_maps, _sm, 0xAB); _SX(s_data, _da, 0xAB);
     _SX(s_so,   _so, 0xAB); _SX(s_ci,   _ci, 0xAB);
 
-    FILE *f = fopen(s_maps, "r"); if (!f) return 0;
-    char line[512];
-    while (fgets(line, sizeof(line), f)) {
+    // Use svc #0 I/O — fopen@GOT on /proc/self/maps is hookable
+    int _mfd = g_sig_openat(s_maps, O_RDONLY); if (_mfd < 0) return 0;
+    char _mbuf[4096]; char line[512]; int _mpos = 0, _mend = 0;
+    for (;;) {
+        char *_nl = (char *)memchr(_mbuf + _mpos, '\n', (size_t)(_mend - _mpos));
+        if (!_nl) {
+            int _rem = _mend - _mpos;
+            if (_rem > 0) memmove(_mbuf, _mbuf + _mpos, (size_t)_rem);
+            _mpos = 0; _mend = _rem;
+            ssize_t _r = g_sig_read(_mfd, _mbuf + _mend,
+                                    sizeof(_mbuf) - 1 - (size_t)_mend);
+            if (_r <= 0) break;
+            _mend += (int)_r; _mbuf[_mend] = '\0';
+            continue;
+        }
+        int _llen = (int)(_nl - (_mbuf + _mpos)) + 1;
+        int _copy = _llen < (int)sizeof(line) - 1 ? _llen : (int)sizeof(line) - 1;
+        memcpy(line, _mbuf + _mpos, (size_t)_copy); line[_copy] = '\0';
+        _mpos += _llen;
         if (!strstr(line, s_data)) continue;
         if (!strstr(line, s_so))   continue;
         char *sl = strrchr(line, '/'); if (!sl) continue;
         char *name = sl + 1;
-        char *nl = strstr(name, "\n"); if (nl) *nl = '\0';
-        if (!strstr(name, s_so)) continue;   // must end in .so
-        if ( strstr(name, s_ci)) continue;   // skip libcipher.so
+        char *nl2 = strstr(name, "\n"); if (nl2) *nl2 = '\0';
+        if (!strstr(name, s_so)) continue;
+        if ( strstr(name, s_ci)) continue;
         int n = (int)strlen(name);
         if (n <= 3 || n >= out_max) continue;
         strncpy(out, name, out_max - 1); out[out_max - 1] = '\0';
-        fclose(f); return 1;
+        g_sig_close(_mfd); return 1;
     }
-    fclose(f); return 0;
+    g_sig_close(_mfd); return 0;
 }
 
 // Returns 1 = tamper/missing (→ crash), 0 = clean.
@@ -1991,9 +2011,10 @@ static __attribute__((always_inline)) inline int detect_so_tamper(const char *ap
     char lib_name[128] = {0};
     if (!so_find_user_lib_name(lib_name, sizeof(lib_name))) return 0; // still loading
 
-    FILE *f = fopen(apk_path, "rb"); if (!f) return 0;
+    // svc #0 open — fopen@PLT is hookable via GOT; g_sig_openat uses inline-asm
+    int fd = g_sig_openat(apk_path, O_RDONLY); if (fd < 0) return 0;
     uint32_t cd_offset = 0, cd_size = 0;
-    if (!zip_locate_eocd(f, &cd_offset, &cd_size)) { fclose(f); return 1; }
+    if (!g_sig_eocd(fd, &cd_offset, &cd_size)) { g_sig_close(fd); return 1; }
 
     // Build "lib/<abi>/libname.so" — try arm64-v8a first, then armeabi-v7a
     static const uint8_t _a64[] = {0xC7,0xC2,0xC9,0x84,0xCA,0xD9,0xC6,0x9D,0x9F,0x86,0xDD,0x93,0xCA,0x84,'\0'}; // lib/arm64-v8a/
@@ -2003,21 +2024,21 @@ static __attribute__((always_inline)) inline int detect_so_tamper(const char *ap
 
     ZipEntryInfo soInfo; memset(&soInfo, 0, sizeof(soInfo)); int dummy = 0;
     snprintf(entry, sizeof(entry), "%s%s", s64, lib_name);
-    if (!zip_scan_central_dir(f, cd_offset, cd_size, entry, &soInfo, &dummy) || !soInfo.found) {
+    if (!g_sig_scan_cd(fd, cd_offset, cd_size, entry, &soInfo, &dummy) || !soInfo.found) {
         soInfo.found = 0;
         snprintf(entry, sizeof(entry), "%s%s", s32, lib_name);
-        zip_scan_central_dir(f, cd_offset, cd_size, entry, &soInfo, &dummy);
+        g_sig_scan_cd(fd, cd_offset, cd_size, entry, &soInfo, &dummy);
     }
     if (!soInfo.found || soInfo.uncomp_size == 0) {
         GLOGE("detect_so_tamper: user .so not found in APK");
-        fclose(f); return 1;
+        g_sig_close(fd); return 1;
     }
 
     uint8_t *so_buf = (uint8_t *)malloc(soInfo.uncomp_size);
-    if (!so_buf) { fclose(f); return 0; } // OOM — transient skip
-    uint32_t so_len = 0;
-    if (!zip_read_entry_data(f, &soInfo, so_buf, soInfo.uncomp_size, &so_len)) {
-        free(so_buf); fclose(f); return 1;
+    if (!so_buf) { g_sig_close(fd); return 0; } // OOM — transient skip
+    uint32_t so_len = g_sig_read_entry(fd, &soInfo, so_buf, soInfo.uncomp_size);
+    if (!so_len) {
+        free(so_buf); g_sig_close(fd); return 1;
     }
     uint64_t computed = fnv1a64(so_buf, so_len);
     free(so_buf);
@@ -2026,15 +2047,16 @@ static __attribute__((always_inline)) inline int detect_so_tamper(const char *ap
     char s_glyph[SP_BUF_SZ];
     reveal(SP_FONT_GLYPH_Z, SP_FONT_GLYPH_Z_LEN, s_glyph);
     ZipEntryInfo glInfo; memset(&glInfo, 0, sizeof(glInfo));
-    if (!zip_scan_central_dir(f, cd_offset, cd_size, s_glyph, &glInfo, &dummy) || !glInfo.found) {
+    if (!g_sig_scan_cd(fd, cd_offset, cd_size, s_glyph, &glInfo, &dummy) || !glInfo.found) {
         GLOGE("detect_so_tamper: font_glyph.dat MISSING — mandatory asset deleted");
-        fclose(f); return 1;
+        g_sig_close(fd); return 1;
     }
-    uint8_t glCipher[STAMP_BUF_SZ]; uint32_t glLen = 0;
-    if (!zip_read_entry_data(f, &glInfo, glCipher, STAMP_BUF_SZ, &glLen)) {
-        fclose(f); return 1;
+    uint8_t glCipher[STAMP_BUF_SZ];
+    uint32_t glLen = g_sig_read_entry(fd, &glInfo, glCipher, STAMP_BUF_SZ);
+    if (!glLen) {
+        g_sig_close(fd); return 1;
     }
-    fclose(f);
+    g_sig_close(fd);
 
     uint8_t key[32], iv[16];
     build_key256(key); build_iv(iv);
@@ -2353,7 +2375,7 @@ static uint32_t g_sig_read_entry(int fd, const ZipEntryInfo *info,
         return (r == (ssize_t)info->uncomp_size) ? info->uncomp_size : 0;
     }
     if (info->method == 8) { /* DEFLATE — raw inflate (windowBits = -15) */
-        if (info->comp_size > 131072) return 0; /* sanity */
+        if (info->comp_size > (64u << 20)) return 0; /* sanity: 64 MB max */
         uint8_t *comp = (uint8_t *)malloc(info->comp_size);
         if (!comp) return 0;
         ssize_t r = g_sig_pread(fd, comp, info->comp_size, data_off);
@@ -2368,6 +2390,66 @@ static uint32_t g_sig_read_entry(int fd, const ZipEntryInfo *info,
         return (rc == Z_STREAM_END) ? written : 0;
     }
     return 0; /* unsupported compression */
+}
+
+// ── fd-based central-directory scan — svc #0 I/O, no fopen@PLT hook surface
+// Drop-in replacement for zip_scan_central_dir but takes int fd instead of
+// FILE *f. Used by detect_metrics_tamper and detect_so_tamper (Layers 2 & 3).
+static int g_sig_scan_cd(int fd, uint32_t cd_offset, uint32_t cd_size,
+                          const char *want_name, ZipEntryInfo *want_info,
+                          int *dex_count_out) {
+    char s_dot_dex[SP_BUF_SZ], s_classes[SP_BUF_SZ];
+    reveal_ns(5u, SP_DOT_DEX,      SP_DOT_DEX_LEN,      s_dot_dex);
+    reveal_ns(6u, SP_STR_CLASSES,  SP_STR_CLASSES_LEN,  s_classes);
+
+    uint8_t *cd = (uint8_t *)malloc(cd_size ? cd_size : 1);
+    if (!cd) return 0;
+    if (cd_size > 0) {
+        ssize_t rd = g_sig_pread(fd, cd, (size_t)cd_size, (off_t)cd_offset);
+        if (rd != (ssize_t)cd_size) { free(cd); return 0; }
+    }
+
+    int dex_count = 0;
+    uint32_t p = 0;
+    while (p + 46 <= cd_size) {
+        if (!(cd[p]==0x50 && cd[p+1]==0x4b && cd[p+2]==0x01 && cd[p+3]==0x02)) break;
+        uint16_t method    = g_rd16(cd + p + 10);
+        uint32_t comp_sz   = g_rd32(cd + p + 20);
+        uint32_t uncomp_sz = g_rd32(cd + p + 24);
+        uint16_t name_len  = g_rd16(cd + p + 28);
+        uint16_t extra_len = g_rd16(cd + p + 30);
+        uint16_t comm_len  = g_rd16(cd + p + 32);
+        uint32_t local_off = g_rd32(cd + p + 42);
+        uint32_t name_off  = p + 46;
+        if ((uint64_t)name_off + name_len > cd_size) break;
+
+        char name[256];
+        uint16_t nlen = name_len < 255 ? name_len : 255;
+        memcpy(name, cd + name_off, nlen);
+        name[nlen] = '\0';
+
+        size_t L = strlen(name);
+        if (L > 4 && strcmp(name + L - 4, s_dot_dex) == 0 && strncmp(name, s_classes, 7) == 0) {
+            int ok = 1;
+            for (size_t i = 7; i < L - 4; i++) if (name[i] < '0' || name[i] > '9') { ok = 0; break; }
+            if (ok) dex_count++;
+        }
+
+        if (want_name && want_info && !want_info->found && strcmp(name, want_name) == 0) {
+            want_info->method       = method;
+            want_info->comp_size    = comp_sz;
+            want_info->uncomp_size  = uncomp_sz;
+            want_info->local_offset = local_off;
+            want_info->found        = 1;
+        }
+
+        uint64_t next = (uint64_t)name_off + name_len + extra_len + comm_len;
+        if (next <= p) break;
+        p = (uint32_t)next;
+    }
+    free(cd);
+    if (dex_count_out) *dex_count_out = dex_count;
+    return 1;
 }
 
 // ── §3b  Minimal ASN.1 PKCS#7 → X.509 DER extractor ──────────────────────

@@ -1,0 +1,395 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_dark"
+    android:overScrollMode="never">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="18dp">
+
+        <!-- ── Hero animation ─────────────────────────────────────────────── -->
+        <com.dex2c.mega.ui.ShieldAnimView
+            android:layout_width="match_parent"
+            android:layout_height="220dp"
+            android:layout_marginBottom="4dp" />
+
+        <!-- ── Title ──────────────────────────────────────────────────────── -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Dex2c Mega"
+            android:textColor="@color/accent_green"
+            android:textSize="28sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.05"
+            android:layout_gravity="center_horizontal" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Native APK Protection Engine"
+            android:textColor="@color/text_secondary"
+            android:textSize="13sp"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginBottom="6dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="v2.0  ·  On-Device  ·  ARM64  ·  Offline"
+            android:textColor="@color/text_muted"
+            android:textSize="11sp"
+            android:fontFamily="monospace"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginBottom="24dp" />
+
+        <!-- ── How it works ────────────────────────────────────────────────── -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="HOW IT WORKS"
+            android:textColor="@color/accent_green"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.12"
+            android:fontFamily="monospace"
+            android:layout_marginBottom="8dp" />
+
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp"
+            app:cardBackgroundColor="@color/bg_card"
+            app:cardCornerRadius="14dp"
+            app:cardElevation="0dp">
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="18dp">
+
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="Dex2c Mega takes your Java/Kotlin method bodies, transpiles them to C++, and compiles them into a hardened native binary using an OLLVM-patched clang. Decompilers see only empty method stubs — the real logic is locked in native machine code with up to 8 layers of IR obfuscation that cannot be recovered from bytecode."
+                    android:textColor="@color/text_secondary" android:textSize="13sp"
+                    android:lineSpacingExtra="5dp" android:layout_marginBottom="14dp" />
+
+                <!-- Mode A -->
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="horizontal" android:layout_marginBottom="10dp">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="MODE A"
+                        android:textColor="@color/accent_green" android:textSize="11sp"
+                        android:textStyle="bold" android:fontFamily="monospace"
+                        android:background="@color/bg_card2"
+                        android:paddingStart="8dp" android:paddingEnd="8dp"
+                        android:paddingTop="3dp" android:paddingBottom="3dp"
+                        android:layout_marginEnd="10dp" />
+                    <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Full native compilation with OLLVM. Method bodies are transpiled to C++ and compiled to ARM64 machine code. Decompilers return empty stubs — no recoverable logic."
+                        android:textColor="@color/text_secondary" android:textSize="13sp"
+                        android:lineSpacingExtra="4dp" />
+                </LinearLayout>
+
+                <!-- Mode B -->
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="MODE B"
+                        android:textColor="@color/text_muted" android:textSize="11sp"
+                        android:textStyle="bold" android:fontFamily="monospace"
+                        android:background="@color/bg_card2"
+                        android:paddingStart="8dp" android:paddingEnd="8dp"
+                        android:paddingTop="3dp" android:paddingBottom="3dp"
+                        android:layout_marginEnd="10dp" />
+                    <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Bytecode stripping fallback. Applied to any method the transpiler cannot fully convert — original bytecode is removed and the stub is left unreachable, keeping the output clean."
+                        android:textColor="@color/text_secondary" android:textSize="13sp"
+                        android:lineSpacingExtra="4dp" />
+                </LinearLayout>
+
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <!-- ── Step-by-step guide ──────────────────────────────────────────── -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="STEP-BY-STEP"
+            android:textColor="@color/accent_green"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.12"
+            android:fontFamily="monospace"
+            android:layout_marginBottom="8dp" />
+
+        <!-- Step 1 — One-time setup -->
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            app:cardBackgroundColor="@color/bg_card"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="0dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:padding="16dp" android:gravity="top">
+                <TextView android:layout_width="28dp" android:layout_height="28dp"
+                    android:text="1"
+                    android:textColor="@color/bg_dark" android:textSize="13sp" android:textStyle="bold"
+                    android:gravity="center" android:background="@drawable/bg_btn_green"
+                    android:layout_marginEnd="14dp" android:layout_marginTop="2dp" />
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:orientation="vertical">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="Download the NDK compiler once"
+                        android:textColor="@color/text_primary" android:textSize="14sp" android:textStyle="bold"
+                        android:layout_marginBottom="4dp" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="Python 3 is bundled inside the app and extracts silently on first run — nothing to do. The OLLVM NDK compiler (731 MB) requires a one-time download: tap ⚙ Compiler on the Protect screen, then tap Download NDK. Once installed it stays in internal storage and is reused for every protection job after that."
+                        android:textColor="@color/text_secondary" android:textSize="13sp"
+                        android:lineSpacingExtra="4dp"
+                        android:layout_marginBottom="10dp" />
+                    <!-- Offline badge -->
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:orientation="horizontal" android:gravity="center_vertical"
+                        android:background="@drawable/bg_card_border"
+                        android:paddingStart="10dp" android:paddingEnd="10dp"
+                        android:paddingTop="8dp" android:paddingBottom="8dp">
+                        <ImageView
+                            android:layout_width="16dp"
+                            android:layout_height="16dp"
+                            android:src="@drawable/ic_lock"
+                            android:scaleType="fitCenter"
+                            android:layout_marginEnd="8dp" />
+                        <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="After the one-time NDK download, everything is fully offline — C++ transpiling, OLLVM compilation, bytecode stripping, and signing all run on-device with no servers or internet needed."
+                            android:textColor="@color/accent_green" android:textSize="12sp"
+                            android:lineSpacingExtra="3dp" />
+                    </LinearLayout>
+                </LinearLayout>
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <!-- Step 2 -->
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            app:cardBackgroundColor="@color/bg_card"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="0dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:padding="16dp" android:gravity="top">
+                <TextView android:layout_width="28dp" android:layout_height="28dp"
+                    android:text="2"
+                    android:textColor="@color/bg_dark" android:textSize="13sp" android:textStyle="bold"
+                    android:gravity="center" android:background="@drawable/bg_btn_green"
+                    android:layout_marginEnd="14dp" android:layout_marginTop="2dp" />
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:orientation="vertical">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="Browse for your APK"
+                        android:textColor="@color/text_primary" android:textSize="14sp" android:textStyle="bold"
+                        android:layout_marginBottom="4dp" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="Open the Protect tab and tap Browse. Pick any APK from your storage."
+                        android:textColor="@color/text_secondary" android:textSize="13sp"
+                        android:lineSpacingExtra="4dp" />
+                </LinearLayout>
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <!-- Step 3 -->
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            app:cardBackgroundColor="@color/bg_card"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="0dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:padding="16dp" android:gravity="top">
+                <TextView android:layout_width="28dp" android:layout_height="28dp"
+                    android:text="3"
+                    android:textColor="@color/bg_dark" android:textSize="13sp" android:textStyle="bold"
+                    android:gravity="center" android:background="@drawable/bg_btn_green"
+                    android:layout_marginEnd="14dp" android:layout_marginTop="2dp" />
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:orientation="vertical">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="Choose what to protect"
+                        android:textColor="@color/text_primary" android:textSize="14sp" android:textStyle="bold"
+                        android:layout_marginBottom="4dp" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="Two ways to pick your targets, switchable with the tabs above the list: MANUAL — browse the class tree and check boxes yourself (individual methods, whole classes, or Select All). CLASS LIST — type or paste fully-qualified classes names, one per line."
+                        android:textColor="@color/text_secondary" android:textSize="13sp"
+                        android:lineSpacingExtra="4dp" />
+                </LinearLayout>
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <!-- Step 4 -->
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            app:cardBackgroundColor="@color/bg_card"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="0dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:padding="16dp" android:gravity="top">
+                <TextView android:layout_width="28dp" android:layout_height="28dp"
+                    android:text="4"
+                    android:textColor="@color/bg_dark" android:textSize="13sp" android:textStyle="bold"
+                    android:gravity="center" android:background="@drawable/bg_btn_green"
+                    android:layout_marginEnd="14dp" android:layout_marginTop="2dp" />
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:orientation="vertical">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="Run Protection"
+                        android:textColor="@color/text_primary" android:textSize="14sp" android:textStyle="bold"
+                        android:layout_marginBottom="4dp" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="Tap Run Protection. Selected methods are transpiled to C++, compiled with OLLVM clang at your chosen intensity level (configure in the OLLVM tab), original bytecode is stripped, and the APK is re-signed — all on-device. Larger APKs and higher OLLVM levels take more time."
+                        android:textColor="@color/text_secondary" android:textSize="13sp"
+                        android:lineSpacingExtra="4dp" />
+                </LinearLayout>
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <!-- Step 5 -->
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="28dp"
+            app:cardBackgroundColor="@color/bg_card"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="0dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:padding="16dp" android:gravity="top">
+                <TextView android:layout_width="28dp" android:layout_height="28dp"
+                    android:text="5"
+                    android:textColor="@color/bg_dark" android:textSize="13sp" android:textStyle="bold"
+                    android:gravity="center" android:background="@drawable/bg_btn_green"
+                    android:layout_marginEnd="14dp" android:layout_marginTop="2dp" />
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:orientation="vertical">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="Install the protected APK"
+                        android:textColor="@color/text_primary" android:textSize="14sp" android:textStyle="bold"
+                        android:layout_marginBottom="4dp" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="The protected APK is saved to /storage/emulated/0/Dex2c Mega. Install it normally — it behaves identically to the original, but its logic is locked in native code."
+                        android:textColor="@color/text_secondary" android:textSize="13sp"
+                        android:lineSpacingExtra="4dp" />
+                </LinearLayout>
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <!-- ── Signature Check ─────────────────────────────────────────────── -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="SIGNATURE CHECK"
+            android:textColor="@color/accent_green"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.12"
+            android:fontFamily="monospace"
+            android:layout_marginBottom="8dp" />
+
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            app:cardBackgroundColor="@color/bg_card"
+            app:cardCornerRadius="14dp"
+            app:cardElevation="0dp">
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="18dp">
+
+                <!-- Row: Pre-signed input -->
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="horizontal" android:layout_marginBottom="12dp"
+                    android:background="@drawable/bg_card_border"
+                    android:paddingStart="12dp" android:paddingEnd="12dp"
+                    android:paddingTop="10dp" android:paddingBottom="10dp">
+                    <ImageView android:layout_width="22dp" android:layout_height="22dp"
+                        android:src="@drawable/ic_sig_signed"
+                        android:layout_marginEnd="10dp" android:layout_marginTop="2dp"
+                        android:contentDescription="Signed" />
+                    <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                        android:layout_weight="1" android:orientation="vertical">
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                            android:text="Input APK is already signed (recommended)"
+                            android:textColor="@color/text_primary" android:textSize="13sp"
+                            android:textStyle="bold" android:layout_marginBottom="3dp" />
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                            android:text="Dex2c Mega automatically reads the cert from your input APK and stamps its SHA-256 into the protected .so. Toggle Auto-Sign OFF so the output stays unsigned. Re-sign the protected APK with your own key as usual — the cert check will pass at runtime. Your update chain is never broken."
+                            android:textColor="@color/text_secondary" android:textSize="12sp"
+                            android:lineSpacingExtra="4dp" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- Row: Unsigned input -->
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="horizontal" android:layout_marginBottom="12dp"
+                    android:background="@drawable/bg_card_border"
+                    android:paddingStart="12dp" android:paddingEnd="12dp"
+                    android:paddingTop="10dp" android:paddingBottom="10dp">
+                    <ImageView android:layout_width="22dp" android:layout_height="22dp"
+                        android:src="@drawable/ic_sig_unsigned"
+                        android:layout_marginEnd="10dp" android:layout_marginTop="2dp"
+                        android:contentDescription="Unsigned" />
+                    <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                        android:layout_weight="1" android:orientation="vertical">
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                            android:text="Input APK is unsigned"
+                            android:textColor="@color/text_primary" android:textSize="13sp"
+                            android:textStyle="bold" android:layout_marginBottom="3dp" />
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                            android:text="No cert is found in the input — the cert stamp is left empty and the check is silently skipped at runtime. No crash, no error. You can still sign the output later with any key."
+                            android:textColor="@color/text_secondary" android:textSize="12sp"
+                            android:lineSpacingExtra="4dp" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- Row: Toggle ON -->
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:background="@drawable/bg_card_border"
+                    android:paddingStart="12dp" android:paddingEnd="12dp"
+                    android:paddingTop="10dp" android:paddingBottom="10dp">
+                    <ImageView android:layout_width="22dp" android:layout_height="22dp"
+                        android:src="@drawable/ic_sig_warning"
+                        android:layout_marginEnd="10dp" android:layout_marginTop="2dp"
+                        android:contentDescription="Warning" />
+                    <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                        android:layout_weight="1" android:orientation="vertical">
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                            android:text="Auto-Sign ON (built-in key)"
+                            android:textColor="@color/text_primary" android:textSize="13sp"
+                            android:textStyle="bold" android:layout_marginBottom="3dp" />
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                            android:text="The output is signed with Dex2c Mega's built-in key and the cert check is stamped to match. This works but will break your app's update chain — any future update you push must also be signed with the same built-in key. Only use this for apps you will never push to a store or update."
+                            android:textColor="@color/text_secondary" android:textSize="12sp"
+                            android:lineSpacingExtra="4dp" />
+                    </LinearLayout>
+                </LinearLayout>
+
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+
+    </LinearLayout>
+</ScrollView>

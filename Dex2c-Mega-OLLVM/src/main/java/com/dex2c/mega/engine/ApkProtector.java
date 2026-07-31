@@ -855,21 +855,22 @@ public class ApkProtector {
                     }
                     String key = vmpMethodKey(m);
                     if (outClass == null) {
-                        android.util.Log.w("ApkProtector",
-                                "VMP verify ✗ class missing from output DEX: " + cls.getType());
+                        String msg = "VMP verify ✗ class missing from output DEX: " + cls.getType();
+                        android.util.Log.w("ApkProtector", msg);
+                        report(70, msg);
                         warned++;
                         continue;
                     }
                     Integer flags = outClass.get(key);
                     if (flags == null) {
-                        android.util.Log.w("ApkProtector",
-                                "VMP verify ✗ method missing from output DEX: "
-                                        + cls.getType() + "->" + key);
+                        String msg = "VMP verify ✗ method missing: " + cls.getType() + "->" + key;
+                        android.util.Log.w("ApkProtector", msg);
+                        report(70, msg);
                         warned++;
                     } else if ((flags & 0x0100 /* ACC_NATIVE */) == 0) {
-                        android.util.Log.w("ApkProtector",
-                                "VMP verify ✗ bytecode NOT stripped — still has implementation: "
-                                        + cls.getType() + "->" + key);
+                        String msg = "VMP verify ✗ bytecode NOT stripped: " + cls.getType() + "->" + key;
+                        android.util.Log.w("ApkProtector", msg);
+                        report(70, msg);
                         warned++;
                     } else {
                         ok++;
@@ -878,17 +879,20 @@ public class ApkProtector {
             }
 
             if (warned == 0) {
-                android.util.Log.i("ApkProtector",
-                        "VMP verify ✓ all " + ok + " converted method(s) confirmed native in "
-                                + outputDex.getName());
+                String msg = "VMP verify ✓ all " + ok + " method(s) confirmed native in "
+                        + outputDex.getName();
+                android.util.Log.i("ApkProtector", msg);
+                report(70, msg);
             } else {
-                android.util.Log.w("ApkProtector",
-                        "VMP verify ✗ " + warned + " method(s) NOT stripped in "
-                                + outputDex.getName() + " (" + ok + " ok)");
+                String msg = "VMP verify ✗ " + warned + " method(s) NOT stripped in "
+                        + outputDex.getName() + " (" + ok + " ok — check logcat for details)";
+                android.util.Log.w("ApkProtector", msg);
+                report(70, msg);
             }
         } catch (Exception e) {
-            android.util.Log.w("ApkProtector",
-                    "VMP verify: could not verify output DEX — " + e.getMessage());
+            String msg = "VMP verify: could not check output DEX — " + e.getMessage();
+            android.util.Log.w("ApkProtector", msg);
+            report(70, msg);
         }
     }
 

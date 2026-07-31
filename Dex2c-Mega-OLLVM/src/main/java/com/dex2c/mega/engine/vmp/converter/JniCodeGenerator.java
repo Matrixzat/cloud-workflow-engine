@@ -269,8 +269,9 @@ public class JniCodeGenerator {
                         "#include \"vm.h\"\n" +
                         "#include \"%s\"\n" +
                         "\n" +
+                        "/* VMLOG is silenced in release builds — no method names leak into the .so */\n" +
                         "#ifndef VMLOG\n" +
-                        "#define VMLOG(fmt, ...) __android_log_print(ANDROID_LOG_DEBUG, \"D2CMega\", fmt, ##__VA_ARGS__)\n" +
+                        "#define VMLOG(...) ((void)0)\n" +
                         "#endif\n" +
                         "\n" +
                         "#ifdef __cplusplus\n" +

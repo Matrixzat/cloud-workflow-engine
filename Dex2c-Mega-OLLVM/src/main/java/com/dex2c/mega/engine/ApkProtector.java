@@ -7,9 +7,7 @@ import android.os.Environment;
 import com.android.tools.smali.dexlib2.Opcodes;
 import com.android.tools.smali.dexlib2.dexbacked.DexBackedClassDef;
 import com.android.tools.smali.dexlib2.dexbacked.DexBackedDexFile;
-import com.android.tools.smali.dexlib2.dexbacked.DexBackedMethod;
 import com.android.tools.smali.dexlib2.iface.ClassDef;
-import com.android.tools.smali.dexlib2.iface.Method;
 import com.android.tools.smali.dexlib2.writer.io.FileDataStore;
 import com.android.tools.smali.dexlib2.writer.pool.DexPool;
 import com.dex2c.mega.engine.vmp.Dex2c;
@@ -206,23 +204,24 @@ public class ApkProtector {
         // ── 7. Strip bytecode from DEX via vova7878/DexFile ──────────────────
         report(70, "Stripping bytecode…");
 
-        // In VMP mode the bytecode has already been stripped by Dex2c.handleAllDex()
-        // into shell DEX files (classes_shell.dex, classes2_shell.dex, …).
-        // We must swap those shell DEX files back into dexDir BEFORE running
-        // Tier1DexPatcher, otherwise the patcher works on the unmodified originals.
+        // Determine which method stubs to make ACC_NATIVE and which classes need
+        // System.loadLibrary injected into their <clinit>.
         //
-        // We also build sentinel compiledKeys from the VMP GlobalDexConfig so that
-        // Tier1DexPatcher's targetTypes set is populated for each converted class —
-        // this causes the patcher to enter the "target class" branch and inject
-        // System.loadLibrary into every <clinit> (or synthesise one if absent).
-        // The sentinel keys don't match any real method signature, so every already-
-        // native method in the shell DEX simply passes through the else-branch
-        // unchanged.  No double-nativing, no data loss.
+        // dex2c mode: compiledKeys comes from the transpiler (exact method signatures).
+        // VMP mode  : we scan the original DEX files for every method that matches the
+        //             filter and passes eligibility — exactly the same reliable path that
+        //             dex2c uses.  Tier1DexPatcher then strips them directly instead of
+        //             relying on the complex shell-DEX-swap which silently failed when
+        //             the target class lived in a secondary DEX.
+        //             VMP-specific clinit hooks (NativeUtil.classesXInit0) and the
+        //             NativeUtil class itself are injected first so they are present
+        //             before Tier1DexPatcher rewrites each DEX.
         Set<String> compiledKeys;
         if (useVmp && transpileResult.vmpConfig != null) {
-            compiledKeys = buildVmpCompiledKeys(transpileResult.vmpConfig, dexDir, libName);
-            report(70, "VMP: swapped " + transpileResult.vmpConfig.getConfigs().size()
-                    + " shell DEX file(s) into patch dir");
+            report(70, "VMP: injecting NativeUtil + classesInit0 hooks…");
+            injectVmpNativeUtil(transpileResult.vmpConfig, dexDir, libName);
+            compiledKeys = buildVmpRealKeys(dexFiles, filterText);
+            report(70, "VMP: " + compiledKeys.size() + " method(s) targeted for native strip");
         } else {
             compiledKeys = transpileResult.compiled.keySet();
         }
@@ -230,6 +229,12 @@ public class ApkProtector {
         int stripped = Tier1DexPatcher.patchAll(dexDir, compiledKeys, libName,
                 msg -> report(71, msg));
         report(78, "Stripped " + stripped + " method(s) — bytecode gone");
+
+        // Verify every selected method is actually ACC_NATIVE in the patched DEX files.
+        // Catches filter mismatches or class-not-found issues before the APK is repacked.
+        if (!compiledKeys.isEmpty()) {
+            verifyStrippedKeys(dexDir, compiledKeys);
+        }
 
         report(80, "Bootstrap via per-class <clinit> — attachBaseContext untouched ✓");
 
@@ -679,229 +684,275 @@ public class ApkProtector {
         return dest;
     }
 
-    /**
-     * VMP shell-DEX swap + sentinel compiledKeys builder.
-     *
-     * Dex2c.handleAllDex() produces one shell DEX per input DEX
-     * (e.g. "classes_shell.dex" for "classes.dex").  Each shell DEX already
-     * has every VMP-converted method marked ACC_NATIVE with null implementation.
-     * We copy them back over the originals in dexDir so Tier1DexPatcher works
-     * on the already-patched DEX instead of the untouched originals.
-     *
-     * We also return a sentinel compiledKeys set: one fake method key per
-     * converted class (e.g. "Lcom/foo/Bar;->_vmp_(V)V").  This populates
-     * Tier1DexPatcher's internal targetTypes so the patcher:
-     *   (a) enters the "target class" branch for every VMP-converted class
-     *   (b) injects System.loadLibrary into <clinit> (or synthesises one)
-     *   (c) merges the fonts/Metrics guard class into the first patched DEX
-     * No real method key matches the sentinel, so already-native methods pass
-     * through the else-branch unchanged — no double-patching.
-     *
-     * @param vmpConfig  GlobalDexConfig returned by Dex2c.handleAllDex()
-     * @param dexDir     directory holding the original extracted DEX files
-     * @return sentinel compiledKeys ready to pass to Tier1DexPatcher.patchAll()
-     */
-    private Set<String> buildVmpCompiledKeys(GlobalDexConfig vmpConfig,
-                                             File dexDir,
-                                             String libName) throws IOException {
-        Set<String> keys = new HashSet<>();
-        List<DexConfig> configs = vmpConfig.getConfigs();
-        if (configs.isEmpty()) return keys;
+    // ── VMP helpers ──────────────────────────────────────────────────────────
 
-        // ── Step 1: injectCallRegisterNativeInsns — mirrors NMMP's
-        //   injectInstructionAndWriteToFile(). For each DexConfig, reads the
-        //   shell DEX (methods already native), wraps every VMP-converted class
-        //   with RegisterNativesCallerClassDef which prepends:
-        //     NativeUtil.classesInit0(classIdx)
-        //   to the class <clinit>, and writes the result back to dexDir as the
-        //   canonical classes.dex / classes2.dex etc.
+    /**
+     * VMP mode — inject NativeUtil class + per-class classesXInit0 clinit hooks.
+     *
+     * Reads each VMP shell DEX (which already has selected methods marked
+     * ACC_NATIVE) and uses injectCallRegisterNativeInsns to prepend a
+     * NativeUtil.classesXInit0(offset) call into every protected class's
+     * static initialiser.  The result is written back to dexDir so that
+     * Tier1DexPatcher can then inject System.loadLibrary on top of it.
+     *
+     * The NativeUtil synthetic class (which owns all the classesXInit0 native
+     * methods) is merged into classes.dex so it is always available at runtime.
+     */
+    private void injectVmpNativeUtil(GlobalDexConfig vmpConfig,
+                                     File dexDir, String libName) throws IOException {
+        List<DexConfig> configs = vmpConfig.getConfigs();
+        if (configs.isEmpty()) return;
+
         Opcodes opcodes = null;
         for (DexConfig cfg : configs) {
             File shellDex = cfg.getShellDexFile();
             if (!shellDex.exists()) {
                 android.util.Log.w("ApkProtector",
-                        "VMP: shell DEX missing — " + shellDex.getName());
+                        "VMP NativeUtil: shell DEX missing — " + shellDex.getName());
                 continue;
             }
-
-            // Determine opcodes from first available shell DEX
+            Set<String> handled = cfg.getHandledNativeClasses();
+            if (handled == null || handled.isEmpty()) {
+                android.util.Log.d("ApkProtector",
+                        "VMP NativeUtil: no handled classes for " + cfg.getDexName());
+                continue;
+            }
             if (opcodes == null) {
                 DexBackedDexFile probe = DexBackedDexFile.fromInputStream(
-                        null,
-                        new java.io.BufferedInputStream(new java.io.FileInputStream(shellDex)));
+                        null, new BufferedInputStream(new FileInputStream(shellDex)));
                 opcodes = probe.getOpcodes();
             }
-
-            // Start with an empty pool; injectCallRegisterNativeInsns fills it
-            // from the shell DEX, wrapping protected classes with the
-            // RegisterNativesCallerClassDef (<clinit> injection).
+            // injectCallRegisterNativeInsns reads the shell DEX (methods already native)
+            // and prepends classesXInit0(offset) to each protected class's <clinit>.
             DexPool startPool = new DexPool(opcodes);
-            List<DexPool> resultPools = Dex2c.injectCallRegisterNativeInsns(
+            List<DexPool> pools = Dex2c.injectCallRegisterNativeInsns(
                     cfg, startPool, Collections.emptySet(), 60000);
-
-            // Write each returned pool as classesN.dex in dexDir.
-            // Normally just one pool; overflow splits into extra DEX files.
-            for (int i = 0; i < resultPools.size(); i++) {
-                String dexName = (i == 0)
-                        ? cfg.getDexName() + ".dex"            // e.g. classes.dex
+            for (int i = 0; i < pools.size(); i++) {
+                String name = (i == 0) ? cfg.getDexName() + ".dex"
                         : "classes" + (dexDir.listFiles(
-                                f -> f.getName().matches("classes\\d*\\.dex")).length + i)
-                          + ".dex";
-                File target = new File(dexDir, dexName);
-                resultPools.get(i).writeTo(new FileDataStore(target));
+                                f -> f.getName().matches("classes\\d*\\.dex")).length + i) + ".dex";
+                File target = new File(dexDir, name);
+                pools.get(i).writeTo(new FileDataStore(target));
                 android.util.Log.i("ApkProtector",
-                        "VMP: wrote injected DEX → " + target.getName());
-
-                // ── Post-strip verification ───────────────────────────────────
-                // Confirm every method selected for VMP is actually ACC_NATIVE
-                // in the output DEX.  Methods that were ALREADY native/abstract
-                // in the original APK are skipped (null impl in implDex = not
-                // our job).  Logs a warning per leaked method so nothing slips
-                // through silently.
-                if (cfg.getImplDexFile().exists()) {
-                    verifyVmpStripping(cfg, target);
-                }
-            }
-
-            // ── Sentinel key per converted class ─────────────────────────────
-            Set<String> handled = cfg.getHandledNativeClasses();
-            if (handled != null) {
-                for (String className : handled) {
-                    keys.add("L" + className + ";->_vmp_(V)V");
-                }
+                        "VMP NativeUtil: wrote classesInit0-injected DEX → " + target.getName());
             }
         }
 
-        // ── Step 2: inject NativeUtil class into classes.dex ─────────────────
-        // NativeUtil is the synthetic class that owns the static native methods
-        // called by each protected class's <clinit>. Must be added AFTER step 1
-        // so it's not overwritten by the injectCallRegisterNativeInsns write.
+        // Inject the NativeUtil synthetic class into classes.dex
         File mainDex = new File(dexDir, "classes.dex");
         if (mainDex.exists()) {
             try {
-                List<String> nativeMethodNames = new ArrayList<>();
-                for (DexConfig cfg : configs) {
-                    nativeMethodNames.add(cfg.getRegisterNativesMethodName());
-                }
-                String nativeUtilType = "L"
-                        + configs.get(0).getRegisterNativesClassName() + ";";
-
+                List<String> methodNames = new ArrayList<>();
+                for (DexConfig cfg : configs) methodNames.add(cfg.getRegisterNativesMethodName());
+                String utilType = "L" + configs.get(0).getRegisterNativesClassName() + ";";
                 DexBackedDexFile dexFile = DexBackedDexFile.fromInputStream(
-                        null,
-                        new java.io.BufferedInputStream(new java.io.FileInputStream(mainDex)));
-                DexPool dexPool = new DexPool(dexFile.getOpcodes());
-                for (ClassDef cls : dexFile.getClasses()) dexPool.internClass(cls);
-
-                dexPool.internClass(new RegisterNativesUtilClassDef(
-                        nativeUtilType, nativeMethodNames, libName));
-                dexPool.writeTo(new FileDataStore(mainDex));
-
+                        null, new BufferedInputStream(new FileInputStream(mainDex)));
+                DexPool pool = new DexPool(dexFile.getOpcodes());
+                for (ClassDef cls : dexFile.getClasses()) pool.internClass(cls);
+                pool.internClass(new RegisterNativesUtilClassDef(utilType, methodNames, libName));
+                pool.writeTo(new FileDataStore(mainDex));
                 android.util.Log.i("ApkProtector",
-                        "VMP: injected NativeUtil (" + nativeMethodNames.size()
-                                + " method(s)) into classes.dex");
+                        "VMP NativeUtil: injected NativeUtil ("
+                                + methodNames.size() + " method(s)) into classes.dex");
             } catch (Exception e) {
                 android.util.Log.e("ApkProtector",
-                        "VMP: NativeUtil injection failed — " + e.getMessage(), e);
+                        "VMP NativeUtil: injection failed — " + e.getMessage(), e);
+            }
+        }
+    }
+
+    /**
+     * Normalise any class identifier to a canonical smali type: "Lcom/foo/Bar;".
+     *
+     * Handles all four formats the filter text may contain:
+     *   "Lcom/foo/Bar;"   → already canonical, returned as-is
+     *   "com/foo/Bar;"    → MethodNode.fullPattern prefix (slash, trailing ';', no 'L')
+     *   "Lcom/foo/Bar"    → smali without trailing ';'
+     *   "com.foo.Bar"     → dot-format whole-class name
+     */
+    private static String toSmaliType(String raw) {
+        String s = raw.trim();
+        boolean hasL     = s.startsWith("L");
+        boolean hasSemi  = s.endsWith(";");
+        boolean hasSlash = s.contains("/");
+        if (hasL  && hasSemi)  return s;           // already "Lcom/foo/Bar;"
+        if (hasSlash && hasSemi) return "L" + s;   // "com/foo/Bar;" → "Lcom/foo/Bar;"
+        if (hasL  && hasSlash) return s + ";";     // "Lcom/foo/Bar" → "Lcom/foo/Bar;"
+        return "L" + s.replace('.', '/') + ";";    // "com.foo.Bar"  → "Lcom/foo/Bar;"
+    }
+
+    /**
+     * VMP mode — build real compiledKeys by scanning the original DEX files.
+     *
+     * Parses the filter text to find the selected class/method pairs, then walks
+     * every DEX file and emits a full Tier1DexPatcher key for each eligible method:
+     *   "Lcom/foo/Bar;->method(Lparam;)Lreturn;"
+     *
+     * Eligibility rules (same as VMP's BasicKeepConfig):
+     *   • Not a constructor (<init>) or static initialiser (<clinit>)
+     *   • Not already native / abstract / bridge / synthetic
+     *   • Has a bytecode implementation (not abstract/native stub)
+     *
+     * These keys are passed straight to Tier1DexPatcher.patchAll() which makes
+     * each method an ACC_NATIVE stub — identical to the dex2c strip path, which
+     * has always been reliable regardless of how many methods are selected or
+     * which DEX file they live in.
+     */
+    private Set<String> buildVmpRealKeys(List<File> dexFiles, String filterText)
+            throws IOException {
+        // Parse filterText → Map<smaliClassType, Set<methodName>>
+        //
+        // filterText lines come in three forms from the UI:
+        //   (a) method-level:  "com/foo/Bar;->onCreate(Landroid/os/Bundle;)V"
+        //                       ↑ MethodNode.fullPattern — slash format, no 'L', trailing ';'
+        //   (b) whole-class:   "com.foo.Bar"
+        //                       ↑ ClassNode.fullName — dot format
+        //   (c) SimpleRules:   "class com.foo.Bar { onCreate; }"
+        //                       ↑ produced when filterText already contains "class "
+        //
+        // All are normalised to "Lcom/foo/Bar;" via toSmaliType().
+        Map<String, Set<String>> wanted = new LinkedHashMap<>();
+
+        // Collapse multi-line SimpleRules blocks ("class Foo {\n  method;\n}")
+        // into single-line form so the line-by-line loop handles them uniformly.
+        String normalized = filterText
+                .replaceAll("\\{\\s*\\n", "{ ")
+                .replaceAll("\\n\\s*\\}", " }")
+                .replaceAll("\\n\\s+", " ");
+
+        for (String rawLine : normalized.split("\\r?\\n")) {
+            String entry = rawLine.trim();
+            if (entry.isEmpty() || entry.startsWith("#")) continue;
+
+            if (entry.startsWith("class ")) {
+                // "class com.foo.Bar { onCreate; foo; }" or "class com.foo.Bar { *; }"
+                int brace = entry.indexOf('{');
+                String rawCls = (brace > 0
+                        ? entry.substring(6, brace) : entry.substring(6)).trim();
+                String smaliCls = toSmaliType(rawCls);
+                if (brace > 0) {
+                    int close = entry.indexOf('}', brace);
+                    String body = close > brace ? entry.substring(brace + 1, close) : "";
+                    for (String part : body.split(";")) {
+                        String m = part.trim();
+                        if (!m.isEmpty()) wanted.computeIfAbsent(smaliCls,
+                                k -> new LinkedHashSet<>()).add("*".equals(m) ? "*" : m);
+                    }
+                } else {
+                    wanted.computeIfAbsent(smaliCls, k -> new LinkedHashSet<>()).add("*");
+                }
+                continue;
+            }
+
+            if (entry.contains("->")) {
+                // "com/foo/Bar;->onCreate(Landroid/os/Bundle;)V"
+                int arrow = entry.indexOf("->");
+                String smaliCls = toSmaliType(entry.substring(0, arrow).trim());
+                String rest = entry.substring(arrow + 2);
+                int paren = rest.indexOf('(');
+                String methodName = (paren > 0 ? rest.substring(0, paren) : rest).trim();
+                if ("<init>".equals(methodName) || "<clinit>".equals(methodName)) continue;
+                if (!methodName.isEmpty())
+                    wanted.computeIfAbsent(smaliCls, k -> new LinkedHashSet<>()).add(methodName);
+            } else {
+                // Whole class: "com.foo.Bar" or "Lcom/foo/Bar;" etc.
+                String smaliCls = toSmaliType(entry);
+                wanted.computeIfAbsent(smaliCls, k -> new LinkedHashSet<>()).add("*");
             }
         }
 
+        if (wanted.isEmpty()) return Collections.emptySet();
+        android.util.Log.i("ApkProtector", "VMP realKeys: wanted = " + wanted);
+
+        // Access-flag masks (smali dexlib2)
+        int SKIP = com.android.tools.smali.dexlib2.AccessFlags.NATIVE.getValue()
+                 | com.android.tools.smali.dexlib2.AccessFlags.ABSTRACT.getValue()
+                 | com.android.tools.smali.dexlib2.AccessFlags.BRIDGE.getValue()
+                 | com.android.tools.smali.dexlib2.AccessFlags.SYNTHETIC.getValue();
+
+        Set<String> keys = new HashSet<>();
+        for (File dexFile : dexFiles) {
+            DexBackedDexFile dex = DexBackedDexFile.fromInputStream(
+                    null, new BufferedInputStream(new FileInputStream(dexFile)));
+            for (com.android.tools.smali.dexlib2.dexbacked.DexBackedClassDef cls
+                    : dex.getClasses()) {
+                String clsType = cls.getType(); // e.g. "Lcom/munowatch/lite/Dashboard;"
+                if (!wanted.containsKey(clsType)) continue;
+                Set<String> methods = wanted.get(clsType);
+                boolean allMethods = methods.contains("*");
+                for (com.android.tools.smali.dexlib2.iface.Method m : cls.getMethods()) {
+                    String name = m.getName();
+                    if ("<init>".equals(name) || "<clinit>".equals(name)) continue;
+                    if ((m.getAccessFlags() & SKIP) != 0) continue;
+                    if (m.getImplementation() == null) continue;
+                    if (!allMethods && !methods.contains(name)) continue;
+                    // Build key in Tier1DexPatcher format
+                    StringBuilder key = new StringBuilder(clsType)
+                            .append("->").append(name).append("(");
+                    for (CharSequence p : m.getParameterTypes()) key.append(p);
+                    key.append(")").append(m.getReturnType());
+                    keys.add(key.toString());
+                }
+            }
+        }
+        android.util.Log.i("ApkProtector", "VMP realKeys built: " + keys.size() + " → " + keys);
         return keys;
     }
 
     /**
-     * Post-strip verification for VMP mode.
-     *
-     * Reads the impl DEX (original bytecode of selected methods) and the
-     * output DEX (shell DEX after classesInit0 injection) and confirms that
-     * every method which HAD bytecode in the impl DEX is now ACC_NATIVE in
-     * the output.
-     *
-     * Methods that were already native/abstract in the original APK have a
-     * null implementation in the impl DEX — they are intentionally skipped
-     * (we never touched them, and flagging them would be a false positive).
-     *
-     * Results go to Logcat under the "ApkProtector" tag so you can filter by
-     * "VMP verify" to audit any run.
+     * Scan every DEX in dexDir and confirm each compiledKey is present and ACC_NATIVE.
+     * Logs a ✓ / ✗ line per method visible in the UI progress log.
+     * If any method was NOT stripped a clear warning is shown — never silently succeeds.
      */
-    private void verifyVmpStripping(DexConfig cfg, File outputDex) {
-        try {
-            DexBackedDexFile implDex = DexBackedDexFile.fromInputStream(
-                    null,
-                    new java.io.BufferedInputStream(
-                            new java.io.FileInputStream(cfg.getImplDexFile())));
+    private void verifyStrippedKeys(File dexDir, Set<String> compiledKeys) {
+        int ACC_NATIVE = com.android.tools.smali.dexlib2.AccessFlags.NATIVE.getValue();
+        // Index: "Lclass;->method(sig)V" → found-and-native?
+        Map<String, Boolean> result = new LinkedHashMap<>();
+        for (String k : compiledKeys) result.put(k, false);
 
-            DexBackedDexFile outDex = DexBackedDexFile.fromInputStream(
-                    null,
-                    new java.io.BufferedInputStream(
-                            new java.io.FileInputStream(outputDex)));
-
-            // Build index: classType → { methodKey → accessFlags }
-            Map<String, Map<String, Integer>> outIndex = new HashMap<>();
-            for (ClassDef cls : outDex.getClasses()) {
-                Map<String, Integer> mmap = new HashMap<>();
-                for (Method m : cls.getMethods()) {
-                    mmap.put(vmpMethodKey(m), m.getAccessFlags());
-                }
-                outIndex.put(cls.getType(), mmap);
-            }
-
-            int ok = 0, warned = 0;
-            for (DexBackedClassDef cls : implDex.getClasses()) {
-                Map<String, Integer> outClass = outIndex.get(cls.getType());
-                for (DexBackedMethod m : cls.getMethods()) {
-                    if (m.getImplementation() == null) {
-                        // Already native/abstract in original APK — not our job, skip
-                        continue;
+        File[] dexFiles = dexDir.listFiles((d, n) -> n.matches("classes(\\d*)\\.dex"));
+        if (dexFiles != null) {
+            for (File dexFile : dexFiles) {
+                try {
+                    DexBackedDexFile dex = DexBackedDexFile.fromInputStream(
+                            null, new BufferedInputStream(new FileInputStream(dexFile)));
+                    for (com.android.tools.smali.dexlib2.dexbacked.DexBackedClassDef cls
+                            : dex.getClasses()) {
+                        String clsType = cls.getType();
+                        for (com.android.tools.smali.dexlib2.iface.Method m : cls.getMethods()) {
+                            StringBuilder kb = new StringBuilder(clsType)
+                                    .append("->").append(m.getName()).append("(");
+                            for (CharSequence p : m.getParameterTypes()) kb.append(p);
+                            kb.append(")").append(m.getReturnType());
+                            String key = kb.toString();
+                            if (result.containsKey(key)) {
+                                result.put(key, (m.getAccessFlags() & ACC_NATIVE) != 0);
+                            }
+                        }
                     }
-                    String key = vmpMethodKey(m);
-                    if (outClass == null) {
-                        String msg = "VMP verify ✗ class missing from output DEX: " + cls.getType();
-                        android.util.Log.w("ApkProtector", msg);
-                        report(70, msg);
-                        warned++;
-                        continue;
-                    }
-                    Integer flags = outClass.get(key);
-                    if (flags == null) {
-                        String msg = "VMP verify ✗ method missing: " + cls.getType() + "->" + key;
-                        android.util.Log.w("ApkProtector", msg);
-                        report(70, msg);
-                        warned++;
-                    } else if ((flags & 0x0100 /* ACC_NATIVE */) == 0) {
-                        String msg = "VMP verify ✗ bytecode NOT stripped: " + cls.getType() + "->" + key;
-                        android.util.Log.w("ApkProtector", msg);
-                        report(70, msg);
-                        warned++;
-                    } else {
-                        ok++;
-                    }
+                } catch (Exception e) {
+                    android.util.Log.w("ApkProtector", "Strip verify: cannot read " + dexFile.getName() + " — " + e.getMessage());
                 }
             }
-
-            if (warned == 0) {
-                String msg = "VMP verify ✓ all " + ok + " method(s) confirmed native in "
-                        + outputDex.getName();
-                android.util.Log.i("ApkProtector", msg);
-                report(70, msg);
-            } else {
-                String msg = "VMP verify ✗ " + warned + " method(s) NOT stripped in "
-                        + outputDex.getName() + " (" + ok + " ok — check logcat for details)";
-                android.util.Log.w("ApkProtector", msg);
-                report(70, msg);
-            }
-        } catch (Exception e) {
-            String msg = "VMP verify: could not check output DEX — " + e.getMessage();
-            android.util.Log.w("ApkProtector", msg);
-            report(70, msg);
         }
-    }
 
-    /** Builds a unique key for a method: "name(Lparam1;Lparam2;)Lreturn;" */
-    private static String vmpMethodKey(Method m) {
-        StringBuilder sb = new StringBuilder(m.getName()).append('(');
-        for (CharSequence p : m.getParameterTypes()) sb.append(p);
-        sb.append(')').append(m.getReturnType());
-        return sb.toString();
+        int ok = 0, bad = 0;
+        for (Map.Entry<String, Boolean> e : result.entrySet()) {
+            if (e.getValue()) {
+                ok++;
+                android.util.Log.i("ApkProtector", "Strip ✓ " + e.getKey());
+            } else {
+                bad++;
+                String msg = "Strip ✗ NOT native: " + e.getKey();
+                android.util.Log.w("ApkProtector", msg);
+                report(78, msg);
+            }
+        }
+        String summary = bad == 0
+                ? "Verify ✓ all " + ok + " method(s) confirmed native"
+                : "Verify ✗ " + bad + " method(s) NOT stripped (" + ok + " ok) — check logcat";
+        android.util.Log.i("ApkProtector", summary);
+        report(78, summary);
     }
 
     private void copyFile(File src, File dst) throws IOException {

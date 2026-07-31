@@ -862,6 +862,7 @@ public class NdkBuilder {
             linkCmd.add("-lc++_static");   // libc++_static.a
             linkCmd.add("-lc++abi");       // libc++abi.a  — __gxx_personality_v0
             linkCmd.add("-llog");
+            linkCmd.add("-lm");             // libm — fmod, sin, cos etc. used by VM interpreter
             linkCmd.add("-lz");             // zlib — used by guard.cpp for DEFLATE APK reads
             // 16 KB page alignment required for arm64 + x86_64 on Android 15+.
             // arm32 and x86 max out at 4 KB — passing the flag there causes link errors.

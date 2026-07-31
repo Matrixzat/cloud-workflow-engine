@@ -74,9 +74,9 @@ public class ProtectFragment extends Fragment {
     private TextView tvModeSubtitle;
 
     private static final String DEX2C_TITLE    = "Dex2C Mode";
-    private static final String DEX2C_SUBTITLE = "Compiles Java to hardened native C++ code";
+    private static final String DEX2C_SUBTITLE = "Bytecode stripped and rebuilt as hardened C++ native";
     private static final String VMP_TITLE      = "VMP Mode";
-    private static final String VMP_SUBTITLE   = "Bytecode-level protection, harder to reverse-engineer";
+    private static final String VMP_SUBTITLE   = "Converts bytecode to encrypted custom VM opcodes";
 
     // Progress state
     private ProgressBar progressBar;

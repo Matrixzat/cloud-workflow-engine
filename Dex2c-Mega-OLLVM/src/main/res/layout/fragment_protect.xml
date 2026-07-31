@@ -690,7 +690,7 @@
                     android:id="@+id/tv_mode_subtitle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Compiles Java to hardened native C++ code"
+                    android:text="Bytecode stripped and rebuilt as hardened C++ native"
                     android:textColor="@color/text_secondary"
                     android:textSize="11sp" />
 

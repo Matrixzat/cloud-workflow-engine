@@ -1825,6 +1825,268 @@ static uint64_t fnv1a64(const uint8_t *data, uint32_t len) {
     return h;
 }
 
+// ── §1  Inline-asm raw syscall wrappers (moved forward for detect_metrics/so_tamper) ──
+// ── §1  Inline-asm raw syscall wrappers — zero PLT / GOT / libc ────────────
+//
+// ARM64 calling convention: x0–x5 = args, x8 = syscall number, svc #0.
+// ARM32 EABI convention:    r0–r5 = args, r7 = syscall number, svc #0.
+// x86/x86_64 compile-only fallback (not our shipped ABI).
+
+#if defined(__aarch64__)
+
+static __attribute__((always_inline)) inline
+int g_sig_openat(const char *path, int flags) {
+    register long x0 __asm__("x0") = (long)AT_FDCWD;
+    register long x1 __asm__("x1") = (long)path;
+    register long x2 __asm__("x2") = (long)(flags | O_CLOEXEC);
+    register long x3 __asm__("x3") = 0L;
+    register long x8 __asm__("x8") = 56L; /* __NR_openat */
+    __asm__ volatile("svc #0"
+        : "+r"(x0)
+        : "r"(x1), "r"(x2), "r"(x3), "r"(x8)
+        : "memory", "cc");
+    return (int)x0;
+}
+static __attribute__((always_inline)) inline
+ssize_t g_sig_read(int fd, void *buf, size_t n) {
+    register long x0 __asm__("x0") = (long)fd;
+    register long x1 __asm__("x1") = (long)buf;
+    register long x2 __asm__("x2") = (long)n;
+    register long x8 __asm__("x8") = 63L; /* __NR_read */
+    __asm__ volatile("svc #0"
+        : "+r"(x0)
+        : "r"(x1), "r"(x2), "r"(x8)
+        : "memory", "cc");
+    return (ssize_t)x0;
+}
+static __attribute__((always_inline)) inline
+ssize_t g_sig_pread(int fd, void *buf, size_t n, off_t off) {
+    register long x0 __asm__("x0") = (long)fd;
+    register long x1 __asm__("x1") = (long)buf;
+    register long x2 __asm__("x2") = (long)n;
+    register long x3 __asm__("x3") = (long)off;
+    register long x8 __asm__("x8") = 67L; /* __NR_pread64 */
+    __asm__ volatile("svc #0"
+        : "+r"(x0)
+        : "r"(x1), "r"(x2), "r"(x3), "r"(x8)
+        : "memory", "cc");
+    return (ssize_t)x0;
+}
+static __attribute__((always_inline)) inline
+off_t g_sig_lseek(int fd, off_t off, int whence) {
+    register long x0 __asm__("x0") = (long)fd;
+    register long x1 __asm__("x1") = (long)off;
+    register long x2 __asm__("x2") = (long)whence;
+    register long x8 __asm__("x8") = 62L; /* __NR_lseek */
+    __asm__ volatile("svc #0"
+        : "+r"(x0)
+        : "r"(x1), "r"(x2), "r"(x8)
+        : "memory", "cc");
+    return (off_t)x0;
+}
+static __attribute__((always_inline)) inline
+int g_sig_close(int fd) {
+    register long x0 __asm__("x0") = (long)fd;
+    register long x8 __asm__("x8") = 57L; /* __NR_close */
+    __asm__ volatile("svc #0"
+        : "+r"(x0)
+        : "r"(x8)
+        : "memory", "cc");
+    return (int)x0;
+}
+
+#elif defined(__arm__)
+
+static __attribute__((always_inline)) inline
+int g_sig_openat(const char *path, int flags) {
+    register long r0 __asm__("r0") = (long)AT_FDCWD; /* AT_FDCWD = -100 */
+    register long r1 __asm__("r1") = (long)path;
+    register long r2 __asm__("r2") = (long)(flags | O_CLOEXEC);
+    register long r3 __asm__("r3") = 0L;
+    register long r7 __asm__("r7") = 322L; /* __NR_openat ARM32 */
+    __asm__ volatile("svc #0"
+        : "+r"(r0)
+        : "r"(r1), "r"(r2), "r"(r3), "r"(r7)
+        : "memory", "cc");
+    return (int)r0;
+}
+static __attribute__((always_inline)) inline
+ssize_t g_sig_read(int fd, void *buf, size_t n) {
+    register long r0 __asm__("r0") = (long)fd;
+    register long r1 __asm__("r1") = (long)buf;
+    register long r2 __asm__("r2") = (long)n;
+    register long r7 __asm__("r7") = 3L; /* __NR_read */
+    __asm__ volatile("svc #0"
+        : "+r"(r0)
+        : "r"(r1), "r"(r2), "r"(r7)
+        : "memory", "cc");
+    return (ssize_t)r0;
+}
+static __attribute__((always_inline)) inline
+ssize_t g_sig_pread(int fd, void *buf, size_t n, off_t off) {
+    /* ARM32 EABI pread64: r0=fd r1=buf r2=count r3=0(pad) r4=off_lo r5=off_hi */
+    register long r0 __asm__("r0") = (long)fd;
+    register long r1 __asm__("r1") = (long)buf;
+    register long r2 __asm__("r2") = (long)n;
+    register long r3 __asm__("r3") = 0L; /* 64-bit alignment pad */
+    register long r4 __asm__("r4") = (long)off;
+    register long r5 __asm__("r5") = 0L; /* offset_hi — APKs < 4 GB */
+    register long r7 __asm__("r7") = 180L; /* __NR_pread64 */
+    __asm__ volatile("svc #0"
+        : "+r"(r0)
+        : "r"(r1), "r"(r2), "r"(r3), "r"(r4), "r"(r5), "r"(r7)
+        : "memory", "cc");
+    return (ssize_t)r0;
+}
+static __attribute__((always_inline)) inline
+off_t g_sig_lseek(int fd, off_t off, int whence) {
+    register long r0 __asm__("r0") = (long)fd;
+    register long r1 __asm__("r1") = (long)off;
+    register long r2 __asm__("r2") = (long)whence;
+    register long r7 __asm__("r7") = 19L; /* __NR_lseek */
+    __asm__ volatile("svc #0"
+        : "+r"(r0)
+        : "r"(r1), "r"(r2), "r"(r7)
+        : "memory", "cc");
+    return (off_t)r0;
+}
+static __attribute__((always_inline)) inline
+int g_sig_close(int fd) {
+    register long r0 __asm__("r0") = (long)fd;
+    register long r7 __asm__("r7") = 6L; /* __NR_close */
+    __asm__ volatile("svc #0"
+        : "+r"(r0)
+        : "r"(r7)
+        : "memory", "cc");
+    return (int)r0;
+}
+
+#else /* x86 / x86_64 — compile-only fallback, not a target ABI */
+static inline int     g_sig_openat(const char *p, int f) { return open(p, f|O_CLOEXEC); }
+static inline ssize_t g_sig_read(int fd,void *b,size_t n)            { return read(fd,b,n); }
+static inline ssize_t g_sig_pread(int fd,void *b,size_t n,off_t o)   { return pread(fd,b,n,o); }
+static inline off_t   g_sig_lseek(int fd, off_t o, int w)            { return lseek(fd,o,w); }
+static inline int     g_sig_close(int fd)                             { return close(fd); }
+#endif /* arch */
+
+
+// ── g_sig_eocd / g_sig_read_entry / g_sig_scan_cd (fd-based ZIP helpers) ──────────
+static int g_sig_eocd(int fd, uint32_t *cd_off, uint32_t *cd_sz) {
+    off_t fsize = g_sig_lseek(fd, 0, SEEK_END);
+    if (fsize < 22) return 0;
+    size_t search = (size_t)(fsize < 66022 ? fsize : 66022);
+    uint8_t *buf = (uint8_t *)malloc(search);
+    if (!buf) return 0;
+    ssize_t rd = g_sig_pread(fd, buf, search, fsize - (off_t)search);
+    if (rd < 22) { free(buf); return 0; }
+    long found = -1;
+    for (long i = (long)rd - 22; i >= 0; i--) {
+        if (buf[i]==0x50&&buf[i+1]==0x4b&&buf[i+2]==0x05&&buf[i+3]==0x06) {
+            found = i; break;
+        }
+    }
+    if (found < 0) { free(buf); return 0; }
+    *cd_sz  = g_rd32(buf + found + 12);
+    *cd_off = g_rd32(buf + found + 16);
+    free(buf);
+    return 1;
+}
+
+/* Read one ZIP entry's uncompressed data using pread64 (STORED or DEFLATE).
+   Returns number of bytes written to out, 0 on error. */
+static uint32_t g_sig_read_entry(int fd, const ZipEntryInfo *info,
+                                  uint8_t *out, uint32_t out_max) {
+    uint8_t lh[30];
+    if (g_sig_pread(fd, lh, 30, (off_t)info->local_offset) != 30) return 0;
+    if (lh[0]!=0x50||lh[1]!=0x4b||lh[2]!=0x03||lh[3]!=0x04) return 0;
+    uint16_t nl  = g_rd16(lh + 26);
+    uint16_t el  = g_rd16(lh + 28);
+    off_t data_off = (off_t)info->local_offset + 30 + nl + el;
+
+    if (info->method == 0) { /* STORED — direct pread */
+        if (info->uncomp_size > out_max) return 0;
+        ssize_t r = g_sig_pread(fd, out, info->uncomp_size, data_off);
+        return (r == (ssize_t)info->uncomp_size) ? info->uncomp_size : 0;
+    }
+    if (info->method == 8) { /* DEFLATE — raw inflate (windowBits = -15) */
+        if (info->comp_size > (64u << 20)) return 0; /* sanity: 64 MB max */
+        uint8_t *comp = (uint8_t *)malloc(info->comp_size);
+        if (!comp) return 0;
+        ssize_t r = g_sig_pread(fd, comp, info->comp_size, data_off);
+        if (r != (ssize_t)info->comp_size) { free(comp); return 0; }
+        z_stream strm; memset(&strm, 0, sizeof(strm));
+        strm.next_in   = comp;          strm.avail_in  = info->comp_size;
+        strm.next_out  = out;           strm.avail_out = out_max;
+        if (inflateInit2(&strm, -15) != Z_OK) { free(comp); return 0; }
+        int rc = inflate(&strm, Z_FINISH);
+        uint32_t written = out_max - strm.avail_out;
+        inflateEnd(&strm); free(comp);
+        return (rc == Z_STREAM_END) ? written : 0;
+    }
+    return 0; /* unsupported compression */
+}
+
+// ── fd-based central-directory scan — svc #0 I/O, no fopen@PLT hook surface
+// Drop-in replacement for zip_scan_central_dir but takes int fd instead of
+// FILE *f. Used by detect_metrics_tamper and detect_so_tamper (Layers 2 & 3).
+static int g_sig_scan_cd(int fd, uint32_t cd_offset, uint32_t cd_size,
+                          const char *want_name, ZipEntryInfo *want_info,
+                          int *dex_count_out) {
+    char s_dot_dex[SP_BUF_SZ], s_classes[SP_BUF_SZ];
+    reveal_ns(5u, SP_DOT_DEX,      SP_DOT_DEX_LEN,      s_dot_dex);
+    reveal_ns(6u, SP_STR_CLASSES,  SP_STR_CLASSES_LEN,  s_classes);
+
+    uint8_t *cd = (uint8_t *)malloc(cd_size ? cd_size : 1);
+    if (!cd) return 0;
+    if (cd_size > 0) {
+        ssize_t rd = g_sig_pread(fd, cd, (size_t)cd_size, (off_t)cd_offset);
+        if (rd != (ssize_t)cd_size) { free(cd); return 0; }
+    }
+
+    int dex_count = 0;
+    uint32_t p = 0;
+    while (p + 46 <= cd_size) {
+        if (!(cd[p]==0x50 && cd[p+1]==0x4b && cd[p+2]==0x01 && cd[p+3]==0x02)) break;
+        uint16_t method    = g_rd16(cd + p + 10);
+        uint32_t comp_sz   = g_rd32(cd + p + 20);
+        uint32_t uncomp_sz = g_rd32(cd + p + 24);
+        uint16_t name_len  = g_rd16(cd + p + 28);
+        uint16_t extra_len = g_rd16(cd + p + 30);
+        uint16_t comm_len  = g_rd16(cd + p + 32);
+        uint32_t local_off = g_rd32(cd + p + 42);
+        uint32_t name_off  = p + 46;
+        if ((uint64_t)name_off + name_len > cd_size) break;
+
+        char name[256];
+        uint16_t nlen = name_len < 255 ? name_len : 255;
+        memcpy(name, cd + name_off, nlen);
+        name[nlen] = '\0';
+
+        size_t L = strlen(name);
+        if (L > 4 && strcmp(name + L - 4, s_dot_dex) == 0 && strncmp(name, s_classes, 7) == 0) {
+            int ok = 1;
+            for (size_t i = 7; i < L - 4; i++) if (name[i] < '0' || name[i] > '9') { ok = 0; break; }
+            if (ok) dex_count++;
+        }
+
+        if (want_name && want_info && !want_info->found && strcmp(name, want_name) == 0) {
+            want_info->method       = method;
+            want_info->comp_size    = comp_sz;
+            want_info->uncomp_size  = uncomp_sz;
+            want_info->local_offset = local_off;
+            want_info->found        = 1;
+        }
+
+        uint64_t next = (uint64_t)name_off + name_len + extra_len + comm_len;
+        if (next <= p) break;
+        p = (uint32_t)next;
+    }
+    free(cd);
+    if (dex_count_out) *dex_count_out = dex_count;
+    return 1;
+}
+
+
 #define MANIFEST_BUF_SZ  (2 * 1024 * 1024)
 #define STAMP_BUF_SZ      32
 
@@ -2117,149 +2379,6 @@ static __attribute__((always_inline)) inline int gvm_so_integrity(void) {
 // Zero libc involvement in the critical I/O path → unbypassable without root.
 // ════════════════════════════════════════════════════════════════════════════
 
-// ── §1  Inline-asm raw syscall wrappers — zero PLT / GOT / libc ────────────
-//
-// ARM64 calling convention: x0–x5 = args, x8 = syscall number, svc #0.
-// ARM32 EABI convention:    r0–r5 = args, r7 = syscall number, svc #0.
-// x86/x86_64 compile-only fallback (not our shipped ABI).
-
-#if defined(__aarch64__)
-
-static __attribute__((always_inline)) inline
-int g_sig_openat(const char *path, int flags) {
-    register long x0 __asm__("x0") = (long)AT_FDCWD;
-    register long x1 __asm__("x1") = (long)path;
-    register long x2 __asm__("x2") = (long)(flags | O_CLOEXEC);
-    register long x3 __asm__("x3") = 0L;
-    register long x8 __asm__("x8") = 56L; /* __NR_openat */
-    __asm__ volatile("svc #0"
-        : "+r"(x0)
-        : "r"(x1), "r"(x2), "r"(x3), "r"(x8)
-        : "memory", "cc");
-    return (int)x0;
-}
-static __attribute__((always_inline)) inline
-ssize_t g_sig_read(int fd, void *buf, size_t n) {
-    register long x0 __asm__("x0") = (long)fd;
-    register long x1 __asm__("x1") = (long)buf;
-    register long x2 __asm__("x2") = (long)n;
-    register long x8 __asm__("x8") = 63L; /* __NR_read */
-    __asm__ volatile("svc #0"
-        : "+r"(x0)
-        : "r"(x1), "r"(x2), "r"(x8)
-        : "memory", "cc");
-    return (ssize_t)x0;
-}
-static __attribute__((always_inline)) inline
-ssize_t g_sig_pread(int fd, void *buf, size_t n, off_t off) {
-    register long x0 __asm__("x0") = (long)fd;
-    register long x1 __asm__("x1") = (long)buf;
-    register long x2 __asm__("x2") = (long)n;
-    register long x3 __asm__("x3") = (long)off;
-    register long x8 __asm__("x8") = 67L; /* __NR_pread64 */
-    __asm__ volatile("svc #0"
-        : "+r"(x0)
-        : "r"(x1), "r"(x2), "r"(x3), "r"(x8)
-        : "memory", "cc");
-    return (ssize_t)x0;
-}
-static __attribute__((always_inline)) inline
-off_t g_sig_lseek(int fd, off_t off, int whence) {
-    register long x0 __asm__("x0") = (long)fd;
-    register long x1 __asm__("x1") = (long)off;
-    register long x2 __asm__("x2") = (long)whence;
-    register long x8 __asm__("x8") = 62L; /* __NR_lseek */
-    __asm__ volatile("svc #0"
-        : "+r"(x0)
-        : "r"(x1), "r"(x2), "r"(x8)
-        : "memory", "cc");
-    return (off_t)x0;
-}
-static __attribute__((always_inline)) inline
-int g_sig_close(int fd) {
-    register long x0 __asm__("x0") = (long)fd;
-    register long x8 __asm__("x8") = 57L; /* __NR_close */
-    __asm__ volatile("svc #0"
-        : "+r"(x0)
-        : "r"(x8)
-        : "memory", "cc");
-    return (int)x0;
-}
-
-#elif defined(__arm__)
-
-static __attribute__((always_inline)) inline
-int g_sig_openat(const char *path, int flags) {
-    register long r0 __asm__("r0") = (long)AT_FDCWD; /* AT_FDCWD = -100 */
-    register long r1 __asm__("r1") = (long)path;
-    register long r2 __asm__("r2") = (long)(flags | O_CLOEXEC);
-    register long r3 __asm__("r3") = 0L;
-    register long r7 __asm__("r7") = 322L; /* __NR_openat ARM32 */
-    __asm__ volatile("svc #0"
-        : "+r"(r0)
-        : "r"(r1), "r"(r2), "r"(r3), "r"(r7)
-        : "memory", "cc");
-    return (int)r0;
-}
-static __attribute__((always_inline)) inline
-ssize_t g_sig_read(int fd, void *buf, size_t n) {
-    register long r0 __asm__("r0") = (long)fd;
-    register long r1 __asm__("r1") = (long)buf;
-    register long r2 __asm__("r2") = (long)n;
-    register long r7 __asm__("r7") = 3L; /* __NR_read */
-    __asm__ volatile("svc #0"
-        : "+r"(r0)
-        : "r"(r1), "r"(r2), "r"(r7)
-        : "memory", "cc");
-    return (ssize_t)r0;
-}
-static __attribute__((always_inline)) inline
-ssize_t g_sig_pread(int fd, void *buf, size_t n, off_t off) {
-    /* ARM32 EABI pread64: r0=fd r1=buf r2=count r3=0(pad) r4=off_lo r5=off_hi */
-    register long r0 __asm__("r0") = (long)fd;
-    register long r1 __asm__("r1") = (long)buf;
-    register long r2 __asm__("r2") = (long)n;
-    register long r3 __asm__("r3") = 0L; /* 64-bit alignment pad */
-    register long r4 __asm__("r4") = (long)off;
-    register long r5 __asm__("r5") = 0L; /* offset_hi — APKs < 4 GB */
-    register long r7 __asm__("r7") = 180L; /* __NR_pread64 */
-    __asm__ volatile("svc #0"
-        : "+r"(r0)
-        : "r"(r1), "r"(r2), "r"(r3), "r"(r4), "r"(r5), "r"(r7)
-        : "memory", "cc");
-    return (ssize_t)r0;
-}
-static __attribute__((always_inline)) inline
-off_t g_sig_lseek(int fd, off_t off, int whence) {
-    register long r0 __asm__("r0") = (long)fd;
-    register long r1 __asm__("r1") = (long)off;
-    register long r2 __asm__("r2") = (long)whence;
-    register long r7 __asm__("r7") = 19L; /* __NR_lseek */
-    __asm__ volatile("svc #0"
-        : "+r"(r0)
-        : "r"(r1), "r"(r2), "r"(r7)
-        : "memory", "cc");
-    return (off_t)r0;
-}
-static __attribute__((always_inline)) inline
-int g_sig_close(int fd) {
-    register long r0 __asm__("r0") = (long)fd;
-    register long r7 __asm__("r7") = 6L; /* __NR_close */
-    __asm__ volatile("svc #0"
-        : "+r"(r0)
-        : "r"(r7)
-        : "memory", "cc");
-    return (int)r0;
-}
-
-#else /* x86 / x86_64 — compile-only fallback, not a target ABI */
-static inline int     g_sig_openat(const char *p, int f) { return open(p, f|O_CLOEXEC); }
-static inline ssize_t g_sig_read(int fd,void *b,size_t n)            { return read(fd,b,n); }
-static inline ssize_t g_sig_pread(int fd,void *b,size_t n,off_t o)   { return pread(fd,b,n,o); }
-static inline off_t   g_sig_lseek(int fd, off_t o, int w)            { return lseek(fd,o,w); }
-static inline int     g_sig_close(int fd)                             { return close(fd); }
-#endif /* arch */
-
 // ── §2  Bypass-tool detection via /proc/self/maps ──────────────────────────
 // Opens /proc/self/maps with inline-asm I/O (itself immune to IO hooks), reads
 // it in 4 KB chunks and searches for short XOR-0xA3 obfuscated fragments that
@@ -2337,121 +2456,6 @@ static int g_sig_maps_scan(void) {
 // ── §3  pread-based ZIP mini-parser — no FILE*, no fread, no fseek ─────────
 
 /* Locate EOCD; return cd_offset and cd_size via pointers. */
-static int g_sig_eocd(int fd, uint32_t *cd_off, uint32_t *cd_sz) {
-    off_t fsize = g_sig_lseek(fd, 0, SEEK_END);
-    if (fsize < 22) return 0;
-    size_t search = (size_t)(fsize < 66022 ? fsize : 66022);
-    uint8_t *buf = (uint8_t *)malloc(search);
-    if (!buf) return 0;
-    ssize_t rd = g_sig_pread(fd, buf, search, fsize - (off_t)search);
-    if (rd < 22) { free(buf); return 0; }
-    long found = -1;
-    for (long i = (long)rd - 22; i >= 0; i--) {
-        if (buf[i]==0x50&&buf[i+1]==0x4b&&buf[i+2]==0x05&&buf[i+3]==0x06) {
-            found = i; break;
-        }
-    }
-    if (found < 0) { free(buf); return 0; }
-    *cd_sz  = g_rd32(buf + found + 12);
-    *cd_off = g_rd32(buf + found + 16);
-    free(buf);
-    return 1;
-}
-
-/* Read one ZIP entry's uncompressed data using pread64 (STORED or DEFLATE).
-   Returns number of bytes written to out, 0 on error. */
-static uint32_t g_sig_read_entry(int fd, const ZipEntryInfo *info,
-                                  uint8_t *out, uint32_t out_max) {
-    uint8_t lh[30];
-    if (g_sig_pread(fd, lh, 30, (off_t)info->local_offset) != 30) return 0;
-    if (lh[0]!=0x50||lh[1]!=0x4b||lh[2]!=0x03||lh[3]!=0x04) return 0;
-    uint16_t nl  = g_rd16(lh + 26);
-    uint16_t el  = g_rd16(lh + 28);
-    off_t data_off = (off_t)info->local_offset + 30 + nl + el;
-
-    if (info->method == 0) { /* STORED — direct pread */
-        if (info->uncomp_size > out_max) return 0;
-        ssize_t r = g_sig_pread(fd, out, info->uncomp_size, data_off);
-        return (r == (ssize_t)info->uncomp_size) ? info->uncomp_size : 0;
-    }
-    if (info->method == 8) { /* DEFLATE — raw inflate (windowBits = -15) */
-        if (info->comp_size > (64u << 20)) return 0; /* sanity: 64 MB max */
-        uint8_t *comp = (uint8_t *)malloc(info->comp_size);
-        if (!comp) return 0;
-        ssize_t r = g_sig_pread(fd, comp, info->comp_size, data_off);
-        if (r != (ssize_t)info->comp_size) { free(comp); return 0; }
-        z_stream strm; memset(&strm, 0, sizeof(strm));
-        strm.next_in   = comp;          strm.avail_in  = info->comp_size;
-        strm.next_out  = out;           strm.avail_out = out_max;
-        if (inflateInit2(&strm, -15) != Z_OK) { free(comp); return 0; }
-        int rc = inflate(&strm, Z_FINISH);
-        uint32_t written = out_max - strm.avail_out;
-        inflateEnd(&strm); free(comp);
-        return (rc == Z_STREAM_END) ? written : 0;
-    }
-    return 0; /* unsupported compression */
-}
-
-// ── fd-based central-directory scan — svc #0 I/O, no fopen@PLT hook surface
-// Drop-in replacement for zip_scan_central_dir but takes int fd instead of
-// FILE *f. Used by detect_metrics_tamper and detect_so_tamper (Layers 2 & 3).
-static int g_sig_scan_cd(int fd, uint32_t cd_offset, uint32_t cd_size,
-                          const char *want_name, ZipEntryInfo *want_info,
-                          int *dex_count_out) {
-    char s_dot_dex[SP_BUF_SZ], s_classes[SP_BUF_SZ];
-    reveal_ns(5u, SP_DOT_DEX,      SP_DOT_DEX_LEN,      s_dot_dex);
-    reveal_ns(6u, SP_STR_CLASSES,  SP_STR_CLASSES_LEN,  s_classes);
-
-    uint8_t *cd = (uint8_t *)malloc(cd_size ? cd_size : 1);
-    if (!cd) return 0;
-    if (cd_size > 0) {
-        ssize_t rd = g_sig_pread(fd, cd, (size_t)cd_size, (off_t)cd_offset);
-        if (rd != (ssize_t)cd_size) { free(cd); return 0; }
-    }
-
-    int dex_count = 0;
-    uint32_t p = 0;
-    while (p + 46 <= cd_size) {
-        if (!(cd[p]==0x50 && cd[p+1]==0x4b && cd[p+2]==0x01 && cd[p+3]==0x02)) break;
-        uint16_t method    = g_rd16(cd + p + 10);
-        uint32_t comp_sz   = g_rd32(cd + p + 20);
-        uint32_t uncomp_sz = g_rd32(cd + p + 24);
-        uint16_t name_len  = g_rd16(cd + p + 28);
-        uint16_t extra_len = g_rd16(cd + p + 30);
-        uint16_t comm_len  = g_rd16(cd + p + 32);
-        uint32_t local_off = g_rd32(cd + p + 42);
-        uint32_t name_off  = p + 46;
-        if ((uint64_t)name_off + name_len > cd_size) break;
-
-        char name[256];
-        uint16_t nlen = name_len < 255 ? name_len : 255;
-        memcpy(name, cd + name_off, nlen);
-        name[nlen] = '\0';
-
-        size_t L = strlen(name);
-        if (L > 4 && strcmp(name + L - 4, s_dot_dex) == 0 && strncmp(name, s_classes, 7) == 0) {
-            int ok = 1;
-            for (size_t i = 7; i < L - 4; i++) if (name[i] < '0' || name[i] > '9') { ok = 0; break; }
-            if (ok) dex_count++;
-        }
-
-        if (want_name && want_info && !want_info->found && strcmp(name, want_name) == 0) {
-            want_info->method       = method;
-            want_info->comp_size    = comp_sz;
-            want_info->uncomp_size  = uncomp_sz;
-            want_info->local_offset = local_off;
-            want_info->found        = 1;
-        }
-
-        uint64_t next = (uint64_t)name_off + name_len + extra_len + comm_len;
-        if (next <= p) break;
-        p = (uint32_t)next;
-    }
-    free(cd);
-    if (dex_count_out) *dex_count_out = dex_count;
-    return 1;
-}
-
 // ── §3b  Minimal ASN.1 PKCS#7 → X.509 DER extractor ──────────────────────
 //
 // Android V1-signed APKs store a PKCS#7 SignedData blob in META-INF/*.RSA.

@@ -16,6 +16,7 @@ import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
+import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -143,6 +144,22 @@ public class DexTranspiler {
                     dexFiles, filter, rewriter, classAnalyzer, vmpOutDir);
 
             result.vmpConfig = vmpConfig;
+
+            // Generate a per-run DexOpcodes.h that matches the randomized bytecode opcode map.
+            // Without this, the static vmp_headers/DexOpcodes.h (standard Dalvik ordering) is
+            // used during compilation but the bytecode was written with a shuffled opcode map →
+            // every instruction dispatches to the wrong handler in vmInterpret → SIGSEGV.
+            // This replicates NMMP's CmakeUtils.writeOpcodeHeaderFile() logic.
+            progress(cb, "VMP: generating per-run DexOpcodes.h…");
+            try {
+                File dexOpcodesH = new File(vmpOutDir, "DexOpcodes.h");
+                generateDexOpcodesHeader(rewriter, dexOpcodesH);
+                Log.i(TAG, "Per-run DexOpcodes.h written → " + dexOpcodesH.getAbsolutePath());
+            } catch (Exception e) {
+                Log.e(TAG, "generateDexOpcodesHeader failed", e);
+                result.errors.add("VMP: DexOpcodes.h generation failed: " + e.getMessage());
+                return result;
+            }
 
             // Register ALL generated C files so NdkBuilder compiles every one:
             //   classes_native_functions.c  — method bodies as vmCode[] structs
@@ -357,6 +374,56 @@ public class DexTranspiler {
         BasicKeepConfig keepConfig = new BasicKeepConfig();
 
         return new SimpleConvertConfig(keepConfig, rules);
+    }
+
+    /**
+     * Generate a per-run DexOpcodes.h by reading the static template from assets and
+     * patching the enum body + goto-table body with the current rewriter's opcode map.
+     *
+     * This replicates NMMP's CmakeUtils.writeOpcodeHeaderFile() which NMMP runs at
+     * protection time before passing source files to cmake/ndk-build. Without this step
+     * the VM runtime is compiled with the standard (identity) opcode ordering but the
+     * protected bytecode uses the randomized ordering → every opcode dispatches to the
+     * wrong handler in vmInterpret → deterministic SIGSEGV.
+     *
+     * Note on double-backslash in generateConfig() output: the gotoTableWriter receives
+     * lines ending with "\\\n" (two chars: backslash + newline). When those lines are
+     * used as a String.replaceAll() replacement string, each "\\" becomes a literal
+     * single "\" in the output — which is exactly the C macro line-continuation syntax.
+     */
+    private void generateDexOpcodesHeader(
+            com.dex2c.mega.engine.vmp.converter.instructionrewriter.InstructionRewriter rewriter,
+            File dest) throws IOException {
+        // Read the static DexOpcodes.h template from assets
+        String template;
+        try (InputStream is = context.getAssets().open("vmp_headers/DexOpcodes.h");
+             java.util.Scanner sc = new java.util.Scanner(is, "UTF-8").useDelimiter("\\A")) {
+            template = sc.hasNext() ? sc.next() : "";
+        }
+
+        // Generate randomized enum body and goto-table body
+        StringWriter enumW = new StringWriter();
+        StringWriter gotoW = new StringWriter();
+        rewriter.generateConfig(enumW, gotoW);
+
+        // Replace enum body:  "enum Opcode { … };" → new enum with shuffled values
+        Pattern enumPat = Pattern.compile(
+                "enum Opcode \\{.*?\\};",
+                Pattern.MULTILINE | Pattern.DOTALL);
+        String result = enumPat.matcher(template)
+                .replaceAll(String.format("enum Opcode {\n%s};", enumW));
+
+        // Replace goto-table body:  "_name[kNumPackedOpcodes] = { … };" → new table
+        Pattern gotoPat = Pattern.compile(
+                "_name\\[kNumPackedOpcodes\\] = \\{.*?\\};",
+                Pattern.MULTILINE | Pattern.DOTALL);
+        result = gotoPat.matcher(result)
+                .replaceAll(String.format(
+                        "_name[kNumPackedOpcodes] = {        \\\\\n%s};", gotoW));
+
+        try (FileWriter fw = new FileWriter(dest)) {
+            fw.write(result);
+        }
     }
 
     private static void progress(TranspileCallback cb, String msg) {

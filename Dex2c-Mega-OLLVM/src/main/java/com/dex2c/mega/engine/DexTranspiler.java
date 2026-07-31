@@ -163,6 +163,18 @@ public class DexTranspiler {
                 }
             }
 
+            // Also copy any generated .h files (e.g. classes_resolver.h) so that
+            // native_functions.c can #include them via the file's own directory.
+            File[] hFiles = vmpOutDir.listFiles(f -> f.getName().endsWith(".h"));
+            if (hFiles != null) {
+                for (File hf : hFiles) {
+                    File dest = new File(outputDir, hf.getName());
+                    Files.copy(hf.toPath(), dest.toPath(),
+                            StandardCopyOption.REPLACE_EXISTING);
+                    Log.d(TAG, "VMP header copied: " + hf.getName());
+                }
+            }
+
             progress(cb, "VMP: done — " + result.compiled.size() + " C file(s) registered.");
         } catch (Exception e) {
             Log.e(TAG, "VMP transpile failed", e);

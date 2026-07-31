@@ -75,6 +75,15 @@ public class NdkBuilder {
             return false;
         }
 
+        // Extract VMP runtime headers (vm.h, Common.h, cutils/log.h, …) from
+        // assets/vmp_headers/ into headersDir so that VMP-generated C files that
+        // #include "vm.h" can be compiled on-device.
+        try {
+            extractAssetDir(context, "vmp_headers", headersDir);
+        } catch (IOException e) {
+            Log.w(TAG, "VMP header extraction failed (non-fatal): " + e.getMessage());
+        }
+
         // Resolve clang once here — compile() reuses this same file,
         // avoiding a second getActiveClangBin() call that could return a
         // different (bundled-fallback) path if the OLLVM NDK probe changes.
@@ -1078,6 +1087,38 @@ public class NdkBuilder {
 
     private void extractOptional(String assetPath, File dest) {
         try { extractAsset(assetPath, dest, false); } catch (IOException ignored) {}
+    }
+
+    /**
+     * Recursively copies all files under {@code assetDir} (an assets/ subdirectory)
+     * into {@code destDir}, preserving the subdirectory structure.
+     * Used to unpack vmp_headers/ so that VMP-generated C files can #include "vm.h"
+     * via the existing -I headersDir compile flag.
+     */
+    private void extractAssetDir(Context ctx, String assetDir, File destDir)
+            throws IOException {
+        android.content.res.AssetManager am = ctx.getAssets();
+        String[] children = am.list(assetDir);
+        if (children == null) return;
+        for (String child : children) {
+            String childPath = assetDir + "/" + child;
+            String[] grandChildren = am.list(childPath);
+            if (grandChildren != null && grandChildren.length > 0) {
+                // It's a subdirectory — recurse
+                File subDest = new File(destDir, child);
+                subDest.mkdirs();
+                extractAssetDir(ctx, childPath, subDest);
+            } else {
+                // It's a file — copy it
+                File outFile = new File(destDir, child);
+                try (InputStream in  = am.open(childPath);
+                     OutputStream out = new FileOutputStream(outFile)) {
+                    byte[] buf = new byte[65536];
+                    int n;
+                    while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+                }
+            }
+        }
     }
 
     /**

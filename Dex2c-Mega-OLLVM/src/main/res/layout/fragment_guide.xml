@@ -13,7 +13,7 @@
         android:padding="18dp">
 
         <!-- ── Hero animation ─────────────────────────────────────────────── -->
-        <com.dex2c.mega.ui.ShieldAnimView
+        <com.ultra.dex2cvmp.ui.ShieldAnimView
             android:layout_width="match_parent"
             android:layout_height="220dp"
             android:layout_marginBottom="4dp" />

@@ -6,22 +6,22 @@
 
     <fragment
         android:id="@+id/guideFragment"
-        android:name="com.dex2c.mega.ui.GuideFragment"
+        android:name="com.ultra.dex2cvmp.ui.GuideFragment"
         android:label="Guide" />
 
     <fragment
         android:id="@+id/protectFragment"
-        android:name="com.dex2c.mega.ui.ProtectFragment"
+        android:name="com.ultra.dex2cvmp.ui.ProtectFragment"
         android:label="Protect" />
 
     <fragment
         android:id="@+id/ollvmFragment"
-        android:name="com.dex2c.mega.ui.OllvmFragment"
+        android:name="com.ultra.dex2cvmp.ui.OllvmFragment"
         android:label="OLLVM" />
 
     <fragment
         android:id="@+id/settingsFragment"
-        android:name="com.dex2c.mega.ui.SettingsFragment"
+        android:name="com.ultra.dex2cvmp.ui.SettingsFragment"
         android:label="Settings" />
 
 </navigation>

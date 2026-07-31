@@ -21,7 +21,7 @@
         android:elevation="4dp">
 
         <!-- Animated shield icon (small) -->
-        <com.dex2c.mega.ui.ShieldAnimView
+        <com.ultra.dex2cvmp.ui.ShieldAnimView
             android:layout_width="36dp"
             android:layout_height="36dp"
             android:layout_marginEnd="10dp" />
@@ -130,7 +130,7 @@
         android:gravity="center"
         android:padding="32dp">
 
-        <com.dex2c.mega.ui.ShieldAnimView
+        <com.ultra.dex2cvmp.ui.ShieldAnimView
             android:layout_width="180dp"
             android:layout_height="180dp" />
 

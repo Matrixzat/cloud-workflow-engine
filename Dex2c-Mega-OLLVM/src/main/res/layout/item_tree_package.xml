@@ -21,7 +21,7 @@
         android:layout_marginEnd="10dp" />
 
     <!-- Package icon (animated rotating hex) -->
-    <com.dex2c.mega.ui.PkgIconView
+    <com.ultra.dex2cvmp.ui.PkgIconView
         android:layout_width="22dp"
         android:layout_height="22dp"
         android:layout_marginEnd="10dp" />

@@ -14,7 +14,7 @@
         android:background="@color/accent_green" />
 
     <!-- Shield animation view -->
-    <com.dex2c.mega.ui.ShieldAnimView
+    <com.ultra.dex2cvmp.ui.ShieldAnimView
         android:id="@+id/update_shield_view"
         android:layout_width="match_parent"
         android:layout_height="140dp"

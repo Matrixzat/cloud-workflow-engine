@@ -18,7 +18,7 @@ public class GlobalDexConfig {
     }
 
     public File getInitCodeFile() {
-        return new File(outputDir, "jni_init.c");
+        return new File(outputDir, "jni_init.cpp");
     }
 
     public void addDexConfig(DexConfig config) {

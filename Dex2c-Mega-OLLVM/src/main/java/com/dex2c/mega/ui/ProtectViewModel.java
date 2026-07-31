@@ -11,6 +11,9 @@ import com.dex2c.mega.service.ProtectionService;
 
 public class ProtectViewModel extends AndroidViewModel {
 
+    private static final String PREFS_NAME  = "dex2c_mega_prefs";
+    private static final String KEY_VMP     = "vmp_enabled";
+
     private Uri    inputUri;
     private String inputName   = "";
     private boolean signEnabled = false;
@@ -30,6 +33,10 @@ public class ProtectViewModel extends AndroidViewModel {
 
     public ProtectViewModel(Application app) {
         super(app);
+
+        // Restore persisted toggle states
+        SharedPreferences prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        vmpEnabled = prefs.getBoolean(KEY_VMP, false);
 
         // Session recovery: if a protection job is still running (same process),
         // restore the running state so the UI can reconnect to it.
@@ -80,7 +87,14 @@ public class ProtectViewModel extends AndroidViewModel {
     public void    setSignEnabled(boolean v) { this.signEnabled = v; }
 
     public boolean isVmpEnabled()            { return vmpEnabled; }
-    public void    setVmpEnabled(boolean v)  { this.vmpEnabled  = v; }
+    public void    setVmpEnabled(boolean v) {
+        this.vmpEnabled = v;
+        getApplication()
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_VMP, v)
+            .apply();
+    }
 
     public LiveData<String>  getStatus()     { return status; }
     public LiveData<Integer> getProgress()   { return progress; }

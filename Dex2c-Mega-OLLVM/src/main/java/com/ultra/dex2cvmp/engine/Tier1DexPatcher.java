@@ -54,7 +54,7 @@ import java.util.regex.Pattern;
 public class Tier1DexPatcher {
 
     private static final String TAG              = "Tier1DexPatcher";
-    private static final String DEFAULT_LIB_NAME = "dex2c-mega";
+    private static final String DEFAULT_LIB_NAME = "ultra-dex2cvmp";
 
     private static final TypeId  CONTEXT_TYPE         = TypeId.of("Landroid/content/Context;");
 

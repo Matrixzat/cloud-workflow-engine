@@ -152,7 +152,7 @@ public class ApkProtector {
         File primarySoFile = null;  // arm64-v8a .so — used for SO integrity hash
 
         // Open a single trace log (overwritten per run, first ABI only to avoid confusion)
-        File traceLog = new File(Environment.getExternalStorageDirectory(), "Dex2c Mega/build_trace.log");
+        File traceLog = new File(Environment.getExternalStorageDirectory(), "Ultra Dex2C-VMP/build_trace.log");
         traceLog.getParentFile().mkdirs();
 
         for (int abiIdx = 0; abiIdx < targetAbis.size(); abiIdx++) {
@@ -186,7 +186,7 @@ public class ApkProtector {
             if (!buildResult.success || buildResult.soFile == null) {
                 android.util.Log.e("ApkProtector", "Compile FAILED [" + abi + "]:\n" + buildResult.error);
                 throw new Exception("Compilation failed [" + abi + "]:\n" + buildResult.error
-                        + "\n(full log → /sdcard/Dex2c Mega/build_trace.log)");
+                        + "\n(full log → /sdcard/Ultra Dex2C-VMP/build_trace.log)");
             }
             report(65, "[" + abi + "] Native library compiled (" + (abiSoFile.length() / 1024) + " KB)");
 
@@ -312,7 +312,7 @@ public class ApkProtector {
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private File buildOutputPath(boolean signOutput) {
-        File dir = new File(Environment.getExternalStorageDirectory(), "Dex2c Mega");
+        File dir = new File(Environment.getExternalStorageDirectory(), "Ultra Dex2C-VMP");
         dir.mkdirs();
         String ts = String.valueOf(System.currentTimeMillis());
         return new File(dir, "protected_" + ts + (signOutput ? "_unsigned.apk" : ".apk"));
@@ -595,7 +595,7 @@ public class ApkProtector {
             "No V1 signing certificate found in META-INF/.\n" +
             "The input APK must be signed BEFORE protection.\n" +
             "Sign it externally (e.g. apksigner / Android Studio), then protect.\n" +
-            "Do NOT use Dex2c Mega's built-in signer — sign first, then protect.\n" +
+            "Do NOT use Ultra Dex2C-VMP's built-in signer — sign first, then protect.\n" +
             "Or disable 'Signature Verification' in Settings to skip this check.");
     }
 

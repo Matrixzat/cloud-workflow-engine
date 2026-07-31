@@ -85,7 +85,7 @@ public class NdkDownloadService extends Service {
 
         NotificationCompat.Builder b = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.stat_sys_download)
-                .setContentTitle("Dex2c Mega · Compiler Download")
+                .setContentTitle("Ultra Dex2C-VMP · Compiler Download")
                 .setContentText(text)
                 .setContentIntent(pi)
                 .setOngoing(pct < 100)

@@ -145,7 +145,7 @@ public class NdkBuilder {
     //
     //  Phase 1 — parallel compile:  clang-21 -c file.cpp -o file.o   (all cores)
     //             + make-style incremental cache: skip .o if src is unchanged
-    //  Phase 2 — single link:       clang-21 -shared *.o -o libdex2c-mega.so
+    //  Phase 2 — single link:       clang-21 -shared *.o -o libultra-dex2cvmp.so
     //
     // The competitor uses ndk-build -j$(nproc) which uses make's timestamp cache.
     // We replicate that with our own mtime-based cache so unchanged files are

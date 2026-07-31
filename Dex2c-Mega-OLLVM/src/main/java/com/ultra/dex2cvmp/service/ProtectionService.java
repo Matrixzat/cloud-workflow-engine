@@ -158,7 +158,7 @@ public class ProtectionService extends Service {
     private Notification buildRunningNotification(String msg, int pct) {
         NotificationCompat.Builder b = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_lock_lock)
-                .setContentTitle("Dex2c Mega · Protecting")
+                .setContentTitle("Ultra Dex2C-VMP · Protecting")
                 .setContentText(msg)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
@@ -181,7 +181,7 @@ public class ProtectionService extends Service {
                 .setSmallIcon(success
                         ? android.R.drawable.ic_dialog_info
                         : android.R.drawable.ic_dialog_alert)
-                .setContentTitle(success ? "Dex2c Mega · Done ✓" : "Dex2c Mega · Failed ✗")
+                .setContentTitle(success ? "Ultra Dex2C-VMP · Done ✓" : "Ultra Dex2C-VMP · Failed ✗")
                 .setContentText(msg)
                 .setAutoCancel(true)           // user can swipe to dismiss
                 .setOngoing(false)             // NOT ongoing — fully dismissible

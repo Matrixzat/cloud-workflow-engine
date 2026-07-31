@@ -68,7 +68,7 @@
                     android:background="@drawable/bg_card_border"
                     android:paddingStart="14dp"
                     android:paddingEnd="14dp"
-                    android:text="dex2c-mega"
+                    android:text="ultra-dex2cvmp"
                     android:textColor="@color/text_primary"
                     android:textColorHint="@color/text_muted"
                     android:textSize="14sp"

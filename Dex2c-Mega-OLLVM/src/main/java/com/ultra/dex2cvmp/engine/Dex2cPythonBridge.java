@@ -72,7 +72,7 @@ public class Dex2cPythonBridge {
         File resultFile = new File(outputDir, RESULT_FILENAME);
 
         try {
-            if (cb != null) cb.onProgress("Extracting dex2c mega scripts…");
+            if (cb != null) cb.onProgress("Extracting Ultra Dex2C-VMP scripts…");
             File scriptsDir = ensureExtracted();
 
             outputDir.mkdirs();

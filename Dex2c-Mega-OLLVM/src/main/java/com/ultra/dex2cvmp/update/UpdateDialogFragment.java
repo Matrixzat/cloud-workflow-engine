@@ -161,7 +161,7 @@ public class UpdateDialogFragment extends DialogFragment {
 
         activeDm = (DownloadManager) ctx.getSystemService(Context.DOWNLOAD_SERVICE);
         DownloadManager.Request req = new DownloadManager.Request(Uri.parse(apkUrl));
-        req.setTitle("Dex2c Mega Update");
+        req.setTitle("Ultra Dex2C-VMP Update");
         req.setDescription("Downloading latest version…");
         req.setNotificationVisibility(
                 DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);

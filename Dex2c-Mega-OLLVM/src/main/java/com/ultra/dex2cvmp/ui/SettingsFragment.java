@@ -33,12 +33,12 @@ public class SettingsFragment extends Fragment {
      * like SRPatch, NP Manager PMS hook, and LSPatch cannot spoof the result.
      *
      * IMPORTANT: the input APK must already be signed BEFORE protection.
-     * Using Dex2c Mega's own built-in signer is NOT compatible with this check
+     * Using Ultra Dex2C-VMP's own built-in signer is NOT compatible with this check
      * because signing happens after protection — the cert won't match.
      */
     public static final String KEY_SIG_CHECK = "sig_check";
 
-    public static final String DEFAULT_LIBRARY_NAME = "dex2c-mega";
+    public static final String DEFAULT_LIBRARY_NAME = "ultra-dex2cvmp";
 
     private EditText etLibraryName;
     private CheckBox cbArm64, cbArmeabi, cbX86_64, cbX86;

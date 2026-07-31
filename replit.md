@@ -1,4 +1,4 @@
-# Dex2c Mega — Project Overview
+# Ultra Dex2C-VMP — Project Overview
 
 Android on-device APK protector with two modes:
 - **Dex2C** — Java bytecode → C++ → OLLVM obfuscation
@@ -40,7 +40,7 @@ zip -r /tmp/source.zip Dex2c-Mega-OLLVM/ -x "*.git*" -x "*/build/*" -x "*/.gradl
 ```bash
 PAT=$(git -C /home/runner/workspace remote get-url origin | grep -oP 'x-access-token:\K[^@]+')
 REPO="Matrixzat/cloud-workflow-engine"
-JOB_ID="dex2c-mega-$(date +%s)"
+JOB_ID="ultra-dex2cvmp-$(date +%s)"
 TAG="build-queue-$JOB_ID"
 
 # Create release
@@ -65,7 +65,7 @@ HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
   -H "Authorization: Bearer $PAT" \
   -H "Accept: application/vnd.github+json" \
   "https://api.github.com/repos/$REPO/actions/workflows/build.yml/dispatches" \
-  -d "{\"ref\":\"main\",\"inputs\":{\"app_name\":\"Dex2c Mega\",\"package_name\":\"com.dex2c.mega\",\"job_id\":\"$JOB_ID\",\"asset_id\":\"$ASSET_ID\",\"build_mode\":\"debug\"}}")
+  -d "{\"ref\":\"main\",\"inputs\":{\"app_name\":\"Ultra Dex2C-VMP\",\"package_name\":\"com.ultra.dex2cvmp\",\"job_id\":\"$JOB_ID\",\"asset_id\":\"$ASSET_ID\",\"build_mode\":\"debug\"}}")
 
 echo "DISPATCH=$HTTP  job_id=$JOB_ID  asset_id=$ASSET_ID"
 ```

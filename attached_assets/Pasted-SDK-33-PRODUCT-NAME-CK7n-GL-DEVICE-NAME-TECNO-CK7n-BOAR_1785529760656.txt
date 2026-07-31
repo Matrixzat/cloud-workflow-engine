@@ -1,0 +1,796 @@
+SDK: 33
+PRODUCT_NAME: CK7n-GL
+DEVICE_NAME: TECNO-CK7n
+BOARD_NAME: TECNO-CK7n
+SUPPORTED_ABIS: arm64-v8a, armeabi-v7a, armeabi
+MANUFACTURER: TECNO
+BRAND: TECNO
+MODEL: TECNO CK7n
+
+1785529569.251 13137 23096 23096 I m.munowatch.pro: Using generational CollectorTypeCMC GC.
+1785529569.282 13137 23096 23096 D nativeloader: Load libframework-connectivity-tiramisu-jni.so using APEX ns com_android_tethering for caller /apex/com.android.tethering/javalib/framework-connectivity-t.jar: ok
+1785529569.314 13137 23096 23096 D CompatibilityChangeReporter: Compat change id reported: 171979766; UID 13137; state: ENABLED
+1785529569.335 13137 23096 23096 D TranClassInfo: instance successfully. com.transsion.hubcore.graphics.TranGraphicImpl@9b7c592 from com.transsion.hubcore.graphics.ITranGraphic
+1785529569.336 13137 23096 23096 D os.SingleLiceFactory: instance successfully. com.transsion.typeface.v1.TypefaceLice@860431e from android.graphics.IGraphicLice
+1785529569.336 13137 23096 23096 D os.LiceInfo: instance successfully. com.transsion.graphics.GraphicLice@25dcb63 from android.graphics.IGraphicLice
+1785529569.356 13137 23096 23096 D nativeloader: Configuring clns-4 for other apk /system/framework/org.apache.http.legacy.jar. target_sdk_version=35, uses_libraries=ALL, library_path=/data/app/~~11ZxtIUsKIbuYvKJfszWog==/com.munowatch.pro-eCKtCOfhWruZqEYOxzh4mA==/lib/arm64:/data/app/~~11ZxtIUsKIbuYvKJfszWog==/com.munowatch.pro-eCKtCOfhWruZqEYOxzh4mA==/base.apk!/lib/arm64-v8a, permitted_path=/data:/mnt/expand:/data/user/0/com.munowatch.pro
+1785529569.356 13137 23096 23096 D nativeloader: Extending system_exposed_libraries: libapuwareapusys.mtk.so:libapuwareapusys_v2.mtk.so:libapuwarexrp.mtk.so:libapuwarexrp_v2.mtk.so:libapuwareutils.mtk.so:libapuwareutils_v2.mtk.so:libapuwarehmp.mtk.so:libmcv_runtime_usdk.mtk.so:libneuron_graph_delegate.mtk.so:libneuronusdk_adapter.mtk.so:libtflite_mtk.mtk.so:libarmnn_ndk.mtk.so:libcmdl_ndk.mtk.so:libnir_neon_driver_ndk.mtk.so:libmvpu_runtime.mtk.so:libmvpu_runtime_pub.mtk.so:libmvpu_engine_pub.mtk.so:libmvpu_pattern_pub.mtk.so:libmvpuop_mtk_cv.mtk.so:libmvpuop_mtk_nn.mtk.so:libteeservice_client.trustonic.so
+1785529569.408 13137 23096 23096 D nativeloader: Configuring clns-5 for other apk /data/app/~~11ZxtIUsKIbuYvKJfszWog==/com.munowatch.pro-eCKtCOfhWruZqEYOxzh4mA==/base.apk. target_sdk_version=35, uses_libraries=, library_path=/data/app/~~11ZxtIUsKIbuYvKJfszWog==/com.munowatch.pro-eCKtCOfhWruZqEYOxzh4mA==/lib/arm64:/data/app/~~11ZxtIUsKIbuYvKJfszWog==/com.munowatch.pro-eCKtCOfhWruZqEYOxzh4mA==/base.apk!/lib/arm64-v8a, permitted_path=/data:/mnt/expand:/data/user/0/com.munowatch.pro
+1785529569.428 13137 23096 23096 D nativeloader: Load libframework-connectivity-jni.so using APEX ns com_android_tethering for caller /apex/com.android.tethering/javalib/framework-connectivity.jar: ok
+1785529569.440 13137 23096 23096 V GraphicsEnvironment: ANGLE Developer option for 'com.munowatch.pro' set to: 'default'
+1785529569.440 13137 23096 23096 V GraphicsEnvironment: ANGLE GameManagerService for com.munowatch.pro: false
+1785529569.441 13137 23096 23096 V GraphicsEnvironment: Neither updatable production driver nor prerelease driver is supported.
+1785529569.445 13137 23096 23096 I LoadedApk: No resource references to update in package com.transsion.theme.icon
+1785529569.445 13137 23096 23096 D NetworkSecurityConfig: No Network Security Config specified, using platform default
+1785529569.446 13137 23096 23096 D NetworkSecurityConfig: No Network Security Config specified, using platform default
+1785529569.447 13137 23096 23096 D CompatibilityChangeReporter: Compat change id reported: 183155436; UID 13137; state: ENABLED
+1785529569.449 13137 23096 23096 D os.SingleLiceFactory: using android.app.IActivityThreadLice$DefaultImpl@18c94d5 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from android.app.IActivityThreadLice
+1785529569.485 13137 23096 23096 I FirebaseApp: Device unlocked: initializing all Firebase APIs for app [DEFAULT]
+1785529569.519 13137 23096 23096 I FirebaseInitProvider: FirebaseApp initialization successful
+1785529569.552 13137 23096 23096 W e6.s0   : You haven't set a value for AdvertiserIDCollectionEnabled. Set the flag to TRUE if you want to collect Advertiser ID for better advertising and analytics results. To request user consent before collecting data, set the flag value to FALSE, then change to TRUE once user consent is received. Learn more: https://developers.facebook.com/docs/app-events/getting-started-app-events-android#disable-auto-events.
+1785529569.598 13137 23096 23096 I MSYNC3-VariableRefreshRate: Variable refreshrate is disabled
+1785529569.623 13137 23096 24965 D nativeloader: Load libpowerhalwrap_jni.so using system ns (caller=/system/framework/mediatek-framework.jar): ok
+1785529569.626 13137 23096 24965 I PowerHalWrapper: PowerHalWrapper.getInstance
+1785529569.632 13137 23096 24978 D libMEOW : meow new tls: 0xb4000077d12b30b0
+1785529569.635 13137 23096 24978 D libMEOW : meow reload base cfg path: na
+1785529569.635 13137 23096 24978 D libMEOW : meow reload overlay cfg path: na
+1785529569.641 13137 23096 24933 W m.munowatch.pro: ClassLoaderContext classpath size mismatch. expected=1, found=0 (DLC[];PCL[base.apk*2571893439]{PCL[/system/framework/org.apache.http.legacy.jar*2290010995]#PCL[/system/framework/com.android.location.provider.jar*3868789109]#PCL[/system/framework/com.android.media.remotedisplay.jar*3886290638]} | DLC[];PCL[])
+1785529569.651 13137 23096 24978 I libMEOW_gift: open /data/performance/gift/arc.ini
+1785529569.651 13137 23096 24978 E QT      : [QT]file does not exist
+1785529569.651 13137 23096 24933 I DynamiteModule: Considering local module com.google.android.gms.measurement.dynamite:117 and remote module com.google.android.gms.measurement.dynamite:201
+1785529569.651 13137 23096 24933 I DynamiteModule: Selected remote version of com.google.android.gms.measurement.dynamite, version >= 201
+1785529569.652 13137 23096 24933 V DynamiteModule: Dynamite loader version >= 2, using loadModule2NoCrashUtils
+1785529569.655 13137 23096 23096 D TranClassInfo: instance successfully. com.transsion.hubcore.app.TranActivityImpl@be2d216 from com.transsion.hubcore.app.ITranActivity
+1785529569.655 13137 23096 23096 D TranActivityAppturboImpl: attach
+1785529569.656 13137 23096 24978 D libMEOW : applied 1 plugins for [com.munowatch.pro]:
+1785529569.656 13137 23096 24978 D libMEOW :   plugin 1: [libMEOW_gift.so]: 0xb400007791219030
+1785529569.657 13137 23096 24978 D libMEOW : rebuild call chain: 0xb4000077d1283080
+1785529569.657 13137 23096 24978 D libMEOW : meow delete tls: 0xb4000077d12b30b0
+1785529569.667 13137 23096 23096 D TranClassInfo: instance successfully. com.transsion.hubcore.appturbo.TranAppturboServiceImpl@568d96d from com.transsion.hubcore.appturbo.ITranAppturboService
+1785529569.667 13137 23096 23096 D TranAppturboServiceImpl: attach
+1785529569.667 13137 23096 23096 D TranAppturboPolicyImpl: TranAppturboPolicyImpl new
+1785529569.667 13137 23096 23096 D TranClassInfo: instance successfully. com.transsion.hubcore.appturbo.TranAppturboPolicyImpl@731f9a2 from com.transsion.hubcore.appturbo.ITranAppturboPolicy
+1785529569.668 13137 23096 23096 D AppTurboPolicyImpl-TranBaseWrapper: TranBaseWrapper new, VERSION: KS-2.0.01KSMOOTH_V20_SUPPORT: false
+1785529569.693 13137 23096 24949 W FeatureFlagsImplExport: java.lang.NoClassDefFoundError: Class not found using the boot class loader; no stack trace available
+1785529569.695 13137 23096 24933 W System  : ClassLoader referenced unknown path:
+1785529569.696 13137 23096 24933 D nativeloader: Configuring clns-6 for other apk . target_sdk_version=37, uses_libraries=, library_path=/data/app/~~DG8J3Uimryhe0dGSug9sdg==/com.google.android.gms--Edsv0yzOnVxbASd-kyUuA==/lib/arm64:/data/app/~~DG8J3Uimryhe0dGSug9sdg==/com.google.android.gms--Edsv0yzOnVxbASd-kyUuA==/base.apk!/lib/arm64-v8a, permitted_path=/data:/mnt/expand:/data/user/0/com.google.android.gms
+1785529570.085 13137 23096 24951 E e6.m0   : {HttpStatus: 400, errorCode: 200, subErrorCode: -1, errorType: OAuthException, errorMessage: API access disrupted. Go to the App Dashboard and complete Data Use Checkup.}
+1785529570.085 13137 23096 24943 E e6.m0   : {HttpStatus: 400, errorCode: 200, subErrorCode: -1, errorType: OAuthException, errorMessage: API access disrupted. Go to the App Dashboard and complete Data Use Checkup.}
+1785529570.085 13137 23096 24954 E e6.m0   : {HttpStatus: 400, errorCode: 200, subErrorCode: -1, errorType: OAuthException, errorMessage: API access disrupted. Go to the App Dashboard and complete Data Use Checkup.}
+1785529570.598 13137 23096 24949 E e6.m0   : {HttpStatus: 400, errorCode: 200, subErrorCode: -1, errorType: OAuthException, errorMessage: API access disrupted. Go to the App Dashboard and complete Data Use Checkup.}
+1785529579.454 13137 23096 23096 D nativeloader: Load /data/app/~~11ZxtIUsKIbuYvKJfszWog==/com.munowatch.pro-eCKtCOfhWruZqEYOxzh4mA==/lib/arm64/libdex2c_mega.so using class loader ns clns-5 (caller=/data/app/~~11ZxtIUsKIbuYvKJfszWog==/com.munowatch.pro-eCKtCOfhWruZqEYOxzh4mA==/base.apk): ok
+1785529579.455 13137 23096 23096 D D2CMega : JNI_OnLoad: entry
+1785529579.455 13137 23096 23096 D D2CMega : JNI_OnLoad: GetEnv ok env=0xb400007681221230
+1785529579.455 13137 23096 23096 D D2CMega : JNI_OnLoad: capturing classloader
+1785529579.455 13137 23096 23096 D D2CMega : JNI_OnLoad: classloader captured 0x2e06
+1785529579.455 13137 23096 23096 D D2CMega : JNI_OnLoad: cacheInitial start
+1785529579.455 13137 23096 23096 D D2CMega : JNI_OnLoad: cacheInitial done
+1785529579.455 13137 23096 23096 D D2CMega : JNI_OnLoad: fonts_register_natives start
+1785529579.457 13137 23096 23096 D D2CMega : JNI_OnLoad: fonts_apply_metrics start
+1785529579.457 13137 23096 23096 D D2CMega : JNI_OnLoad: guard done
+1785529579.457 13137 23096 23096 D D2CMega : JNI_OnLoad: calling classes_setup
+1785529579.457 13137 23096 23096 D D2CMega : classes_setup: entry
+1785529579.457 13137 23096 23096 D D2CMega : classes_setup: resolver_init start
+1785529579.457 13137 23096 23096 D D2CMega : resolver_init: start fields=0 methods=360 strings=32
+1785529579.457 13137 23096 23096 D D2CMega : resolver_init: gFields empty, skip
+1785529579.457 13137 23096 23096 D D2CMega : resolver_init: done
+1785529579.457 13137 23096 23096 D D2CMega : classes_setup: resolver_init done
+1785529579.457 13137 23096 23096 D D2CMega : classes_setup: FindClass com/dex2c/mega/engine/vmp/NativeUtil
+1785529579.457 13137 23096 23096 D D2CMega : classes_setup: FindClass result 0x788b35d025
+1785529579.457 13137 23096 23096 D D2CMega : classes_setup: RegisterNatives(com/dex2c/mega/engine/vmp/NativeUtil) result=0
+1785529579.457 13137 23096 23096 D D2CMega : classes_setup: done
+1785529579.457 13137 23096 23096 D D2CMega : JNI_OnLoad: classes_setup done
+1785529579.457 13137 23096 23096 D D2CMega : JNI_OnLoad: calling classes2_setup
+1785529579.457 13137 23096 23096 D D2CMega : classes2_setup: entry
+1785529579.457 13137 23096 23096 D D2CMega : classes2_setup: resolver_init start
+1785529579.457 13137 23096 23096 D D2CMega : resolver_init: start fields=0 methods=0 strings=0
+1785529579.457 13137 23096 23096 D D2CMega : resolver_init: gFields empty, skip
+1785529579.457 13137 23096 23096 D D2CMega : resolver_init: gMethods empty, skip
+1785529579.457 13137 23096 23096 D D2CMega : resolver_init: gStringConstants empty, skip
+1785529579.457 13137 23096 23096 D D2CMega : resolver_init: done
+1785529579.457 13137 23096 23096 D D2CMega : classes2_setup: resolver_init done
+1785529579.457 13137 23096 23096 D D2CMega : classes2_setup: FindClass com/dex2c/mega/engine/vmp/NativeUtil
+1785529579.457 13137 23096 23096 D D2CMega : classes2_setup: FindClass result 0x788b35d025
+1785529579.457 13137 23096 23096 D D2CMega : classes2_setup: RegisterNatives(com/dex2c/mega/engine/vmp/NativeUtil) result=0
+1785529579.457 13137 23096 23096 D D2CMega : classes2_setup: done
+1785529579.457 13137 23096 23096 D D2CMega : JNI_OnLoad: classes2_setup done
+1785529579.457 13137 23096 23096 D D2CMega : JNI_OnLoad: complete, returning JNI_VERSION_1_6
+1785529579.458 13137 23096 23096 D D2CMega : VMP regNatives: class=com/munowatch/security/PinCheck count=3 idx=0
+1785529579.458 13137 23096 23096 D D2CMega : VMP regNatives: FindClass com/munowatch/security/PinCheck ok clazz=0x788b35d01d
+1785529579.458 13137 23096 23096 D D2CMega : VMP regNatives:   [0] hasPinMatch([Ljava/security/cert/X509Certificate;)Z
+1785529579.458 13137 23096 23096 D D2CMega : VMP regNatives:   [1] install()V
+1785529579.458 13137 23096 23096 D D2CMega : VMP regNatives:   [2] isHost([Ljava/security/cert/X509Certificate;)Z
+1785529579.458 13137 23096 23096 D D2CMega : VMP regNatives: RegisterNatives com/munowatch/security/PinCheck result=0
+1785529579.458 13137 23096 23096 D D2CMega : VMP >> com/munowatch/security/PinCheck.install
+1785529579.458 13137 23096 23096 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.install insns=0x7498f2fcc4 size=10
+1785529579.458 13137 23096 23096 D D2CMega : resolveClass[2]: Lcom/munowatch/security/PinCheck$2; (cache miss, FindClass)
+1785529579.458 13137 23096 23096 D D2CMega : resolveClass[2]: Lcom/munowatch/security/PinCheck$2; -> 0x788b35d01d
+1785529579.458 13137 23096 23096 D D2CMega : resolveMethod[1]: com/munowatch/security/PinCheck$2.<init>()V static=0
+1785529579.458 13137 23096 23096 D D2CMega : resolveMethod ok[1]: com/munowatch/security/PinCheck$2.<init> mid=0x7500065a30
+1785529579.458 13137 23096 23096 D D2CMega : resolveClass[2]: Lcom/munowatch/security/PinCheck$2; (cache miss, FindClass)
+1785529579.458 13137 23096 23096 D D2CMega : resolveClass[2]: Lcom/munowatch/security/PinCheck$2; -> 0x788b35d01d
+1785529579.458 13137 23096 23096 D D2CMega : resolveMethod[13]: javax/net/ssl/HttpsURLConnection.setDefaultHostnameVerifier(Ljavax/net/ssl/HostnameVerifier;)V static=1
+1785529579.458 13137 23096 23096 D D2CMega : resolveMethod ok[13]: javax/net/ssl/HttpsURLConnection.setDefaultHostnameVerifier mid=0x70765848
+1785529579.458 13137 23096 23096 D D2CMega : resolveClass[12]: Ljavax/net/ssl/HttpsURLConnection; (cache miss, FindClass)
+1785529579.458 13137 23096 23096 D D2CMega : resolveClass[12]: Ljavax/net/ssl/HttpsURLConnection; -> 0x788b35d01d
+1785529579.458 13137 23096 23096 D D2CMega : VMP << com/munowatch/security/PinCheck.install ex=0
+1785529579.483 13137 23096 23096 D TranClassInfo: instance successfully. com.transsion.hubcore.database.sqlite.TranSQLiteDatabaseImpl@fd53488 from com.transsion.hubcore.database.sqlite.ITranSQLiteDatabase
+1785529579.489 13137 23096 24933 W m.munowatch.pro: ClassLoaderContext classpath element checksum mismatch. expected=2571893439, found=4084934830 (DLC[];PCL[base.apk*2571893439]{PCL[/system/framework/org.apache.http.legacy.jar*2290010995]#PCL[/system/framework/com.android.location.provider.jar*3868789109]#PCL[/system/framework/com.android.media.remotedisplay.jar*3886290638]} | DLC[];PCL[/data/app/~~11ZxtIUsKIbuYvKJfszWog==/com.munowatch.pro-eCKtCOfhWruZqEYOxzh4mA==/base.apk*4084934830]{PCL[/system/framework/org.apache.http.legacy.jar*2290010995]})
+1785529579.520 13137 23096 24916 D ActivityThreadLice: received OSMessage 110001
+1785529579.521 13137 23096 24916 D ActivityThreadLice: send OSMessage 110001 to [-1]
+1785529579.523 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529579.523 13137 23096 24916 D OSServiceManager: update local os service os.activity from null to android.os.BinderProxy@74cb191
+1785529579.524 13137 23096 23096 D TranClassInfo: instance successfully. com.transsion.hubcore.view.TranViewImpl@e7f8f6 from com.transsion.hubcore.view.ITranView
+1785529579.531 13137 23096 23096 D os.SingleLice: instance successfully. com.transsion.dragdrop.v1.DragDropLice@5f9d5cd from com.transsion.dragdrop.DragDropLiceFactory
+1785529579.531 13137 23096 23096 D os.SingleLiceFactory: instance successfully. com.transsion.dragdrop.v1.DragDropLice@5f9d5cd from android.view.IViewLice
+1785529579.531 13137 23096 23096 D os.LiceInfo: instance successfully. com.transsion.view.ViewLice@412ae82 from android.view.IViewLice
+1785529579.540 13137 23096 23096 D TranClassInfo: instance successfully. com.transsion.hubcore.internal.TranInternalViewImpl@5db01c9 from com.transsion.hubcore.internal.ITranInternalView
+1785529579.544 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.freeform.FreeformLiceFactory  from com.android.internal.IInternalViewLice
+1785529579.545 13137 23096 23096 D os.SingleLice: instance successfully. com.transsion.whitenavigation.v1.WhiteNavigationLice@dc38bda from com.transsion.whitenavigation.WhiteNavigationLiceFactory
+1785529579.545 13137 23096 23096 D os.SingleLiceFactory: instance successfully. com.transsion.whitenavigation.v1.WhiteNavigationLice@dc38bda from com.android.internal.IInternalViewLice
+1785529579.545 13137 23096 23096 D os.SingleLice: instance successfully. com.transsion.screenshothelper.v1.ScreenShotHelperImplLice@57b280b from com.transsion.screenshothelper.ScreenShotHelperImplLiceFactory
+1785529579.545 13137 23096 23096 D os.SingleLiceFactory: instance successfully. com.transsion.screenshothelper.v1.ScreenShotHelperImplLice@57b280b from com.android.internal.IInternalViewLice
+1785529579.545 13137 23096 23096 D os.LiceInfo: instance successfully. com.transsion.internal.InternalViewLice@f2596e8 from com.android.internal.IInternalViewLice
+1785529579.546 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529579.546 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529579.546 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529579.546 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529579.546 13137 23096 23096 I WhiteNavigationLice: skip Modify naviBarColor, due to windowBackgroundColor is -16777169   /windowIsTranslucent:false
+1785529579.546 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529579.547 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529579.552 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529579.552 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529579.553 13137 23096 23096 D ActivityThread: ++ activityComponent:com.munowatch.pro/com.munowatch.lite.SplashScreen counts:1 ALEAK_CLEAR_SUPPORT:true
+1785529579.555 13137 23096 23096 I Choreographer: Skipped 596 frames!  The application may be doing too much work on its main thread.
+1785529579.555 13137 23096 23096 D TranClassInfo: instance successfully. com.transsion.hubcore.flingmanager.TranFlingManagerImpl@7313994 from com.transsion.hubcore.flingmanager.ITranFlingManager
+1785529579.555 13137 23096 23096 D TranClassInfo: instance successfully. com.transsion.hubcore.view.TranChoreographerImpl@bf8cc3d from com.transsion.hubcore.view.ITranChoreographer
+1785529579.556 13137 23096 23096 E TranChoreographerImpl: skippedFrames: 596
+1785529579.560 13137 23096 23096 D TranClassInfo: instance successfully. com.transsion.hubcore.appturbo.Implement.TranAppturboComponentImpl@b57bc32 from com.transsion.hubcore.appturbo.ITranAppturboComponent
+1785529579.593 13137 23096 25010 E m.munowatch.pro: No package ID 6a found for ID 0x6a0b0013.
+1785529579.597 13137 23096 25010 I FA      : App measurement initialized, version: 177005
+1785529579.600 13137 23096 25010 I FA      : To enable debug logging run: adb shell setprop log.tag.FA VERBOSE
+1785529579.601 13137 23096 25010 I FA      : To enable faster debug mode event logging run:
+1785529579.601 13137 23096 25010 I FA      :   adb shell setprop debug.firebase.analytics.app com.munowatch.pro
+1785529579.627 13137 23096 25017 D libMEOW : meow new tls: 0xb4000077d1293090
+1785529579.627 13137 23096 25017 D libMEOW : applied 1 plugins for [com.munowatch.pro]:
+1785529579.627 13137 23096 25017 D libMEOW :   plugin 1: [libMEOW_gift.so]: 0xb400007791219030
+1785529579.628 13137 23096 25017 D libMEOW : rebuild call chain: 0xb4000077d12e30e0
+1785529579.628 13137 23096 25017 D libMEOW : meow delete tls: 0xb4000077d1293090
+1785529579.639 13137 23096 23096 D AppCompatDelegate: Checking for metadata for AppLocalesMetadataHolderService : Service not found
+1785529579.650 13137 23096 23096 D TranActivityAppturboImpl: attach
+1785529579.650 13137 23096 23096 D TranAppturboServiceImpl: attach
+1785529579.689 13137 23096 23096 I WebViewFactory: Loading com.google.android.webview version 150.0.7871.181 (code 787118103)
+1785529579.702 13137 23096 23096 D ApplicationLoaders: Returning zygote-cached class loader: /system/framework/android.test.base.jar
+1785529579.708 13137 23096 23096 D nativeloader: Configuring clns-7 for other apk /data/app/~~BzXdGoamWh9dI54fLQInqQ==/com.google.android.webview-M1jCmzLzOl1-8mpi0IGc-A==/base.apk. target_sdk_version=36, uses_libraries=, library_path=/data/app/~~BzXdGoamWh9dI54fLQInqQ==/com.google.android.webview-M1jCmzLzOl1-8mpi0IGc-A==/lib/arm64:/data/app/~~BzXdGoamWh9dI54fLQInqQ==/com.google.android.webview-M1jCmzLzOl1-8mpi0IGc-A==/base.apk!/lib/arm64-v8a, permitted_path=/data:/mnt/expand
+1785529579.709 13137 23096 25010 I FA      : Tag Manager is not found and thus will not be used
+1785529579.771 13137 23096 23096 I cr_WVCFactoryProvider: version=150.0.7871.181 (787118103) minSdkVersion=29 multiprocess=true packageId=127 splits=<none>
+1785529579.777 13137 23096 23096 D nativeloader: Load /data/app/~~BzXdGoamWh9dI54fLQInqQ==/com.google.android.webview-M1jCmzLzOl1-8mpi0IGc-A==/base.apk!/lib/arm64-v8a/libwebviewchromium.so using class loader ns clns-7 (caller=/data/app/~~BzXdGoamWh9dI54fLQInqQ==/com.google.android.webview-M1jCmzLzOl1-8mpi0IGc-A==/base.apk): ok
+1785529579.783 13137 23096 23096 D nativeloader: Load /system/lib64/libwebviewchromium_plat_support.so using class loader ns clns-7 (caller=/data/app/~~BzXdGoamWh9dI54fLQInqQ==/com.google.android.webview-M1jCmzLzOl1-8mpi0IGc-A==/base.apk): ok
+1785529579.788 13137 23096 25026 I chromium: [0731/202619.786719:INFO:android_webview/browser/variations/variations_seed_loader.cc:67] Failed to open file for reading.: No such file or directory (2)
+1785529579.789 13137 23096 25026 I chromium: [0731/202619.788952:INFO:android_webview/browser/variations/variations_seed_loader.cc:67] Failed to open file for reading.: No such file or directory (2)
+1785529579.831 13137 23096 23096 I cr_LibraryLoader: Successfully loaded native library
+1785529579.835 13137 23096 23096 I cr_CachingUmaRecorder: Flushed 50 samples from 23 histograms, 0 samples were dropped.
+1785529579.839 13137 23096 23096 I cr_ChildProcLH: ScopedServiceBindingBatch.tryActivate: false
+1785529579.840 13137 23096 23096 I cr_CombinedPProvider: #registerProvider() provider:WV.wk@8dcbd11 isPolicyCacheEnabled:false policyProvidersSize:0
+1785529579.840 13137 23096 23096 I cr_PolicyProvider: #setManagerAndSource() 0
+1785529579.841 13137 23096 23096 I cr_DisplayManager: Is Display Topology available: false
+1785529579.842 13137 23096 25025 I cr_policy: registerReceiver succeeded after 2ms
+1785529579.867 13137 23096 23096 I cr_CombinedPProvider: #linkNativeInternal() 1
+1785529579.869 13137 23096 23096 I cr_AppResProvider: #getApplicationRestrictionsFromUserManager() Bundle[EMPTY_PARCEL]
+1785529579.869 13137 23096 23096 I cr_PolicyProvider: #notifySettingsAvailable() 0
+1785529579.869 13137 23096 23096 I cr_CombinedPProvider: #onSettingsAvailable() 0
+1785529579.869 13137 23096 23096 I cr_CombinedPProvider: #flushPolicies()
+1785529579.908 13137 23096 25004 D D2CMega : VMP >> com/munowatch/security/PinCheck.isHost
+1785529579.908 13137 23096 25004 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.isHost insns=0x7498f2fce8 size=32
+1785529579.908 13137 23096 25004 D D2CMega : resolveMethod[12]: java/security/cert/X509Certificate.getSubjectX500Principal()Ljavax/security/auth/x500/X500Principal; static=0
+1785529579.908 13137 23096 25004 D D2CMega : resolveMethod ok[12]: java/security/cert/X509Certificate.getSubjectX500Principal mid=0x70702c58
+1785529579.909 13137 23096 25004 D D2CMega : resolveMethod[14]: javax/security/auth/x500/X500Principal.getName()Ljava/lang/String; static=0
+1785529579.909 13137 23096 25004 D D2CMega : resolveMethod ok[14]: javax/security/auth/x500/X500Principal.getName mid=0x70767c80
+1785529579.909 13137 23096 25004 D D2CMega : resolveMethod[5]: java/lang/String.contains(Ljava/lang/CharSequence;)Z static=0
+1785529579.909 13137 23096 25004 D D2CMega : resolveMethod ok[5]: java/lang/String.contains mid=0x70c10998
+1785529579.909 13137 23096 25004 D D2CMega : resolveMethod[10]: java/security/cert/X509Certificate.getIssuerX500Principal()Ljavax/security/auth/x500/X500Principal; static=0
+1785529579.909 13137 23096 25004 D D2CMega : resolveMethod ok[10]: java/security/cert/X509Certificate.getIssuerX500Principal mid=0x70702ad8
+1785529579.909 13137 23096 25004 D D2CMega : VMP << com/munowatch/security/PinCheck.isHost ex=0
+1785529579.946 13137 23096 23096 W chromium: [WARNING:android_webview/browser/network_service/net_helpers.cc:137] HTTP Cache size is: 20971520
+1785529579.958 13137 23096 23096 D CompatibilityChangeReporter: Compat change id reported: 214741472; UID 13137; state: ENABLED
+1785529579.979 13137 23096 23096 D CompatibilityChangeReporter: Compat change id reported: 171228096; UID 13137; state: ENABLED
+1785529580.014 13137 23096 23096 D CompatibilityChangeReporter: Compat change id reported: 193247900; UID 13137; state: ENABLED
+1785529580.019 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.019 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.020 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.020 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.021 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.021 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.059 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.059 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.059 13137 23096 23096 I WhiteNavigationLice: skip Modify naviBarColor, due to windowBackgroundColor is -16777216   /windowIsTranslucent:false
+1785529580.064 13137 23096 23096 D CompatibilityChangeReporter: Compat change id reported: 210923482; UID 13137; state: ENABLED
+1785529580.066 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.066 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.077 13137 23096 25068 D libMEOW : meow new tls: 0xb4000077d12b30b0
+1785529580.077 13137 23096 25068 D libMEOW : applied 1 plugins for [com.munowatch.pro]:
+1785529580.077 13137 23096 25068 D libMEOW :   plugin 1: [libMEOW_gift.so]: 0xb400007791219030
+1785529580.078 13137 23096 25068 D libMEOW : rebuild call chain: 0xb4000077d12a30a0
+1785529580.079 13137 23096 25051 W cr_media: BLUETOOTH_CONNECT permission is missing.
+1785529580.080 13137 23096 25051 W cr_media: getBluetoothAdapter() requires BLUETOOTH permission
+1785529580.080 13137 23096 25051 W cr_media: registerBluetoothIntentsIfNeeded: Requires BLUETOOTH permission
+1785529580.107 13137 23096 25068 D vulkan  : searching for layers in '/data/app/~~11ZxtIUsKIbuYvKJfszWog==/com.munowatch.pro-eCKtCOfhWruZqEYOxzh4mA==/lib/arm64'
+1785529580.109 13137 23096 25068 D vulkan  : searching for layers in '/data/app/~~11ZxtIUsKIbuYvKJfszWog==/com.munowatch.pro-eCKtCOfhWruZqEYOxzh4mA==/base.apk!/lib/arm64-v8a'
+1785529580.110 13137 23096 25068 W libc    : Access denied finding property "vendor.debug.forcibly_enable_mtk_ray_tracing"
+1785529580.113 13137 23096 23096 I SurfaceFactory: [static] sSurfaceFactory = com.mediatek.view.impl.SurfaceFactoryImpl@d635ccd
+1785529580.113 13137 23096 23096 W libc    : Access denied finding property "ro.vendor.tgpa_resolution_tuner"
+1785529580.124 13137 23096 23096 W libc    : Access denied finding property "ro.vendor.scaler_version"
+1785529580.125 13137 23096 23096 W libc    : Access denied finding property "ro.vendor.scaler_version"
+1785529580.133 13137 23096 23096 D VRI[Dashboard]: hardware acceleration = true, forceHwAccelerated = false
+1785529580.135 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.135 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.135 13137 23096 23096 I config_debug: updateDecorCaptionStatus: {1.0 620mcc1mnc [en_US] ldltr sw360dp w360dp h724dp 480dpi nrml long widecg port finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 1080, 2400) mAppBounds=Rect(0, 108 - 1080, 2280) mMaxBounds=Rect(0, 0 - 1080, 2400) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mDisplayWindowingMode=fullscreen mMultiWindowMode=normal mMultiWindowId=0 mWindowResiable=6 mInLargeScreen=-1 mActivityType=standard mAlwaysOnTop=undefined mRotation=ROTATION_0 mDisplayUniqueId=0} s.1 fontWeightAdjustment=0} fromMultiWindow: false
+1785529580.175 13137 23096 23096 D libMEOW : meow new tls: 0xb4000077d12e30e0
+1785529580.175 13137 23096 23096 D libMEOW : applied 1 plugins for [com.munowatch.pro]:
+1785529580.175 13137 23096 23096 D libMEOW :   plugin 1: [libMEOW_gift.so]: 0xb400007791219030
+1785529580.175 13137 23096 23096 D libMEOW : rebuild call chain: 0xb4000077d12d30d0
+1785529580.176 13137 23096 23096 D InputTransport: Create ARC handle: 0xb4000075f127fcb0
+1785529580.304 13137 23096 23096 V MediaRouter: Selecting route: RouteInfo{ name=Phone, description=null, status=null, category=RouteCategory{ name=System types=ROUTE_TYPE_LIVE_AUDIO ROUTE_TYPE_LIVE_VIDEO  groupable=false }, supportedTypes=ROUTE_TYPE_LIVE_AUDIO ROUTE_TYPE_LIVE_VIDEO , presentationDisplay=null }
+1785529580.305 13137 23096 23096 I MediaRouter: Skip setBluetoothA2dpOn(): types=8388615, isPlaybackActive()=false, BT route=null
+1785529580.309 13137 23096 23096 I GlobalMediaRouter: Found default route: MediaRouter.RouteInfo{ uniqueId=DEFAULT_ROUTE, name=Phone, description=null, iconUri=null, enabled=true, isSystemRoute=true, connectionState=0, canDisconnect=false, playbackType=0, playbackStream=3, deviceType=0, volumeHandling=1, volume=8, volumeMax=15, presentationDisplayId=-1, extras=null, settingsIntent=null, providerPackageName=android }
+1785529580.309 13137 23096 23096 I GlobalMediaRouter: Unselecting the current route because it is no longer selectable: null
+1785529580.316 13137 23096 23096 I DynamiteModule: Considering local module com.google.android.gms.cast.framework.dynamite:0 and remote module com.google.android.gms.cast.framework.dynamite:262833001
+1785529580.316 13137 23096 23096 I DynamiteModule: Selected remote version of com.google.android.gms.cast.framework.dynamite, version >= 262833001
+1785529580.316 13137 23096 23096 V DynamiteModule: Dynamite loader version >= 2, using loadModule2NoCrashUtils
+1785529580.338 13137 23096 23096 W m.munowatch.pro: ClassLoaderContext classpath element checksum mismatch. expected=2571893439, found=4084934830 (DLC[];PCL[base.apk*2571893439]{PCL[/system/framework/org.apache.http.legacy.jar*2290010995]#PCL[/system/framework/com.android.location.provider.jar*3868789109]#PCL[/system/framework/com.android.media.remotedisplay.jar*3886290638]} | DLC[];PCL[/data/app/~~11ZxtIUsKIbuYvKJfszWog==/com.munowatch.pro-eCKtCOfhWruZqEYOxzh4mA==/base.apk*4084934830]{PCL[/system/framework/org.apache.http.legacy.jar*2290010995]})
+1785529580.345 13137 23096 23096 I CastDynamiteModuleImpl: ss created by ClassLoader dalvik.system.DelegateLastClassLoader[DexPathList[[zip file "/data/app/~~DG8J3Uimryhe0dGSug9sdg==/com.google.android.gms--Edsv0yzOnVxbASd-kyUuA==/split_DynamiteModulesC_installtime.apk"],nativeLibraryDirectories=[/data/app/~~DG8J3Uimryhe0dGSug9sdg==/com.google.android.gms--Edsv0yzOnVxbASd-kyUuA==/split_DynamiteModulesC_installtime.apk!/lib/arm64-v8a, /system/lib64, /system_ext/lib64]]].
+1785529580.386 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.386 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.447 13137 23096 23096 D ActivityThread: ++ activityComponent:com.munowatch.pro/com.munowatch.lite.Dashboard counts:1 ALEAK_CLEAR_SUPPORT:true
+1785529580.459 13137 23096 23096 I AppVisibilityProxy: onAppEnteredForeground
+1785529580.488 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529580.488 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529580.496 13137 23096 25099 D D2CMega : VMP >> com/munowatch/security/PinCheck.isHost
+1785529580.496 13137 23096 25099 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.isHost insns=0x7498f2fce8 size=32
+1785529580.496 13137 23096 25099 D D2CMega : VMP << com/munowatch/security/PinCheck.isHost ex=0
+1785529580.497 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529580.498 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529580.517 13137 23096 23096 D TranClassInfo: instance successfully. com.transsion.hubcore.widget.TranOverScrollerImpl@620d9d9 from com.transsion.hubcore.widget.ITranOverScroller
+1785529580.518 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529580.524 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.524 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.525 13137 23096 23096 D TranActivityAppturboImpl: onResumeHork
+1785529580.525 13137 23096 23096 D TranAppturboServiceImpl: onResumeHork
+1785529580.534 13137 23096 23096 D VRI[Dashboard]: hardware acceleration = true, forceHwAccelerated = false
+1785529580.534 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.534 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.534 13137 23096 23096 I config_debug: updateDecorCaptionStatus: {1.0 620mcc1mnc [en_US] ldltr sw360dp w360dp h724dp 480dpi nrml long widecg port finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 1080, 2400) mAppBounds=Rect(0, 108 - 1080, 2280) mMaxBounds=Rect(0, 0 - 1080, 2400) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mDisplayWindowingMode=fullscreen mMultiWindowMode=normal mMultiWindowId=0 mWindowResiable=6 mInLargeScreen=-1 mActivityType=standard mAlwaysOnTop=undefined mRotation=ROTATION_0 mDisplayUniqueId=0} s.1 fontWeightAdjustment=0} fromMultiWindow: false
+1785529580.544 13137 23096 23096 D InputTransport: Create ARC handle: 0xb4000075f1289880
+1785529580.565 13137 23096 23096 I cr_AppResProvider: #getApplicationRestrictionsFromUserManager() Bundle[EMPTY_PARCEL]
+1785529580.565 13137 23096 23096 I cr_PolicyProvider: #notifySettingsAvailable() 0
+1785529580.565 13137 23096 23096 I cr_CombinedPProvider: #onSettingsAvailable() 0
+1785529580.565 13137 23096 23096 I cr_CombinedPProvider: #flushPolicies()
+1785529580.589 13137 23096 25122 I CameraManagerGlobal: Connecting to camera service
+1785529580.598 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.598 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.617 13137 23096 23096 D BufferQueueConsumer: [](id:5a3800000000,api:0,p:-1,c:23096) connect: controlledByApp=false
+1785529580.620 13137 23096 23096 E FBI     : Can't load library: dlopen failed: library "libmagtsync.so" not found
+1785529580.621 13137 23096 23096 I config_debug: updateDecorCaptionStatus: {1.0 620mcc1mnc [en_US] ldltr sw360dp w360dp h724dp 480dpi nrml long widecg port finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 1080, 2400) mAppBounds=Rect(0, 108 - 1080, 2280) mMaxBounds=Rect(0, 0 - 1080, 2400) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mDisplayWindowingMode=fullscreen mMultiWindowMode=normal mMultiWindowId=0 mWindowResiable=6 mInLargeScreen=-1 mActivityType=standard mAlwaysOnTop=undefined mRotation=ROTATION_0 mDisplayUniqueId=0} s.1 fontWeightAdjustment=0} fromMultiWindow: true
+1785529580.623 13137 23096 24974 D libMEOW : meow new tls: 0xb4000077d1333130
+1785529580.623 13137 23096 24974 D libMEOW : applied 1 plugins for [com.munowatch.pro]:
+1785529580.623 13137 23096 24974 D libMEOW :   plugin 1: [libMEOW_gift.so]: 0xb400007791219030
+1785529580.624 13137 23096 24974 D libMEOW : rebuild call chain: 0xb4000077d1313110
+1785529580.637 13137 23096 25122 D TranClassInfo: instance successfully. com.transsion.hubcore.camadapter.Implement.TranCamAdapterComponentImpl@8510740 from com.transsion.hubcore.camadapter.ITranCamAdapterComponent
+1785529580.637 13137 23096 25122 D TranClassInfo: instance successfully. com.transsion.hubcore.hardware.camera2.TranCameraManagerImpl@635c679 from com.transsion.hubcore.hardware.camera2.ITranCameraManager
+1785529580.637 13137 23096 25122 D TranCamManagerExtjh: ignore id:2
+1785529580.638 13137 23096 25122 D TranCamManagerExtjh: ignore id:3
+1785529580.640 13137 23096 24917 D TranCamManagerExtjh: id:2 ignore...
+1785529580.640 13137 23096 24917 D TranCamManagerExtjh: id:3 ignore...
+1785529580.653 13137 23096 25104 D D2CMega : VMP >> com/munowatch/security/PinCheck.isHost
+1785529580.653 13137 23096 25104 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.isHost insns=0x7498f2fce8 size=32
+1785529580.653 13137 23096 25104 D D2CMega : VMP << com/munowatch/security/PinCheck.isHost ex=0
+1785529580.653 13137 23096 25104 D D2CMega : VMP >> com/munowatch/security/PinCheck.hasPinMatch
+1785529580.653 13137 23096 25104 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.hasPinMatch insns=0x7498f2fae4 size=52
+1785529580.653 13137 23096 25104 D D2CMega : resolveMethod[8]: java/security/MessageDigest.getInstance(Ljava/lang/String;)Ljava/security/MessageDigest; static=1
+1785529580.653 13137 23096 25104 D D2CMega : resolveMethod ok[8]: java/security/MessageDigest.getInstance mid=0x706fcdc0
+1785529580.653 13137 23096 25104 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; (cache miss, FindClass)
+1785529580.653 13137 23096 25104 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; -> 0x788377bc05
+1785529580.653 13137 23096 25104 D D2CMega : resolveMethod[11]: java/security/cert/X509Certificate.getPublicKey()Ljava/security/PublicKey; static=0
+1785529580.653 13137 23096 25104 D D2CMega : resolveMethod ok[11]: java/security/cert/X509Certificate.getPublicKey mid=0x707006d8
+1785529580.653 13137 23096 25104 D D2CMega : resolveMethod[9]: java/security/PublicKey.getEncoded()[B static=0
+1785529580.653 13137 23096 25104 D D2CMega : resolveMethod ok[9]: java/security/PublicKey.getEncoded mid=0x706fb818
+1785529580.653 13137 23096 25104 D D2CMega : resolveMethod[7]: java/security/MessageDigest.digest([B)[B static=0
+1785529580.653 13137 23096 25104 D D2CMega : resolveMethod ok[7]: java/security/MessageDigest.digest mid=0x706fcd60
+1785529580.653 13137 23096 25104 D D2CMega : resolveMethod[0]: android/util/Base64.encodeToString([BI)Ljava/lang/String; static=1
+1785529580.653 13137 23096 25104 D D2CMega : resolveMethod ok[0]: android/util/Base64.encodeToString mid=0x70969830
+1785529580.653 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529580.653 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x788377bc0d
+1785529580.653 13137 23096 25104 D D2CMega : resolveMethod[6]: java/lang/String.equals(Ljava/lang/Object;)Z static=0
+1785529580.653 13137 23096 25104 D D2CMega : resolveMethod ok[6]: java/lang/String.equals mid=0x70c10af8
+1785529580.654 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529580.654 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x788377bc11
+1785529580.654 13137 23096 25104 D D2CMega : VMP << com/munowatch/security/PinCheck.hasPinMatch ex=0
+1785529580.660 13137 23096 24974 D skia    : GrGLMakeAssembledInterface verStr OpenGL ES 3.2 v1.r32p1-01eac0.394145956bc7cd8e697b330aba11e3d3
+1785529580.660 13137 23096 24974 D skia    : GrGLMakeAssembledGLESInterface verStr OpenGL ES 3.2 v1.r32p1-01eac0.394145956bc7cd8e697b330aba11e3d3
+1785529580.660 13137 23096 24974 D skia    : extensions init verString=OpenGL ES 3.2 v1.r32p1-01eac0.394145956bc7cd8e697b330aba11e3d3
+1785529580.667 13137 23096 25058 W AudioCapabilities: Unsupported mime audio/x-adpcm-dvi-ima
+1785529580.667 13137 23096 25058 W AudioCapabilities: Unsupported mime audio/x-adpcm-dvi-ima
+1785529580.669 13137 23096 25058 W AudioCapabilities: Unsupported mime audio/x-adpcm-ms
+1785529580.670 13137 23096 25058 W AudioCapabilities: Unsupported mime audio/x-adpcm-ms
+1785529580.671 13137 23096 25058 W AudioCapabilities: Unsupported mime audio/alac
+1785529580.671 13137 23096 25058 W AudioCapabilities: Unsupported mime audio/alac
+1785529580.671 13137 23096 25058 W AudioCapabilities: Unsupported mime audio/ape
+1785529580.672 13137 23096 25058 W AudioCapabilities: Unsupported mime audio/ape
+1785529580.696 13137 23096 25058 W VideoCapabilities: Unsupported mime image/vnd.android.heic
+1785529580.696 13137 23096 25058 W VideoCapabilities: Unsupported mime image/vnd.android.heic
+1785529580.696 13137 23096 25058 W VideoCapabilities: Unsupported mime image/vnd.android.heic
+1785529580.696 13137 23096 25058 W VideoCapabilities: Unsupported mime image/vnd.android.heic
+1785529580.697 13137 23096 25058 W VideoCapabilities: Unrecognized profile/level 32768/256 for video/mp4v-es
+1785529580.698 13137 23096 25058 W VideoCapabilities: Unrecognized profile/level 32768/256 for video/mp4v-es
+1785529580.717 13137 23096 24974 I mali    : [DebugProp] GPU Debug-Mechanism Disable !
+1785529580.746 13137 23096 24943 D D2CMega : VMP >> com/munowatch/security/PinCheck.isHost
+1785529580.746 13137 23096 24943 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.isHost insns=0x7498f2fce8 size=32
+1785529580.746 13137 23096 24943 D D2CMega : VMP << com/munowatch/security/PinCheck.isHost ex=0
+1785529580.904 13137 23096 24974 D BLASTBufferQueue: [VRI[Dashboard]#0](f:0,a:1) acquireNextBufferLocked size=1080x2292 mFrameNumber=1 applyTransaction=true mTimestamp=134013305182449(auto) mPendingTransactions.size=0 graphicBufferId=99196564668416 transform=0
+1785529580.908 13137 23096 24974 W Parcel  : Expecting binder but got null!
+1785529580.912 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.912 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.913 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529580.928 13137 23096 24918 I OpenGLRenderer: Davey! duration=792ms; Flags=1, FrameTimelineVsyncId=139432732, IntendedVsync=134012514208794, Vsync=134012983905154, InputEventId=0, HandleInputStart=134012993897449, AnimationStart=134012993901141, PerformTraversalsStart=134012995212295, DrawStart=134013075663372, FrameDeadline=134012534208794, FrameInterval=134012993892833, FrameStartTime=16774870, SyncQueued=134013077484295, SyncStart=134013077767910, IssueDrawCommandsStart=134013084807910, SwapBuffers=134013300597141, FrameCompleted=134013307299372, DequeueBufferDuration=12047693, QueueBufferDuration=567616, GpuCompleted=134013307299372, SwapBuffersCompleted=134013305928910, DisplayPresentTime=0, CommandSubmissionCompleted=134013300597141,
+1785529580.933 13137 23096 23096 D BufferQueueConsumer: [](id:5a3800000001,api:0,p:-1,c:23096) connect: controlledByApp=false
+1785529580.935 13137 23096 23096 I config_debug: updateDecorCaptionStatus: {1.0 620mcc1mnc [en_US] ldltr sw360dp w360dp h724dp 480dpi nrml long widecg port finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 1080, 2400) mAppBounds=Rect(0, 108 - 1080, 2280) mMaxBounds=Rect(0, 0 - 1080, 2400) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mDisplayWindowingMode=fullscreen mMultiWindowMode=normal mMultiWindowId=0 mWindowResiable=6 mInLargeScreen=-1 mActivityType=standard mAlwaysOnTop=undefined mRotation=ROTATION_0 mDisplayUniqueId=0} s.1 fontWeightAdjustment=0} fromMultiWindow: true
+1785529580.938 13137 23096 23096 W RecyclerView: No adapter attached; skipping layout
+1785529581.000 13137 23096 24943 E e6.m0   : {HttpStatus: 400, errorCode: 200, subErrorCode: -1, errorType: OAuthException, errorMessage: API access disrupted. Go to the App Dashboard and complete Data Use Checkup.}
+1785529581.070 13137 23096 25104 D HW_BIND : fetchChallenge URL=https://munowatch.vip.matrixxx-dev.com/api/attest/challenge
+1785529581.072 13137 23096 24951 D D2CMega : VMP >> com/munowatch/security/PinCheck.isHost
+1785529581.072 13137 23096 24951 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.isHost insns=0x7498f2fce8 size=32
+1785529581.072 13137 23096 24951 D D2CMega : VMP << com/munowatch/security/PinCheck.isHost ex=0
+1785529581.245 13137 23096 24974 D BLASTBufferQueue: [VRI[Dashboard]#1](f:0,a:1) acquireNextBufferLocked size=1080x2400 mFrameNumber=1 applyTransaction=true mTimestamp=134013646616526(auto) mPendingTransactions.size=0 graphicBufferId=99196564668429 transform=0
+1785529581.246 13137 23096 24974 W Parcel  : Expecting binder but got null!
+1785529581.264 13137 23096 24918 I OpenGLRenderer: Davey! duration=1136ms; Flags=1, FrameTimelineVsyncId=139432732, IntendedVsync=134012514208794, Vsync=134012983905154, InputEventId=0, HandleInputStart=134012993897449, AnimationStart=134012993901141, PerformTraversalsStart=134012995212295, DrawStart=134013382451372, FrameDeadline=134012534208794, FrameInterval=134012993892833, FrameStartTime=16774870, SyncQueued=134013404787679, SyncStart=134013404891295, IssueDrawCommandsStart=134013405188833, SwapBuffers=134013643691372, FrameCompleted=134013650975295, DequeueBufferDuration=17847, QueueBufferDuration=507077, GpuCompleted=134013650975295, SwapBuffersCompleted=134013647270141, DisplayPresentTime=0, CommandSubmissionCompleted=134013643691372,
+1785529581.269 13137 23096 23096 V MediaRouter: Selecting route: RouteInfo{ name=Phone, description=null, status=null, category=RouteCategory{ name=System types=ROUTE_TYPE_LIVE_AUDIO ROUTE_TYPE_LIVE_VIDEO  groupable=false }, supportedTypes=ROUTE_TYPE_LIVE_AUDIO ROUTE_TYPE_LIVE_VIDEO , presentationDisplay=null }
+1785529581.348 13137 23096 23096 I Choreographer: Skipped 44 frames!  The application may be doing too much work on its main thread.
+1785529581.348 13137 23096 23096 E TranChoreographerImpl: skippedFrames: 44
+1785529581.353 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529581.353 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529581.382 13137 23096 24918 I OpenGLRenderer: Davey! duration=766ms; Flags=0, FrameTimelineVsyncId=139432819, IntendedVsync=134013000692324, Vsync=134013738642240, InputEventId=0, HandleInputStart=134013750954141, AnimationStart=134013750975372, PerformTraversalsStart=134013754943679, DrawStart=134013759920218, FrameDeadline=134013037463913, FrameInterval=134013750349756, FrameStartTime=16771589, SyncQueued=134013761091603, SyncStart=134013761315295, IssueDrawCommandsStart=134013763044603, SwapBuffers=134013764589218, FrameCompleted=134013767139295, DequeueBufferDuration=21615, QueueBufferDuration=803692, GpuCompleted=134013767139295, SwapBuffersCompleted=134013766180218, DisplayPresentTime=0, CommandSubmissionCompleted=134013764589218,
+1785529581.386 13137 23096 23096 D ActivityThread: mToDestroying.remove:ActivityRecord{ad68ab2 token=android.os.BinderProxy@a355fc1 {com.munowatch.pro/com.munowatch.lite.SplashScreen}}
+1785529581.411 13137 23096 24918 I OpenGLRenderer: Davey! duration=780ms; Flags=0, FrameTimelineVsyncId=139432819, IntendedVsync=134013000692324, Vsync=134013738642240, InputEventId=0, HandleInputStart=134013750954141, AnimationStart=134013750975372, PerformTraversalsStart=134013754943679, DrawStart=134013766494679, FrameDeadline=134013037463913, FrameInterval=134013750349756, FrameStartTime=16771589, SyncQueued=134013766998449, SyncStart=134013767130756, IssueDrawCommandsStart=134013767287679, SwapBuffers=134013771322987, FrameCompleted=134013781203603, DequeueBufferDuration=18769, QueueBufferDuration=359153, GpuCompleted=134013781203603, SwapBuffersCompleted=134013778708603, DisplayPresentTime=0, CommandSubmissionCompleted=134013771322987,
+1785529581.417 13137 23096 23096 I MediaRouterProxy: Set up output switcher flags: true (from module), true (from CastOptions)
+1785529581.417 13137 23096 23096 I MediaRouterProxy: media transfer = false, session transfer = true, transfer to local = false, in-app output switcher = false
+1785529581.418 13137 23096 25104 D D2CMega : VMP >> com/munowatch/security/PinCheck.isHost
+1785529581.418 13137 23096 25104 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.isHost insns=0x7498f2fce8 size=32
+1785529581.419 13137 23096 25104 D D2CMega : VMP << com/munowatch/security/PinCheck.isHost ex=0
+1785529581.419 13137 23096 25104 D D2CMega : VMP >> com/munowatch/security/PinCheck.hasPinMatch
+1785529581.419 13137 23096 25104 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.hasPinMatch insns=0x7498f2fae4 size=52
+1785529581.419 13137 23096 25104 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; (cache miss, FindClass)
+1785529581.419 13137 23096 25104 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; -> 0x788377bc05
+1785529581.419 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529581.419 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x788377bc0d
+1785529581.419 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529581.419 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x788377bc11
+1785529581.419 13137 23096 25104 D D2CMega : VMP << com/munowatch/security/PinCheck.hasPinMatch ex=0
+1785529581.451 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529581.454 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529581.454 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529581.454 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529581.487 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529581.487 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529581.558 13137 23096 25152 D CompatibilityChangeReporter: Compat change id reported: 194532703; UID 13137; state: ENABLED
+1785529581.561 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529581.561 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529581.562 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529581.562 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529581.563 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529581.563 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529581.601 13137 23096 24938 W System  : Ignoring header If-None-Match because its value was null.
+1785529581.804 13137 23096 24938 D D2CMega : VMP >> com/munowatch/security/PinCheck.isHost
+1785529581.804 13137 23096 24938 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.isHost insns=0x7498f2fce8 size=32
+1785529581.805 13137 23096 24938 D D2CMega : VMP << com/munowatch/security/PinCheck.isHost ex=0
+1785529582.358 13137 23096 25104 D D2CMega : VMP >> com/munowatch/security/PinCheck.isHost
+1785529582.358 13137 23096 25104 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.isHost insns=0x7498f2fce8 size=32
+1785529582.358 13137 23096 25104 D D2CMega : VMP << com/munowatch/security/PinCheck.isHost ex=0
+1785529582.358 13137 23096 25104 D D2CMega : VMP >> com/munowatch/security/PinCheck.hasPinMatch
+1785529582.358 13137 23096 25104 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.hasPinMatch insns=0x7498f2fae4 size=52
+1785529582.358 13137 23096 25104 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; (cache miss, FindClass)
+1785529582.358 13137 23096 25104 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; -> 0x788377bc05
+1785529582.358 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529582.358 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x788377bc0d
+1785529582.358 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529582.359 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x788377bc11
+1785529582.359 13137 23096 25104 D D2CMega : VMP << com/munowatch/security/PinCheck.hasPinMatch ex=0
+1785529582.562 13137 23096 23096 D CompatibilityChangeReporter: Compat change id reported: 78294732; UID 13137; state: ENABLED
+1785529582.563 13137 23096 23096 D TranActivityAppturboImpl: onResumeHork
+1785529582.563 13137 23096 23096 D TranAppturboServiceImpl: onResumeHork
+1785529582.585 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529582.585 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529582.610 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529582.610 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529582.610 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529583.198 13137 23096 25104 D D2CMega : VMP >> com/munowatch/security/PinCheck.isHost
+1785529583.198 13137 23096 25104 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.isHost insns=0x7498f2fce8 size=32
+1785529583.198 13137 23096 25104 D D2CMega : VMP << com/munowatch/security/PinCheck.isHost ex=0
+1785529583.198 13137 23096 25104 D D2CMega : VMP >> com/munowatch/security/PinCheck.hasPinMatch
+1785529583.198 13137 23096 25104 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.hasPinMatch insns=0x7498f2fae4 size=52
+1785529583.198 13137 23096 25104 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; (cache miss, FindClass)
+1785529583.198 13137 23096 25104 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; -> 0x788377bc05
+1785529583.198 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529583.198 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x788377bc0d
+1785529583.198 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529583.198 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x788377bc11
+1785529583.198 13137 23096 25104 D D2CMega : VMP << com/munowatch/security/PinCheck.hasPinMatch ex=0
+1785529583.946 13137 23096 25104 D D2CMega : VMP >> com/munowatch/security/PinCheck.isHost
+1785529583.946 13137 23096 25104 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.isHost insns=0x7498f2fce8 size=32
+1785529583.946 13137 23096 25104 D D2CMega : VMP << com/munowatch/security/PinCheck.isHost ex=0
+1785529583.946 13137 23096 25104 D D2CMega : VMP >> com/munowatch/security/PinCheck.hasPinMatch
+1785529583.946 13137 23096 25104 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.hasPinMatch insns=0x7498f2fae4 size=52
+1785529583.946 13137 23096 25104 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; (cache miss, FindClass)
+1785529583.946 13137 23096 25104 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; -> 0x788377bc05
+1785529583.947 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529583.947 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x788377bc0d
+1785529583.947 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529583.947 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x788377bc11
+1785529583.947 13137 23096 25104 D D2CMega : VMP << com/munowatch/security/PinCheck.hasPinMatch ex=0
+1785529584.703 13137 23096 25180 D ProfileInstaller: Installing profile for com.munowatch.pro
+1785529584.757 13137 23096 25104 D D2CMega : VMP >> com/munowatch/security/PinCheck.isHost
+1785529584.757 13137 23096 25104 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.isHost insns=0x7498f2fce8 size=32
+1785529584.757 13137 23096 25104 D D2CMega : VMP << com/munowatch/security/PinCheck.isHost ex=0
+1785529584.757 13137 23096 25104 D D2CMega : VMP >> com/munowatch/security/PinCheck.hasPinMatch
+1785529584.757 13137 23096 25104 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.hasPinMatch insns=0x7498f2fae4 size=52
+1785529584.757 13137 23096 25104 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; (cache miss, FindClass)
+1785529584.757 13137 23096 25104 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; -> 0x788377bc05
+1785529584.757 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529584.757 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x788377bc0d
+1785529584.758 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529584.758 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x788377bc11
+1785529584.758 13137 23096 25104 D D2CMega : VMP << com/munowatch/security/PinCheck.hasPinMatch ex=0
+1785529586.025 13137 23096 25104 D D2CMega : VMP >> com/munowatch/security/PinCheck.isHost
+1785529586.025 13137 23096 25104 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.isHost insns=0x7498f2fce8 size=32
+1785529586.025 13137 23096 25104 D D2CMega : VMP << com/munowatch/security/PinCheck.isHost ex=0
+1785529586.025 13137 23096 25104 D D2CMega : VMP >> com/munowatch/security/PinCheck.hasPinMatch
+1785529586.025 13137 23096 25104 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.hasPinMatch insns=0x7498f2fae4 size=52
+1785529586.025 13137 23096 25104 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; (cache miss, FindClass)
+1785529586.025 13137 23096 25104 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; -> 0x788377bc05
+1785529586.025 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529586.025 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x788377bc0d
+1785529586.026 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529586.026 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x788377bc11
+1785529586.026 13137 23096 25104 D D2CMega : VMP << com/munowatch/security/PinCheck.hasPinMatch ex=0
+1785529586.683 13137 23096 25104 D D2CMega : VMP >> com/munowatch/security/PinCheck.isHost
+1785529586.683 13137 23096 25104 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.isHost insns=0x7498f2fce8 size=32
+1785529586.683 13137 23096 25104 D D2CMega : VMP << com/munowatch/security/PinCheck.isHost ex=0
+1785529586.683 13137 23096 25104 D D2CMega : VMP >> com/munowatch/security/PinCheck.hasPinMatch
+1785529586.683 13137 23096 25104 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.hasPinMatch insns=0x7498f2fae4 size=52
+1785529586.683 13137 23096 25104 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; (cache miss, FindClass)
+1785529586.683 13137 23096 25104 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; -> 0x788377bc05
+1785529586.683 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529586.683 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x788377bc0d
+1785529586.684 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529586.684 13137 23096 25104 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x788377bc11
+1785529586.684 13137 23096 25104 D D2CMega : VMP << com/munowatch/security/PinCheck.hasPinMatch ex=0
+1785529587.180 13137 23096 24974 E GPUAUX  : [AUX]GuiExtAuxCheckAuxPath:670: Null anb
+1785529587.181 13137 23096 24974 E GPUAUX  : [AUX]GuiExtAuxCheckAuxPath:670: Null anb
+1785529587.181 13137 23096 24974 E GPUAUX  : [AUX]GuiExtAuxCheckAuxPath:670: Null anb
+1785529587.181 13137 23096 24974 E GPUAUX  : [AUX]GuiExtAuxCheckAuxPath:670: Null anb
+1785529587.239 13137 23096 24974 E GPUAUX  : [AUX]GuiExtAuxCheckAuxPath:670: Null anb
+1785529587.240 13137 23096 24974 E GPUAUX  : [AUX]GuiExtAuxCheckAuxPath:670: Null anb
+1785529587.240 13137 23096 24974 E GPUAUX  : [AUX]GuiExtAuxCheckAuxPath:670: Null anb
+1785529587.242 13137 23096 24974 E GPUAUX  : [AUX]GuiExtAuxCheckAuxPath:670: Null anb
+1785529587.651 13137 23096 25117 D D2CMega : VMP >> com/munowatch/security/PinCheck.hasPinMatch
+1785529587.651 13137 23096 25117 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.hasPinMatch insns=0x7498f2fae4 size=52
+1785529587.651 13137 23096 25117 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; (cache miss, FindClass)
+1785529587.651 13137 23096 25117 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; -> 0x788370220d
+1785529587.651 13137 23096 25117 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529587.651 13137 23096 25117 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x7883702215
+1785529587.651 13137 23096 25117 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529587.651 13137 23096 25117 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x7883702219
+1785529587.651 13137 23096 25117 D D2CMega : VMP << com/munowatch/security/PinCheck.hasPinMatch ex=0
+1785529587.667 13137 23096 25120 D D2CMega : VMP >> com/munowatch/security/PinCheck.hasPinMatch
+1785529587.667 13137 23096 25120 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.hasPinMatch insns=0x7498f2fae4 size=52
+1785529587.667 13137 23096 25120 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; (cache miss, FindClass)
+1785529587.667 13137 23096 25120 D D2CMega : resolveClass[8]: Ljava/security/MessageDigest; -> 0x788370260d
+1785529587.667 13137 23096 25120 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529587.667 13137 23096 25120 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x7883702615
+1785529587.667 13137 23096 25120 D D2CMega : resolveClass[1]: Landroid/util/Base64; (cache miss, FindClass)
+1785529587.667 13137 23096 25120 D D2CMega : resolveClass[1]: Landroid/util/Base64; -> 0x7883702619
+1785529587.667 13137 23096 25120 D D2CMega : VMP << com/munowatch/security/PinCheck.hasPinMatch ex=0
+1785529588.929 13137 23096 23096 W Glide   : Failed to find GeneratedAppGlideModule. You should include an annotationProcessor compile dependency on com.github.bumptech.glide:compiler in your application and a @GlideModule annotated AppGlideModule implementation or LibraryGlideModules will be silently ignored
+1785529588.951 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529588.951 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529588.952 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529588.974 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529588.974 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529588.974 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529588.991 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529588.991 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529588.992 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529589.008 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.008 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.009 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529589.024 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.024 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.025 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529589.031 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.031 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.031 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529589.047 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.047 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.048 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529589.064 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.064 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.065 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529589.080 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.080 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.081 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529589.096 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.097 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.097 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529589.115 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.115 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.116 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529589.134 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.134 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.134 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529589.150 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.150 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529589.151 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529589.405 13137 23096 25218 D D2CMega : VMP >> com/munowatch/security/PinCheck.isHost
+1785529589.405 13137 23096 25218 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.isHost insns=0x7498f2fce8 size=32
+1785529589.405 13137 23096 25206 D D2CMega : VMP >> com/munowatch/security/PinCheck.isHost
+1785529589.405 13137 23096 25206 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.isHost insns=0x7498f2fce8 size=32
+1785529589.405 13137 23096 25206 D D2CMega : VMP << com/munowatch/security/PinCheck.isHost ex=0
+1785529589.405 13137 23096 25218 D D2CMega : VMP << com/munowatch/security/PinCheck.isHost ex=0
+1785529589.408 13137 23096 25210 D D2CMega : VMP >> com/munowatch/security/PinCheck.isHost
+1785529589.408 13137 23096 25210 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.isHost insns=0x7498f2fce8 size=32
+1785529589.408 13137 23096 25210 D D2CMega : VMP << com/munowatch/security/PinCheck.isHost ex=0
+1785529591.321 13137 23096 25206 D skia    : SkJpegCodec::onGetPixels +
+1785529591.380 13137 23096 23096 D View    : [Warning] assignParent to null: this = DecorView@8ad8736[Dashboard]
+1785529591.381 13137 23096 23096 D BLASTBufferQueue: [VRI[Dashboard]#0](f:0,a:4) destructor()
+1785529591.381 13137 23096 23096 D BufferQueueConsumer: [VRI[Dashboard]#0(BLAST Consumer)0](id:5a3800000000,api:0,p:-1,c:23096) disconnect
+1785529591.410 13137 23096 25206 D skia    : SkJpegCodec::onGetPixels -
+1785529591.435 13137 23096 23096 D InputTransport: Destroy ARC handle: 0xb4000075f127fcb0
+1785529591.482 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529591.482 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529591.482 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529591.482 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529591.504 13137 23096 25214 D D2CMega : VMP >> com/munowatch/security/PinCheck.isHost
+1785529591.504 13137 23096 25214 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.isHost insns=0x7498f2fce8 size=32
+1785529591.504 13137 23096 25214 D D2CMega : VMP << com/munowatch/security/PinCheck.isHost ex=0
+1785529592.251 13137 23096 25206 D D2CMega : VMP >> com/munowatch/security/PinCheck.isHost
+1785529592.251 13137 23096 25206 D D2CMega : VMP vmInterp com/munowatch/security/PinCheck.isHost insns=0x7498f2fce8 size=32
+1785529592.251 13137 23096 25206 D D2CMega : VMP << com/munowatch/security/PinCheck.isHost ex=0
+1785529592.803 13137 23096 23096 D os.LiceInfo: instance successfully. com.transsion.message.bank.v1.MessageBankLice@aad3ac from com.transsion.message.bank.IMessageBankLice
+1785529592.814 13137 23096 23096 D TranClassInfo: instance successfully. com.transsion.hubcore.internal.policy.TranDecorViewImpl@b404957 from com.transsion.hubcore.internal.policy.ITranDecorView
+1785529592.894 13137 23096 23096 W OnBackInvokedCallback: OnBackInvokedCallback is not enabled for the application.
+1785529592.894 13137 23096 23096 W OnBackInvokedCallback: Set 'android:enableOnBackInvokedCallback="true"' in the application manifest.
+1785529593.064 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.064 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.121 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.121 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.133 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529593.134 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529593.134 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529593.134 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529593.135 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529593.184 13137 23096 23096 I DynamiteModule: Considering local module com.google.android.gms.cronet_dynamite:0 and remote module com.google.android.gms.cronet_dynamite:4911
+1785529593.184 13137 23096 23096 I DynamiteModule: Selected remote version of com.google.android.gms.cronet_dynamite, version >= 4911
+1785529593.184 13137 23096 23096 V DynamiteModule: Dynamite loader version >= 2, using loadModule2NoCrashUtils
+1785529593.214 13137 23096 23096 W m.munowatch.pro: ClassLoaderContext classpath element checksum mismatch. expected=2571893439, found=4084934830 (DLC[];PCL[base.apk*2571893439]{PCL[/system/framework/org.apache.http.legacy.jar*2290010995]#PCL[/system/framework/com.android.location.provider.jar*3868789109]#PCL[/system/framework/com.android.media.remotedisplay.jar*3886290638]} | DLC[];PCL[/data/app/~~11ZxtIUsKIbuYvKJfszWog==/com.munowatch.pro-eCKtCOfhWruZqEYOxzh4mA==/base.apk*4084934830]{PCL[/system/framework/org.apache.http.legacy.jar*2290010995]})
+1785529593.225 13137 23096 25238 E SimpleCache: Failed to create cache directory: /storage/emulated/0/Munowatch
+1785529593.241 13137 23096 23096 D nativeloader: Configuring clns-8 for other apk . target_sdk_version=35, uses_libraries=ALL, library_path=/data/app/~~DG8J3Uimryhe0dGSug9sdg==/com.google.android.gms--Edsv0yzOnVxbASd-kyUuA==/split_CronetDynamite_installtime.apk!/lib/arm64-v8a, permitted_path=/data:/mnt/expand
+1785529593.241 13137 23096 23096 D nativeloader: Extending system_exposed_libraries: libapuwareapusys.mtk.so:libapuwareapusys_v2.mtk.so:libapuwarexrp.mtk.so:libapuwarexrp_v2.mtk.so:libapuwareutils.mtk.so:libapuwareutils_v2.mtk.so:libapuwarehmp.mtk.so:libmcv_runtime_usdk.mtk.so:libneuron_graph_delegate.mtk.so:libneuronusdk_adapter.mtk.so:libtflite_mtk.mtk.so:libarmnn_ndk.mtk.so:libcmdl_ndk.mtk.so:libnir_neon_driver_ndk.mtk.so:libmvpu_runtime.mtk.so:libmvpu_runtime_pub.mtk.so:libmvpu_engine_pub.mtk.so:libmvpu_pattern_pub.mtk.so:libmvpuop_mtk_cv.mtk.so:libmvpuop_mtk_nn.mtk.so:libteeservice_client.trustonic.so
+1785529593.245 13137 23096 23096 D nativeloader: Load /data/app/~~DG8J3Uimryhe0dGSug9sdg==/com.google.android.gms--Edsv0yzOnVxbASd-kyUuA==/split_CronetDynamite_installtime.apk!/lib/arm64-v8a/libcronet.150.0.7871.114.so using isolated ns clns-8 (caller=/data/app/~~DG8J3Uimryhe0dGSug9sdg==/com.google.android.gms--Edsv0yzOnVxbASd-kyUuA==/split_CronetDynamite_installtime.apk!classes2.dex): ok
+1785529593.260 13137 23096 25239 I cn_HttpFlagsLoader: HTTP flags log line (Impl): Using live production flag values from Google
+1785529593.271 13137 23096 23096 I cn_CronetLibraryLoader: Cronet version: 150.0.7871.114, arch: aarch64
+1785529593.273 13137 23096 23096 D CronetUtil: CronetEngine built using Google-Play-Services-Cronet-Provider
+1785529593.353 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529593.353 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529593.353 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529593.353 13137 23096 23096 D os.SingleLiceFactory: using com.android.internal.IInternalViewLice$DefaultImpl@888f185 instead of com.transsion.activityembedding.ActivityEmbeddingLiceFactory  from com.android.internal.IInternalViewLice
+1785529593.814 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.815 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.815 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529593.834 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.834 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.834 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529593.852 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.852 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.852 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529593.879 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.879 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.879 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529593.900 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.900 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.901 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529593.910 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.910 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.911 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529593.931 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.931 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.932 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529593.953 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.953 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.954 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529593.972 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.972 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.972 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529593.990 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.990 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529593.991 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529594.008 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529594.008 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529594.008 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529594.027 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529594.027 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529594.028 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529594.042 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529594.042 13137 23096 23096 W libc    : Access denied finding property "vendor.transsion.scroll_adjust.support"
+1785529594.042 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529594.114 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529594.115 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529594.116 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529594.116 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529594.116 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529594.117 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529594.117 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529594.118 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529594.118 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529594.119 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529594.119 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529594.120 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529594.120 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529594.120 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529594.188 13137 23096 24911 I m.munowatch.pro: Background concurrent mark compact GC freed 10MB AllocSpace bytes, 80(4960KB) LOS objects, 75% free, 11MB/46MB, paused 1.335ms,1.788ms total 105.119ms
+1785529595.443 13137 23096 23096 D TranClassInfo: instance successfully. com.transsion.hubcore.magellan.Implement.TranMagellanComponentImpl@4d78019 from com.transsion.hubcore.magellan.ITranMagellanComponent
+1785529595.443 13137 23096 23096 D TranFlingManagerImpl: getYVelocity origin-value = -14064.001 ksmooth-value = -14064.001 strengthVelocity = -14064.001 final velocity = -14064.001
+1785529595.443 13137 23096 23096 D TranFlingManagerImpl: getYVelocity origin-value = -14064.369 ksmooth-value = -14064.369 strengthVelocity = -14064.369 final velocity = -14064.369
+1785529595.443 13137 23096 23096 I ScrollIdentify: on fling
+1785529595.446 13137 23096 23096 I ScrollIdentify: update state to fling
+1785529595.446 13137 23096 23096 I ScrollIdentify: update state to finish
+1785529595.446 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 14051.435
+1785529595.446 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:14051.435
+1785529595.446 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.448 13137 23096 23096 D TranAppturboServiceImpl:  dont support slide jank stats.
+1785529595.462 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 14028.218
+1785529595.462 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:14028.218
+1785529595.462 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.481 13137 23096 23096 I ScrollIdentify: update state to fling
+1785529595.481 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 13952.516
+1785529595.481 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:13952.516
+1785529595.481 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.497 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 13838.863
+1785529595.497 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:13838.863
+1785529595.497 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.514 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 13838.863
+1785529595.514 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:13838.863
+1785529595.514 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.533 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 13689.6045
+1785529595.533 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:13689.6045
+1785529595.533 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.547 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 13526.895
+1785529595.547 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:13526.895
+1785529595.547 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.564 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 13313.466
+1785529595.564 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:13313.466
+1785529595.564 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.582 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 13090.075
+1785529595.582 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:13090.075
+1785529595.582 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.599 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 12822.347
+1785529595.599 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:12822.347
+1785529595.599 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.616 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 12587.098
+1785529595.616 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:12587.098
+1785529595.616 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.633 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 12292.225
+1785529595.633 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:12292.225
+1785529595.633 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.649 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 11996.502
+1785529595.649 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:11996.502
+1785529595.650 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.667 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 11700.412
+1785529595.667 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:11700.412
+1785529595.667 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.684 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 11388.304
+1785529595.685 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:11388.304
+1785529595.685 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.700 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 11078.377
+1785529595.700 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:11078.377
+1785529595.700 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.717 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 10755.92
+1785529595.717 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:10755.92
+1785529595.717 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.735 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 10467.414
+1785529595.735 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:10467.414
+1785529595.735 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.775 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 9843.084
+1785529595.776 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:9843.084
+1785529595.776 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.782 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 9525.38
+1785529595.782 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:9525.38
+1785529595.782 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.801 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 9253.325
+1785529595.801 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:9253.325
+1785529595.801 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.816 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 8947.023
+1785529595.816 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:8947.023
+1785529595.816 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.832 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 8648.116
+1785529595.832 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:8648.116
+1785529595.832 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.851 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 8391.454
+1785529595.851 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:8391.454
+1785529595.851 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.867 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 8116.0127
+1785529595.867 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:8116.0127
+1785529595.867 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.884 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 7846.9634
+1785529595.884 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:7846.9634
+1785529595.884 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.900 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 7605.261
+1785529595.900 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:7605.261
+1785529595.900 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.917 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 7347.4927
+1785529595.917 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:7347.4927
+1785529595.917 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.933 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 7105.872
+1785529595.933 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:7105.872
+1785529595.933 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.950 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 6879.1396
+1785529595.950 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:6879.1396
+1785529595.950 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.967 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 6656.909
+1785529595.968 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:6656.909
+1785529595.968 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529595.983 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 6430.4307
+1785529595.983 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:6430.4307
+1785529595.983 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529596.000 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 6217.8174
+1785529596.000 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:6217.8174
+1785529596.000 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529596.017 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 6018.095
+1785529596.017 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:6018.095
+1785529596.017 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529596.033 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 5821.9917
+1785529596.033 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:5821.9917
+1785529596.034 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529596.050 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 5614.6924
+1785529596.050 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:5614.6924
+1785529596.050 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529596.068 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 5614.6924
+1785529596.068 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:5614.6924
+1785529596.068 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529596.084 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 5441.9673
+1785529596.084 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:5441.9673
+1785529596.084 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529596.101 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 5257.5166
+1785529596.101 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:5257.5166
+1785529596.101 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529596.117 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 5090.3804
+1785529596.117 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:5090.3804
+1785529596.117 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529596.135 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 4912.9
+1785529596.135 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:4912.9
+1785529596.135 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529596.153 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 4752.2344
+1785529596.153 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:4752.2344
+1785529596.153 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529596.169 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 4593.3457
+1785529596.169 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:4593.3457
+1785529596.169 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529596.185 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 4443.277
+1785529596.185 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:4443.277
+1785529596.185 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529596.203 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 4290.0356
+1785529596.203 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:4290.0356
+1785529596.203 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529596.219 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 4149.9585
+1785529596.219 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:4149.9585
+1785529596.219 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529596.235 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 4011.601
+1785529596.235 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:4011.601
+1785529596.235 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529596.252 13137 23096 23096 D TranFlingManagerImpl: updateVelocity, scrollType = 1, currVelocity = 3870.3914
+1785529596.253 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity mFlingFlag currVelocity:3870.3914
+1785529596.253 13137 23096 23096 D TranFlingManagerImpl: updateCurrVelocity FLING_VELOCITY_START:
+1785529596.254 13137 23096 23096 I ScrollIdentify: update state to finish
+1785529596.255 13137 23096 23096 D TranFlingManagerImpl: onOverScrollerFinish()
+1785529596.255 13137 23096 23096 D TranAppturboServiceImpl:  dont support slide jank stats.
+1785529597.033 13137 23096 23096 D BLASTBufferQueue: [VRI[Dashboard]#1](f:0,a:4) destructor()
+1785529597.033 13137 23096 23096 D BufferQueueConsumer: [VRI[Dashboard]#1(BLAST Consumer)1](id:5a3800000001,api:0,p:-1,c:23096) disconnect
+1785529599.049 13137 23096 25010 I FA      : Application backgrounded at: timestamp_millis: 1785529597047

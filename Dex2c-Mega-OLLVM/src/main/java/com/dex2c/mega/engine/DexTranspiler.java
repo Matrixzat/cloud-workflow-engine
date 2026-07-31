@@ -294,12 +294,29 @@ public class DexTranspiler {
      */
     private ClassAndMethodFilter buildFilter(String filterText,
                                              ClassAnalyzer classAnalyzer) throws IOException {
-        // Auto-convert plain class names → SimpleRules format
+        // Auto-convert class names → SimpleRules format.
+        // Handles three formats that may arrive from the UI:
+        //   1. Dot notation    : "com.example.MyClass"         (class-list paste tab)
+        //   2. Smali descriptor: "Lcom/example/MyClass;"       (manual tree tab, whole class)
+        //   3. Method entry    : "Lcom/example/MyClass;->f()V" (manual tree tab, method level)
+        // For VMP, whole-class granularity is used ({ *; }) and method entries are skipped
+        // (BasicKeepConfig + SimpleRules decide which individual methods to convert).
         String rulesText = filterText;
         if (!filterText.contains("class ")) {
             StringBuilder sb = new StringBuilder();
             for (String line : filterText.split("\\r?\\n")) {
                 String cls = line.trim();
+                if (cls.isEmpty() || cls.startsWith("#")) continue;
+
+                // Skip method-level entries — VMP converts at class granularity
+                if (cls.contains("->")) continue;
+
+                // Normalise smali descriptor → dot notation so classNameToType() works
+                // "Lcom/example/MyClass;" → "com.example.MyClass"
+                if (cls.startsWith("L") && cls.endsWith(";")) {
+                    cls = cls.substring(1, cls.length() - 1).replace('/', '.');
+                }
+
                 if (!cls.isEmpty()) {
                     sb.append("class ").append(cls).append(" { *; }\n");
                 }

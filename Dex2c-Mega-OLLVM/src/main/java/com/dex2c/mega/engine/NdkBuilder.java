@@ -511,6 +511,8 @@ public class NdkBuilder {
             // Interp.cpp, DexCatch.cpp, GlobalCache.cpp, Exception.cpp,
             // InterpC-portable.cpp, JNIWrapper.c, ConstantPool.c implement
             // vmInterpret() + cacheInitial() called by classes_native_functions.c.
+            // Track which files are VM runtime sources so we can apply -DNDEBUG only to them.
+            final java.util.Set<File> vmSrcSet = new java.util.HashSet<>();
             if (isVmpJniInit && vmSrcDir != null && vmSrcDir.exists()) {
                 File[] vmSrcs = vmSrcDir.listFiles(f -> {
                     String n = f.getName();
@@ -520,8 +522,10 @@ public class NdkBuilder {
                     java.util.Arrays.sort(vmSrcs); // deterministic order
                     // Insert before generatedFiles (already in allSrc tail)
                     int insertAt = allSrc.size() - generatedFiles.size();
-                    for (int vi = 0; vi < vmSrcs.length; vi++)
+                    for (int vi = 0; vi < vmSrcs.length; vi++) {
                         allSrc.add(insertAt + vi, vmSrcs[vi]);
+                        vmSrcSet.add(vmSrcs[vi]);
+                    }
                 }
             }
 
@@ -764,6 +768,11 @@ public class NdkBuilder {
                     Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO);
 
                     List<String> cmd = new ArrayList<>(flags);
+                    // VM runtime sources are compiled with -DNDEBUG to suppress assert()
+                    // and conditional debug output inside the interpreter (matches NMMP release build).
+                    if (vmSrcSet.contains(src)) {
+                        cmd.add("-DNDEBUG");
+                    }
                     if (src.getName().endsWith(".cpp")) {
                         cmd.add("-std=c++17");
                     } else {

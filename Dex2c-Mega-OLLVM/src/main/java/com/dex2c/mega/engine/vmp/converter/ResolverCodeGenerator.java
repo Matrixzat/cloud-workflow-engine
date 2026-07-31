@@ -37,7 +37,11 @@ public class ResolverCodeGenerator {
         writer.write("#include \"GlobalCache.h\"\n");
         writer.write("#include \"ConstantPool.h\"\n");
         writer.write("#include \"vm.h\"\n\n");       // vmField, vmMethod types
-        writer.write("#include <pthread.h>\n\n\n");
+        writer.write("#include <pthread.h>\n");
+        writer.write("#include <android/log.h>\n\n");
+        writer.write("#ifndef VMLOG\n");
+        writer.write("#define VMLOG(fmt, ...) __android_log_print(ANDROID_LOG_DEBUG, \"D2CMega\", fmt, ##__VA_ARGS__)\n");
+        writer.write("#endif\n\n\n");
 
         generateStringPool(writer);
         generateTypePool(writer);
@@ -86,12 +90,15 @@ public class ResolverCodeGenerator {
 
     private void generateResolver(Writer writer) throws IOException {
         writer.write("static void resolver_init(JNIEnv *env) {\n" +
-                "    if(sizeof(gFields) == 0) return;\n" +
-                "    if(sizeof(gMethods) == 0) return;\n" +
-                "    if(sizeof(gStringConstants) == 0) return;\n" +
-                "    memset(gFields, 0, sizeof(gFields));\n" +
-                "    memset(gMethods, 0, sizeof(gMethods));\n" +
-                "    memset(gStringConstants, 0, sizeof(gStringConstants));\n" +
+                "    VMLOG(\"resolver_init: start fields=%zu methods=%zu strings=%zu\",\n" +
+                "          sizeof(gFields), sizeof(gMethods), sizeof(gStringConstants));\n" +
+                "    if(sizeof(gFields) == 0) { VMLOG(\"resolver_init: gFields empty, skip\"); }\n" +
+                "    if(sizeof(gMethods) == 0) { VMLOG(\"resolver_init: gMethods empty, skip\"); }\n" +
+                "    if(sizeof(gStringConstants) == 0) { VMLOG(\"resolver_init: gStringConstants empty, skip\"); }\n" +
+                "    if(sizeof(gFields) > 0) memset(gFields, 0, sizeof(gFields));\n" +
+                "    if(sizeof(gMethods) > 0) memset(gMethods, 0, sizeof(gMethods));\n" +
+                "    if(sizeof(gStringConstants) > 0) memset(gStringConstants, 0, sizeof(gStringConstants));\n" +
+                "    VMLOG(\"resolver_init: done\");\n" +
                 "}\n" +
                 "\n" +
                 "#define STRING_BY_ID(_idx) ((const char *) (gBaseStrPtr + gStringIds[_idx].off))\n" +
@@ -130,10 +137,12 @@ public class ResolverCodeGenerator {
                 "        FieldId fieldId = gFieldIds[idx];\n" +
                 "\n" +
                 "        jclass clazz;\n" +
-                "        FIND_CLASS_BY_NAME(STRING_BY_CLASS_ID(fieldId.classIdx));\n" +
+                "        const char *clsName = STRING_BY_CLASS_ID(fieldId.classIdx);\n" +
+                "        FIND_CLASS_BY_NAME(clsName);\n" +
                 "\n" +
                 "        const char *type = STRING_BY_TYPE_ID(fieldId.typeIdx);\n" +
                 "        const char *name = STRING_BY_ID(fieldId.nameIdx);\n" +
+                "        VMLOG(\"resolveField[%u]: %s.%s :%s static=%d\", (unsigned)idx, clsName, name, type, (int)isStatic);\n" +
                 "\n" +
                 "        field->classIdx = fieldId.classIdx;\n" +
                 "        field->type = (*type == '[') ? 'L' : *type;\n" +
@@ -146,6 +155,7 @@ public class ResolverCodeGenerator {
                 "            fid = (*env)->GetFieldID(env, clazz, name, type);\n" +
                 "        }\n" +
                 "        if (fid == NULL) {\n" +
+                "            VMLOG(\"resolveField FAILED[%u]: %s.%s :%s\", (unsigned)idx, clsName, name, type);\n" +
                 "            (*env)->DeleteLocalRef(env, clazz);\n" +
                 "\n" +
                 "            (*env)->ExceptionClear(env);\n" +
@@ -156,6 +166,7 @@ public class ResolverCodeGenerator {
                 "\n" +
                 "\n" +
                 "        field->fieldId = fid;\n" +
+                "        VMLOG(\"resolveField ok[%u]: %s.%s fid=%p\", (unsigned)idx, clsName, name, (void*)fid);\n" +
                 "\n" +
                 "    }\n" +
                 "    return field;\n" +
@@ -167,7 +178,8 @@ public class ResolverCodeGenerator {
                 "        MethodId methodId = gMethodIds[idx];\n" +
                 "\n" +
                 "        jclass clazz;\n" +
-                "        FIND_CLASS_BY_NAME(STRING_BY_CLASS_ID(methodId.classIdx));\n" +
+                "        const char *clsName = STRING_BY_CLASS_ID(methodId.classIdx);\n" +
+                "        FIND_CLASS_BY_NAME(clsName);\n" +
                 "\n" +
                 "        method->shorty = STRING_BY_ID(methodId.shortyIdx);\n" +
                 "\n" +
@@ -175,6 +187,7 @@ public class ResolverCodeGenerator {
                 "\n" +
                 "        const char *name = STRING_BY_ID(methodId.nameIdx);\n" +
                 "        const char *sig = STRING_BY_SIGNATURE_ID(methodId.sigIdx);\n" +
+                "        VMLOG(\"resolveMethod[%u]: %s.%s%s static=%d\", (unsigned)idx, clsName, name, sig, (int)isStatic);\n" +
                 "\n" +
                 "        jmethodID mid;\n" +
                 "        if (isStatic) {\n" +
@@ -183,6 +196,7 @@ public class ResolverCodeGenerator {
                 "            mid = (*env)->GetMethodID(env, clazz, name, sig);\n" +
                 "        }\n" +
                 "        if (mid == NULL) {\n" +
+                "            VMLOG(\"resolveMethod FAILED[%u]: %s.%s%s\", (unsigned)idx, clsName, name, sig);\n" +
                 "            (*env)->DeleteLocalRef(env, clazz);\n" +
                 "\n" +
                 "            (*env)->ExceptionClear(env);\n" +
@@ -195,6 +209,7 @@ public class ResolverCodeGenerator {
                 "        //todo 赋值需为原子操作\n" +
                 "\n" +
                 "        method->methodId = mid;\n" +
+                "        VMLOG(\"resolveMethod ok[%u]: %s.%s mid=%p\", (unsigned)idx, clsName, name, (void*)mid);\n" +
                 "\n" +
                 "    }\n" +
                 "    return method;\n" +
@@ -227,12 +242,15 @@ public class ResolverCodeGenerator {
                 "}\n" +
                 "\n" +
                 "static jclass dvmResolveClass(JNIEnv *env, u4 idx) {\n" +
-                "    jclass clazz = getCacheClass(env, STRING_BY_TYPE_ID(idx));\n" +
+                "    const char *typeName = STRING_BY_TYPE_ID(idx);\n" +
+                "    jclass clazz = getCacheClass(env, typeName);\n" +
                 "    if (clazz != NULL) {\n" +
                 "        return (jclass) (*env)->NewLocalRef(env, clazz);\n" +
                 "    }\n" +
+                "    VMLOG(\"resolveClass[%u]: %s (cache miss, FindClass)\", (unsigned)idx, typeName);\n" +
                 "\n" +
                 "    FIND_CLASS_BY_NAME(STRING_BY_CLASS_ID(idx));\n" +
+                "    VMLOG(\"resolveClass[%u]: %s -> %p\", (unsigned)idx, typeName, (void*)clazz);\n" +
                 "\n" +
                 "    return clazz;\n" +
                 "}\n\n");

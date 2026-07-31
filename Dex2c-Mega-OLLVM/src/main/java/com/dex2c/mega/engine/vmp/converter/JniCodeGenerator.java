@@ -151,6 +151,9 @@ public class JniCodeGenerator {
             writer.append(", ").append(params.toString());
         }
         writer.append(") {\n");
+        // ── Debug: log method entry ──
+        String logLabel = clazzName.replace("\"", "\\\"") + "." + methodName.replace("\"", "\\\"");
+        writer.append(String.format("    VMLOG(\"VMP >> %s\");\n", logLabel));
         writer.append(regsAssign);
         writer.append("\n");
 
@@ -206,6 +209,10 @@ public class JniCodeGenerator {
                 , dataLength / 2));
 
         final boolean hasReturnValue = !returnType.equals("V");
+        // ── Debug: log vmInterpret entry with insns address + size ──
+        writer.write(String.format(
+                "    VMLOG(\"VMP vmInterp %s insns=%%p size=%%d\", (void*)code.insns, code.insnsSize);\n",
+                logLabel));
         if (hasReturnValue) {
             writer.write("\n" +
                     "    volatile jvalue value = vmInterpret(env,\n" +
@@ -221,7 +228,10 @@ public class JniCodeGenerator {
                     "              &dvmResolver);\n"
             );
         }
-
+        // ── Debug: log vmInterpret exit ──
+        writer.write(String.format(
+                "    VMLOG(\"VMP << %s ex=%%d\", (*env)->ExceptionCheck(env));\n",
+                logLabel));
 
         //不使用栈需要释放内存
         if (!useStack) {
@@ -255,8 +265,13 @@ public class JniCodeGenerator {
                         "#include <string.h>\n" +
                         "#include <malloc.h>\n" +
                         "#include <jni.h>\n" +
+                        "#include <android/log.h>\n" +
                         "#include \"vm.h\"\n" +
                         "#include \"%s\"\n" +
+                        "\n" +
+                        "#ifndef VMLOG\n" +
+                        "#define VMLOG(fmt, ...) __android_log_print(ANDROID_LOG_DEBUG, \"D2CMega\", fmt, ##__VA_ARGS__)\n" +
+                        "#endif\n" +
                         "\n" +
                         "#ifdef __cplusplus\n" +
                         "extern \"C\" {\n" +
@@ -281,10 +296,17 @@ public class JniCodeGenerator {
 
         generateNativeMethodCode(config, codeWriter);
 
-        codeWriter.write(String.format("void %s(JNIEnv *env) {\n", config.getHeaderFileAndSetupFunc().setupFunctionName));
+        final String setupFuncName = config.getHeaderFileAndSetupFunc().setupFunctionName;
+        codeWriter.write(String.format("void %s(JNIEnv *env) {\n", setupFuncName));
+        codeWriter.write(String.format("    VMLOG(\"%s: entry\");\n", setupFuncName));
 
         codeWriter.write("\n    //符号解析器初始化\n");
-        codeWriter.write("    resolver_init(env);\n\n");
+        codeWriter.write(String.format("    VMLOG(\"%s: resolver_init start\");\n", setupFuncName));
+        codeWriter.write("    resolver_init(env);\n");
+        codeWriter.write(String.format(
+                "    if ((*env)->ExceptionCheck(env)) { VMLOG(\"%s: EXCEPTION after resolver_init\"); (*env)->ExceptionDescribe(env); (*env)->ExceptionClear(env); }\n",
+                setupFuncName));
+        codeWriter.write(String.format("    VMLOG(\"%s: resolver_init done\");\n\n", setupFuncName));
 
         if (isRegisterNative) {
             codeWriter.write("    //注册\n");
@@ -292,19 +314,30 @@ public class JniCodeGenerator {
             final String funName = MyMethodUtil.getJniFunctionName(config.getRegisterNativesClassName(),
                     config.getRegisterNativesMethodName(), Collections.singletonList("I"), "V");
             codeWriter.write(String.format(
-                    "    jclass clazz = (*env)->FindClass(env, \"%s\");\n" +
+                    "    VMLOG(\"%s: FindClass %s\");\n" +
+                            "    jclass clazz = (*env)->FindClass(env, \"%s\");\n" +
+                            "    VMLOG(\"%s: FindClass result %%p\", (void*)clazz);\n" +
+                            "    if (clazz == NULL) { VMLOG(\"%s: FAILED FindClass %s\"); if((*env)->ExceptionCheck(env)){(*env)->ExceptionDescribe(env);(*env)->ExceptionClear(env);} return; }\n" +
                             "    static const JNINativeMethod nativeMethod = {\n" +
                             "        .name=\"%s\",\n" +
                             "        .signature=\"(I)V\",\n" +
                             "        .fnPtr=%s\n" +
                             "    };\n" +
-                            "   (*env)->RegisterNatives(env, clazz, &nativeMethod, 1);\n" +
+                            "    jint regResult = (*env)->RegisterNatives(env, clazz, &nativeMethod, 1);\n" +
+                            "    VMLOG(\"%s: RegisterNatives(%s) result=%%d\", (int)regResult);\n" +
+                            "    if ((*env)->ExceptionCheck(env)) { VMLOG(\"%s: EXCEPTION after RegisterNatives\"); (*env)->ExceptionDescribe(env); (*env)->ExceptionClear(env); }\n" +
                             "\n" +
                             "   (*env)->DeleteLocalRef(env, clazz);\n" +
                             "\n"
-                    , config.getRegisterNativesClassName(),
-                    config.getRegisterNativesMethodName(), funName));
+                    , setupFuncName, config.getRegisterNativesClassName(),
+                    config.getRegisterNativesClassName(),
+                    setupFuncName,
+                    setupFuncName, config.getRegisterNativesClassName(),
+                    config.getRegisterNativesMethodName(), funName,
+                    setupFuncName, config.getRegisterNativesClassName(),
+                    setupFuncName));
         }
+        codeWriter.write(String.format("    VMLOG(\"%s: done\");\n", setupFuncName));
         codeWriter.write("}\n");
 
         codeWriter.write(
@@ -381,6 +414,8 @@ public class JniCodeGenerator {
                         "\n" +
                         "    JNINativeMethod *methods;\n" +
                         "    const NativeMethodData data = gNativeRegisterData[(u4) dataIdx];\n" +
+                        "    const char *clsName = STRING_BY_CLASS_ID(data.classIdx);\n" +
+                        "    VMLOG(\"VMP regNatives: class=%%s count=%%d idx=%%d\", clsName, data.count, (int)dataIdx);\n" +
                         "    if (data.count > MAX_METHOD) {\n" +
                         "        methods = (JNINativeMethod *) malloc(sizeof(JNINativeMethod) * data.count);\n" +
                         "    } else {\n" +
@@ -388,10 +423,14 @@ public class JniCodeGenerator {
                         "        methods = methodBuf;\n" +
                         "    }\n" +
                         "\n" +
-                        "    jclass clazz = (*env)->FindClass(env, STRING_BY_CLASS_ID(data.classIdx));\n" +
+                        "    jclass clazz = (*env)->FindClass(env, clsName);\n" +
                         "    if (clazz == NULL) {\n" +
+                        "        VMLOG(\"VMP regNatives: FAILED FindClass %%s\", clsName);\n" +
+                        "        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionDescribe(env); (*env)->ExceptionClear(env); }\n" +
+                        "        if (methods != methodBuf) free(methods);\n" +
                         "        return;\n" +
                         "    }\n" +
+                        "    VMLOG(\"VMP regNatives: FindClass %%s ok clazz=%%p\", clsName, (void*)clazz);\n" +
                         "    for (int midx = 0; midx < data.count; ++midx) {\n" +
                         "        MyNativeMethod myNativeMethod = gNativeMethods[data.offset + midx];\n" +
                         "\n" +
@@ -399,9 +438,12 @@ public class JniCodeGenerator {
                         "        method->name = STRING_BY_ID(myNativeMethod.nameIdx);\n" +
                         "        method->signature = STRING_BY_ID(myNativeMethod.sigIdx);\n" +
                         "        method->fnPtr = myNativeMethod.fnPtr;\n" +
+                        "        VMLOG(\"VMP regNatives:   [%%d] %%s%%s\", midx, method->name, method->signature);\n" +
                         "    }\n" +
                         "\n" +
-                        "    (*env)->RegisterNatives(env, clazz, methods, data.count);\n" +
+                        "    jint regResult = (*env)->RegisterNatives(env, clazz, methods, data.count);\n" +
+                        "    VMLOG(\"VMP regNatives: RegisterNatives %%s result=%%d\", clsName, (int)regResult);\n" +
+                        "    if ((*env)->ExceptionCheck(env)) { VMLOG(\"VMP regNatives: EXCEPTION class=%%s\", clsName); (*env)->ExceptionDescribe(env); (*env)->ExceptionClear(env); }\n" +
                         "\n" +
                         "    (*env)->DeleteLocalRef(env, clazz);\n" +
                         "\n" +

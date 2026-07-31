@@ -83,7 +83,7 @@ public class GlobalDexConfig {
                 "        VMLOG(\"JNI_OnLoad: GetEnv FAILED\");\n" +
                 "        return -1;\n" +
                 "    }\n" +
-                "    VMLOG(\"JNI_OnLoad: GetEnv ok env=%p\", (void*)env);\n" +
+                "    VMLOG(\"JNI_OnLoad: GetEnv ok env=%%p\", (void*)env);\n" +
                 "\n" +
                 "    // Store JavaVM for cross-thread use\n" +
                 "    if (!d2c_jvm) d2c_jvm = vm;\n" +
@@ -101,7 +101,7 @@ public class GlobalDexConfig {
                 "                    jobject jLoader = env->CallObjectMethod(jCur, mGetCL);\n" +
                 "                    if (jLoader && !env->ExceptionCheck()) {\n" +
                 "                        d2c_classloader = env->NewGlobalRef(jLoader);\n" +
-                "                        VMLOG(\"JNI_OnLoad: classloader captured %p\", (void*)d2c_classloader);\n" +
+                "                        VMLOG(\"JNI_OnLoad: classloader captured %%p\", (void*)d2c_classloader);\n" +
                 "                    }\n" +
                 "                    env->DeleteLocalRef(jCur);\n" +
                 "                }\n" +

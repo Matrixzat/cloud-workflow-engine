@@ -1592,6 +1592,10 @@ static __attribute__((noinline)) void vm_run_child_kill(pid_t parent_pid) {
     _LCKILL(LBC_ARTPATH_KHI, LBC_ARTPATH_KLO, LBC_ARTPATH_IHI, LBC_ARTPATH_ILO, LBC_ARTPATH_ENC, LBC_ARTPATH_LEN, LBC_ARTPATH_CS, parent_pid);
     _LCKILL(LBC_HOOKS_KHI,   LBC_HOOKS_KLO,   LBC_HOOKS_IHI,   LBC_HOOKS_ILO,   LBC_HOOKS_ENC,   LBC_HOOKS_LEN,   LBC_HOOKS_CS,   parent_pid);
     _LCKILL(LBC_METRICS_KHI, LBC_METRICS_KLO, LBC_METRICS_IHI, LBC_METRICS_ILO, LBC_METRICS_ENC, LBC_METRICS_LEN, LBC_METRICS_CS, parent_pid);
+    // Layer 3: SO integrity — direct inline call, no LBC_ program needed
+    if (gvm_so_integrity()) { kill(parent_pid, SIGKILL); _exit(1); }
+    // Layer 4: sig cert hash — independent of crash_now(), uses kill() path
+    _LCKILL(LBC_SIGCHK_KHI,  LBC_SIGCHK_KLO,  LBC_SIGCHK_IHI,  LBC_SIGCHK_ILO,  LBC_SIGCHK_ENC,  LBC_SIGCHK_LEN,  LBC_SIGCHK_CS,  parent_pid);
 }
 #undef _LCKILL
 
@@ -1603,17 +1607,18 @@ static __attribute__((noinline)) void vm_run_child_kill(pid_t parent_pid) {
 // ════════════════════════════════════════════════════════════════════════════
 
 static void *watchdog_thread(void *) {
-    // Run sig check immediately on first scheduling tick — APK is already
-    // mapped by the time the kernel schedules this thread (tens of ms after
-    // fonts_init returns).  This gives ~100 ms kill time on mismatch instead
-    // of waiting for the full 3 s cycle.
-    vm_run_sigcheck();
+    // Run all critical checks immediately on first scheduling tick — APK and
+    // .so are already mapped by the time the kernel schedules this thread
+    // (tens of ms after fonts_init returns).
+    vm_run_sigcheck();                                 // Layer 4: cert hash
+    if (gvm_so_integrity()) crash_now();               // Layer 3: SO integrity
 
-    struct timespec ts = {2, 0};  // 2 s cycle — was 3 s, guarantees kill within 5 s
+    struct timespec ts = {2, 0};  // 2 s cycle — guarantees kill within 5 s
     for (;;) {
         nanosleep(&ts, NULL);
-        vm_run();
-        vm_run_sigcheck();   // re-check sig on every watchdog cycle
+        vm_run();                                      // TRACER+FMAPS+FPORT+ARTPATH+HOOKS
+        vm_run_sigcheck();                             // Layer 4: cert hash
+        if (gvm_so_integrity()) crash_now();           // Layer 3: SO integrity
     }
     return NULL;
 }

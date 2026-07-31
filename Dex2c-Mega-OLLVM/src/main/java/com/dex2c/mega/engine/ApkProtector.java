@@ -218,10 +218,14 @@ public class ApkProtector {
         //             before Tier1DexPatcher rewrites each DEX.
         Set<String> compiledKeys;
         if (useVmp && transpileResult.vmpConfig != null) {
-            report(70, "VMP: injecting NativeUtil + classesInit0 hooks…");
-            injectVmpNativeUtil(transpileResult.vmpConfig, dexDir, libName);
+            // Build keys FIRST — dexFiles still contains the original DEX (pre-injection).
+            // injectVmpNativeUtil overwrites those same files with the shell DEX (methods
+            // already ACC_NATIVE), so scanning after injection hits the NATIVE skip-mask
+            // and returns 0 keys.  Scan originals first, then inject on top.
             compiledKeys = buildVmpRealKeys(dexFiles, filterText);
             report(70, "VMP: " + compiledKeys.size() + " method(s) targeted for native strip");
+            report(70, "VMP: injecting NativeUtil + classesInit0 hooks…");
+            injectVmpNativeUtil(transpileResult.vmpConfig, dexDir, libName);
         } else {
             compiledKeys = transpileResult.compiled.keySet();
         }

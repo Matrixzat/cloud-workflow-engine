@@ -166,7 +166,7 @@ public class UpdateDialogFragment extends DialogFragment {
         req.setNotificationVisibility(
                 DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
         req.setDestinationInExternalPublicDir(
-                Environment.DIRECTORY_DOWNLOADS, "Dex2cMega_update.apk");
+                Environment.DIRECTORY_DOWNLOADS, "UltraDex2CVMP_update.apk");
         req.setMimeType("application/vnd.android.package-archive");
         downloadId = activeDm.enqueue(req);
 
@@ -243,7 +243,7 @@ public class UpdateDialogFragment extends DialogFragment {
     private void showDownloadComplete() {
         if (!isAdded() || getView() == null) return;
         String filePath = Environment.getExternalStoragePublicDirectory(
-                Environment.DIRECTORY_DOWNLOADS) + "/Dex2cMega_update.apk";
+                Environment.DIRECTORY_DOWNLOADS) + "/UltraDex2CVMP_update.apk";
 
         View root            = getView();
         View buttonsRow      = root.findViewById(R.id.update_buttons_row);

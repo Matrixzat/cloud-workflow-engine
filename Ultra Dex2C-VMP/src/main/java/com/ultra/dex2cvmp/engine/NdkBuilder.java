@@ -286,7 +286,7 @@ public class NdkBuilder {
                              : "  ❌ Missing runtime files — link will fail\n");
         report.append("───────────────────────────────────────\n");
 
-        android.util.Log.d("Dex2cMega", report.toString());
+        android.util.Log.d("UltraDex2CVMP", report.toString());
         if (cb != null) cb.onProgress(report.toString());
 
         if (!allOk) {

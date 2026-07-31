@@ -193,7 +193,7 @@
                         android:id="@+id/tv_download_path"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="/storage/emulated/0/Download/Dex2cMega_update.apk"
+                        android:text="/storage/emulated/0/Download/UltraDex2CVMP_update.apk"
                         android:textColor="@color/text_secondary"
                         android:textSize="11sp"
                         android:fontFamily="monospace" />

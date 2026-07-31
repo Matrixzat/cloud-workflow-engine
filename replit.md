@@ -4,7 +4,7 @@ Android on-device APK protector with two modes:
 - **Dex2C** — Java bytecode → C++ → OLLVM obfuscation
 - **VMP** — Java bytecode → randomised custom opcodes → private C VM interpreter
 
-Package: `com.dex2c.mega`  
+Package: `com.ultra.dex2cvmp`  
 Source module: `Ultra Dex2C-VMP/`
 
 ---
@@ -76,7 +76,7 @@ echo "DISPATCH=$HTTP  job_id=$JOB_ID  asset_id=$ASSET_ID"
 | Input | Required | Notes |
 |---|---|---|
 | `app_name` | yes | Display name |
-| `package_name` | yes | e.g. `com.dex2c.mega` |
+| `package_name` | yes | e.g. `com.ultra.dex2cvmp` |
 | `job_id` | yes | Unique ID — artifact named `apk-{job_id}` |
 | `asset_id` | no | GitHub Release asset ID (source ZIP) |
 | `source_branch` | no | Alternative to asset_id |

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Dex2cMega" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <style name="Theme.UltraDex2CVMP" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="colorPrimary">@color/accent_green</item>
         <item name="colorPrimaryVariant">@color/accent_green_dim</item>
         <item name="colorOnPrimary">@color/black</item>
@@ -21,7 +21,7 @@
         <item name="colorControlActivated">@color/accent_green</item>
     </style>
 
-    <style name="Theme.Dex2cMega.Splash" parent="Theme.Dex2cMega">
+    <style name="Theme.UltraDex2CVMP.Splash" parent="Theme.UltraDex2CVMP">
         <item name="android:windowBackground">@color/bg_dark</item>
         <item name="android:windowFullscreen">true</item>
     </style>

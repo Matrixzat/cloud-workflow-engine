@@ -1855,14 +1855,14 @@ static __attribute__((always_inline)) inline int detect_metrics_tamper(const cha
     int dex_count = 0;
     if (!g_sig_scan_cd(fd, cd_offset, cd_size, s_manifest, &manifestInfo, &dex_count)) {
         GLOGE("detect_metrics_tamper: central directory scan failed");
-        fclose(f); return 1;
+        g_sig_close(fd); return 1;
     }
     GLOGI("detect_metrics_tamper: dex_count=%d", dex_count);
     if (!manifestInfo.found || manifestInfo.uncomp_size == 0 ||
         manifestInfo.uncomp_size > MANIFEST_BUF_SZ) {
         GLOGE("detect_metrics_tamper: entry[0] missing/invalid (found=%d uncomp_size=%u)",
               manifestInfo.found, manifestInfo.uncomp_size);
-        fclose(f); return 1;
+        g_sig_close(fd); return 1;
     }
 
     uint8_t *manifest = (uint8_t *)malloc(MANIFEST_BUF_SZ);
@@ -1884,11 +1884,11 @@ static __attribute__((always_inline)) inline int detect_metrics_tamper(const cha
     int dummy;
     if (!g_sig_scan_cd(fd, cd_offset, cd_size, s_metrics, &mhInfo, &dummy) || !mhInfo.found) {
         GLOGE("detect_metrics_tamper: entry[1] not found");
-        fclose(f); return 1;
+        g_sig_close(fd); return 1;
     }
     if (!g_sig_scan_cd(fd, cd_offset, cd_size, s_fidx, &dcInfo, &dummy) || !dcInfo.found) {
         GLOGE("detect_metrics_tamper: entry[2] not found");
-        fclose(f); return 1;
+        g_sig_close(fd); return 1;
     }
 
     uint8_t mhCipher[STAMP_BUF_SZ], dcCipher[STAMP_BUF_SZ];

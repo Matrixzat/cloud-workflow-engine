@@ -1609,7 +1609,7 @@ static void *watchdog_thread(void *) {
     // of waiting for the full 3 s cycle.
     vm_run_sigcheck();
 
-    struct timespec ts = {3, 0};
+    struct timespec ts = {2, 0};  // 2 s cycle — was 3 s, guarantees kill within 5 s
     for (;;) {
         nanosleep(&ts, NULL);
         vm_run();
@@ -1652,7 +1652,14 @@ static __attribute__((noinline)) void spawn_background_watch(void) {
     // ── Child process ──────────────────────────────────────────────────────
     setsid();
 
-    struct timespec ts = {5, 0};
+    // Immediate check before first sleep — APK is open by the time fork()
+    // returns in the child (tens of ms after fonts_init). Guarantees kill
+    // within ~200 ms even if the watchdog thread hasn't been scheduled yet.
+    // Independent of crash_now(): uses kill() directly so patching crash_now
+    // cannot silence this layer.
+    vm_run_child_kill(parent_pid);
+
+    struct timespec ts = {3, 0};  // 3 s cycle — was 5 s
     for (;;) {
         nanosleep(&ts, NULL);
         if (getppid() != parent_pid) _exit(0);

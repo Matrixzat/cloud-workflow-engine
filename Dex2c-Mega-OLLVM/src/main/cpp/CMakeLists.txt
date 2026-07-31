@@ -74,10 +74,46 @@ set(GUARD_SOURCES
     # guard_mba.h and guard_pstrings.inc are headers included by guard.cpp
 )
 
+# ════════════════════════════════════════════════════════════════════════════
+# VMP interpreter — ported from maoabc/nmmp (nmmvm core)
+# Compiled as a separate static lib so it can keep C++ exceptions enabled
+# while cipher_guard uses -fno-exceptions / -fno-rtti.
+# ════════════════════════════════════════════════════════════════════════════
+file(GLOB VMP_CPP_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/vmp/*.cpp")
+file(GLOB VMP_C_SRCS   "${CMAKE_CURRENT_SOURCE_DIR}/vmp/*.c")
+
+add_library(vmp_interp STATIC ${VMP_CPP_SRCS} ${VMP_C_SRCS})
+
+target_include_directories(vmp_interp PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/vmp
+    ${CMAKE_CURRENT_SOURCE_DIR}/vmp/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/vmp/cutils
+)
+
+target_compile_options(vmp_interp PRIVATE
+    -O2
+    -fvisibility=hidden
+    -ffunction-sections
+    -fdata-sections
+    -std=c++17
+    -fstack-protector-strong
+    -D_FORTIFY_SOURCE=2
+    # NOTE: exceptions are intentionally ENABLED here — the VMP interpreter
+    # uses C++ exception semantics internally (DexCatch / Exception.cpp).
+    # -fno-exceptions is NOT set for this target.
+)
+
+target_link_options(vmp_interp PRIVATE
+    -Wl,--gc-sections
+)
+
 # ── Output: static library linked into the final protected .so ───────────────
 add_library(cipher_guard STATIC ${GUARD_SOURCES})
 
-target_include_directories(cipher_guard PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(cipher_guard PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/vmp/include   # expose vm.h to guard.cpp if needed
+)
 
 # ── Base compile flags ────────────────────────────────────────────────────────
 target_compile_options(cipher_guard PRIVATE
@@ -141,6 +177,7 @@ target_link_options(cipher_guard PRIVATE
 find_library(log-lib log)
 find_library(z-lib z)
 target_link_libraries(cipher_guard
+    vmp_interp
     ${log-lib}
     ${z-lib}
 )

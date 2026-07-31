@@ -121,4 +121,15 @@ dependencies {
     // XZ decompression — used to extract the optional OLLVM NDK (.tar.xz release).
     // Tukaani XZ for Java is the standard lightweight implementation (~80 KB).
     implementation 'org.tukaani:xz:1.9'
+
+    // ── VMP (maoabc/nmmp port) dependencies ─────────────────────────────────
+    // smali/dexlib2 — DEX parser used by the VMP converter to walk method
+    // bytecode and rewrite Dalvik opcodes to the randomised custom opcode set.
+    implementation 'com.android.tools.smali:smali-dexlib2:3.0.3'
+
+    // Guava — used by JniCodeGenerator (HashMultimap, Ordering, Iterables, etc.)
+    implementation 'com.google.guava:guava:33.2.1-android'
+
+    // JSR-305 annotations (@Nonnull / @Nullable) required by smali/dexlib2
+    implementation 'com.google.code.findbugs:jsr305:3.0.2'
 }

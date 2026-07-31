@@ -1,0 +1,4 @@
+rootProject.name = "nmmvm"
+include ':app'
+include ':nmmvm'
+include ':jna-android'

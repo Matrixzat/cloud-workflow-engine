@@ -41,7 +41,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="v2.0  ·  On-Device  ·  ARM64  ·  Offline"
+            android:text="v2.0  ·  On-Device  ·  ARM64 + ARM32  ·  Offline"
             android:textColor="@color/text_muted"
             android:textSize="11sp"
             android:fontFamily="monospace"
@@ -170,13 +170,6 @@
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
                             android:orientation="vertical">
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="△  Native code is static — advanced tools can disassemble ARM64"
-                                android:textColor="@color/text_muted"
-                                android:textSize="12sp"
-                                android:lineSpacingExtra="3dp" />
                         </LinearLayout>
                     </LinearLayout>
                 </LinearLayout>

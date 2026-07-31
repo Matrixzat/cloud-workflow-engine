@@ -1,0 +1,2 @@
+- [VMP JNI_OnLoad ownership](vmp-jni-onload.md) — jni_init.cpp (not .c) owns JNI_OnLoad in VMP mode; NdkBuilder detects it by filename to set -DD2C_HAS_JNILOAD
+- [VMP NativeUtil injection](vmp-nativeutil.md) — NativeUtil is a synthetic DEX class injected into classes.dex at protect-time; missing = RegisterNatives silently fails → crash

@@ -353,10 +353,18 @@ public class DexTranspiler {
                                 k -> new java.util.LinkedHashSet<>()).add(methodName);
                     }
                 } else {
-                    // Whole-class entry — normalise smali → dot
+                    // Whole-class entry — normalise all formats → dot notation:
+                    //   "Lcom/foo/Bar;"  → "com.foo.Bar"
+                    //   "com/foo/Bar;"   → "com.foo.Bar"
+                    //   "com/foo/Bar"    → "com.foo.Bar"
+                    //   "com.foo.Bar"    → "com.foo.Bar" (already correct)
                     String cls = entry;
                     if (cls.startsWith("L") && cls.endsWith(";")) {
                         cls = cls.substring(1, cls.length() - 1).replace('/', '.');
+                    } else if (cls.endsWith(";")) {
+                        cls = cls.substring(0, cls.length() - 1).replace('/', '.');
+                    } else {
+                        cls = cls.replace('/', '.');
                     }
                     if (!cls.isEmpty()) classEntries.add(cls);
                 }

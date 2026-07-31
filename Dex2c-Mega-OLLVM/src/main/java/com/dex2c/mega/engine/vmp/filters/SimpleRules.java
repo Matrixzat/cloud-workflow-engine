@@ -7,7 +7,6 @@ import javax.annotation.Nullable;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.Reader;
-import java.rmi.RemoteException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -52,7 +51,7 @@ public class SimpleRules {
                     final String[] split = line.split(" +");
                     final int length = split.length;
                     if (length < 2) {
-                        throw new RemoteException("Error rule " + lineNumb + ": " + line);
+                        throw new IOException("Error rule " + lineNumb + ": " + line);
                     }
                     String className = split[1];
                     String supperName = "";
@@ -71,7 +70,7 @@ public class SimpleRules {
                         if ((mend = line.indexOf('}')) != -1) {
                             final String[] methodNames = line.substring(mstart + 1, mend).trim().split(";");
                             if (methodNames.length == 0) {
-                                throw new RemoteException("Error rule " + lineNumb + ": " + line);
+                                throw new IOException("Error rule " + lineNumb + ": " + line);
                             }
                             for (String name : methodNames) {
                                 convertRules.put(classRule, new MethodRule(name));
@@ -91,7 +90,7 @@ public class SimpleRules {
                     // }
                     if (line.indexOf('}') != -1) {
                         if (methodNameList.isEmpty()) {
-                            throw new RemoteException("Error rule " + lineNumb + ": " + line);
+                            throw new IOException("Error rule " + lineNumb + ": " + line);
                         }
                         for (String methodName : methodNameList) {
                             if ("".equals(methodName)) {
@@ -104,7 +103,7 @@ public class SimpleRules {
                         methodNameList.add(line.replace(";", ""));
                     }
                 } else {
-                    throw new RemoteException("Error rule " + lineNumb + ": " + line);
+                    throw new IOException("Error rule " + lineNumb + ": " + line);
                 }
 
                 lineNumb++;

@@ -578,14 +578,16 @@ class Writer(object):
         self.write('{\n')
         self.write_define_ex_handle(ins)
         self.write_not_null(ref)
-        self.write('env->MonitorEnter(%s);\n' % (self.get_variable_or_const(ref)))
+        # MonitorEnter always takes jobject; cast in case the register was typed as jint
+        self.write('env->MonitorEnter((jobject) %s);\n' % (self.get_variable_or_const(ref)))
         self.write_undefine_ex_handle(ins)
         self.write('}\n')
 
     def visit_monitor_exit(self, ins, ref):
         self.write('{\n')
         self.write_define_ex_handle(ins)
-        self.write('if (env->MonitorExit(%s) != JNI_OK) {\n' % (self.get_variable_or_const(ref)))
+        # MonitorExit always takes jobject; cast in case the register was typed as jint
+        self.write('if (env->MonitorExit((jobject) %s) != JNI_OK) {\n' % (self.get_variable_or_const(ref)))
         self.write_undefine_ex_handle(ins)
         self.write('}\n')
         self.write('}\n')

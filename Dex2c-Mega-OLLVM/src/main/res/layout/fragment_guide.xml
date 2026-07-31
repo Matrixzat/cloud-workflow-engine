@@ -275,13 +275,6 @@
                                 android:textColor="@color/text_muted"
                                 android:textSize="12sp"
                                 android:lineSpacingExtra="3dp" />
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="△  Best for critical methods, not bulk classes"
-                                android:textColor="@color/text_muted"
-                                android:textSize="12sp"
-                                android:lineSpacingExtra="3dp" />
                         </LinearLayout>
                     </LinearLayout>
                 </LinearLayout>

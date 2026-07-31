@@ -326,20 +326,45 @@ public class DexTranspiler {
                 String entry = line.trim();
                 if (entry.isEmpty() || entry.startsWith("#")) continue;
 
-                if (entry.contains("->")) {
-                    // Method-level: "Lcom/example/MyClass;->foo()V"
+                if (entry.contains("(")) {
+                    // Method-level entry — two formats produced by the UI tree:
+                    //
+                    //   Format A (smali with arrow):
+                    //     "Lcom/foo/Bar;->onCreate(Landroid/os/Bundle;)V"
+                    //
+                    //   Format B (MethodNode.fullPattern — NO "->"):
+                    //     "com/foo/Bar;onCreate(Landroid/os/Bundle;)V"
+                    //       ↑ classPrefix = typeDesc.substring(1) = "com/foo/Bar;"
+                    //         method name immediately follows the last ";" before "("
+                    //
+                    // Detect which format and split accordingly.
+                    String smaliClass, rest;
                     int arrow = entry.indexOf("->");
-                    String smaliClass = entry.substring(0, arrow);
-                    String rest       = entry.substring(arrow + 2);
+                    if (arrow >= 0) {
+                        // Format A
+                        smaliClass = entry.substring(0, arrow);
+                        rest       = entry.substring(arrow + 2);
+                    } else {
+                        // Format B: split at the last ";" that precedes the "("
+                        int paren    = entry.indexOf('(');
+                        int lastSemi = entry.lastIndexOf(';', paren);
+                        if (lastSemi < 0) {
+                            // No ";" before "(" — cannot identify class, skip
+                            continue;
+                        }
+                        smaliClass = entry.substring(0, lastSemi + 1); // "com/foo/Bar;"
+                        rest       = entry.substring(lastSemi + 1);    // "onCreate(...)V"
+                    }
+
                     int paren = rest.indexOf('(');
                     String methodName = paren > 0 ? rest.substring(0, paren) : rest;
                     if ("<init>".equals(methodName) || "<clinit>".equals(methodName)) continue;
 
                     // Normalise all class identifier formats → dot notation for SimpleRules:
-                    //   "Lcom/foo/Bar;"  (smali full)     → "com.foo.Bar"
-                    //   "com/foo/Bar;"   (MethodNode.fullPattern prefix, no L) → "com.foo.Bar"
-                    //   "com/foo/Bar"    (slash, no semi)  → "com.foo.Bar"
-                    //   "com.foo.Bar"    (already dot)     → "com.foo.Bar"
+                    //   "Lcom/foo/Bar;"  (smali full)          → "com.foo.Bar"
+                    //   "com/foo/Bar;"   (fullPattern prefix)   → "com.foo.Bar"
+                    //   "com/foo/Bar"    (slash, no semi)       → "com.foo.Bar"
+                    //   "com.foo.Bar"    (already dot)          → "com.foo.Bar"
                     String dotClass;
                     if (smaliClass.startsWith("L") && smaliClass.endsWith(";")) {
                         dotClass = smaliClass.substring(1, smaliClass.length() - 1).replace('/', '.');

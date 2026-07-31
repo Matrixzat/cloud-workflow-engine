@@ -335,9 +335,19 @@ public class DexTranspiler {
                     String methodName = paren > 0 ? rest.substring(0, paren) : rest;
                     if ("<init>".equals(methodName) || "<clinit>".equals(methodName)) continue;
 
-                    String dotClass = smaliClass.startsWith("L") && smaliClass.endsWith(";")
-                            ? smaliClass.substring(1, smaliClass.length() - 1).replace('/', '.')
-                            : smaliClass;
+                    // Normalise all class identifier formats → dot notation for SimpleRules:
+                    //   "Lcom/foo/Bar;"  (smali full)     → "com.foo.Bar"
+                    //   "com/foo/Bar;"   (MethodNode.fullPattern prefix, no L) → "com.foo.Bar"
+                    //   "com/foo/Bar"    (slash, no semi)  → "com.foo.Bar"
+                    //   "com.foo.Bar"    (already dot)     → "com.foo.Bar"
+                    String dotClass;
+                    if (smaliClass.startsWith("L") && smaliClass.endsWith(";")) {
+                        dotClass = smaliClass.substring(1, smaliClass.length() - 1).replace('/', '.');
+                    } else if (smaliClass.endsWith(";")) {
+                        dotClass = smaliClass.substring(0, smaliClass.length() - 1).replace('/', '.');
+                    } else {
+                        dotClass = smaliClass.replace('/', '.');
+                    }
                     if (!dotClass.isEmpty()) {
                         methodEntries.computeIfAbsent(dotClass,
                                 k -> new java.util.LinkedHashSet<>()).add(methodName);

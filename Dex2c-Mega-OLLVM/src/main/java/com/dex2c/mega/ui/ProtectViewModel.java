@@ -14,6 +14,7 @@ public class ProtectViewModel extends AndroidViewModel {
     private Uri    inputUri;
     private String inputName   = "";
     private boolean signEnabled = false;
+    private boolean vmpEnabled  = false;
 
     private final MutableLiveData<String>  status     = new MutableLiveData<>("");
     private final MutableLiveData<Integer> progress   = new MutableLiveData<>(0);
@@ -78,6 +79,9 @@ public class ProtectViewModel extends AndroidViewModel {
     public boolean isSignEnabled()           { return signEnabled; }
     public void    setSignEnabled(boolean v) { this.signEnabled = v; }
 
+    public boolean isVmpEnabled()            { return vmpEnabled; }
+    public void    setVmpEnabled(boolean v)  { this.vmpEnabled  = v; }
+
     public LiveData<String>  getStatus()     { return status; }
     public LiveData<Integer> getProgress()   { return progress; }
     public LiveData<String>  getOutputPath() { return outputPath; }
@@ -90,7 +94,7 @@ public class ProtectViewModel extends AndroidViewModel {
     public long    getProtectionStartMs()             { return protectionStartMs; }
     public void    setProtectionStartMs(long ms)      { protectionStartMs = ms; }
 
-    public void runProtection(String filterText, boolean sign) {
+    public void runProtection(String filterText, boolean sign, boolean vmp) {
         if (inputUri == null || Boolean.TRUE.equals(running.getValue())) return;
         running.setValue(true);
         progress.setValue(5);
@@ -101,6 +105,7 @@ public class ProtectViewModel extends AndroidViewModel {
         intent.putExtra(ProtectionService.EXTRA_URI,    inputUri);
         intent.putExtra(ProtectionService.EXTRA_FILTER, filterText);
         intent.putExtra(ProtectionService.EXTRA_SIGN,   sign);
+        intent.putExtra(ProtectionService.EXTRA_VMP,    vmp);
 
         if (Build.VERSION.SDK_INT >= 26) {
             getApplication().startForegroundService(intent);

@@ -69,6 +69,7 @@ public class ProtectFragment extends Fragment {
     private View btnProtect, btnCancel;
     private TextView btnProtectLabel;
     private SwitchMaterial switchSign;
+    private SwitchMaterial switchVmp;
 
     // Progress state
     private ProgressBar progressBar;
@@ -230,6 +231,10 @@ public class ProtectFragment extends Fragment {
         switchSign      = view.findViewById(R.id.switch_sign);
         switchSign.setChecked(viewModel.isSignEnabled());
         switchSign.setOnCheckedChangeListener((b, c) -> viewModel.setSignEnabled(c));
+
+        switchVmp       = view.findViewById(R.id.switch_vmp);
+        switchVmp.setChecked(viewModel.isVmpEnabled());
+        switchVmp.setOnCheckedChangeListener((b, c) -> viewModel.setVmpEnabled(c));
         btnProtect.setOnClickListener(v -> onRunClicked(view));
         btnCancel.setOnClickListener(v -> {
             viewModel.cancel();
@@ -302,6 +307,7 @@ public class ProtectFragment extends Fragment {
             }
             btnCancel.setVisibility(running ? View.VISIBLE : View.GONE);
             switchSign.setEnabled(!running);
+            if (switchVmp != null) switchVmp.setEnabled(!running);
         });
 
         viewModel.getStatus().observe(getViewLifecycleOwner(), s -> {
@@ -643,8 +649,9 @@ public class ProtectFragment extends Fragment {
         // rules are active before the engine starts processing methods.
         appendLog(buildFilterSummary(filter, hasClass, hasManual));
 
-        boolean sign = switchSign.isChecked();
-        viewModel.runProtection(filter, sign);
+        boolean sign    = switchSign.isChecked();
+        boolean useVmp  = switchVmp != null && switchVmp.isChecked();
+        viewModel.runProtection(filter, sign, useVmp);
     }
 
     // ── Filter summary ────────────────────────────────────────────────────────

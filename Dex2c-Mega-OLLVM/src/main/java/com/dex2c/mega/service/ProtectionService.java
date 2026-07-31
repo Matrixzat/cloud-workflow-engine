@@ -15,6 +15,7 @@ public class ProtectionService extends Service {
     public static final String EXTRA_URI       = "uri";
     public static final String EXTRA_FILTER    = "filter";
     public static final String EXTRA_SIGN      = "sign";
+    public static final String EXTRA_VMP       = "vmp";
 
     public static final String BROADCAST_PROGRESS = "com.dex2c.mega.PROGRESS";
     public static final String EXTRA_PERCENT   = "percent";
@@ -65,15 +66,16 @@ public class ProtectionService extends Service {
         }
 
         if (ACTION_START.equals(intent.getAction())) {
-            Uri    uri  = intent.getParcelableExtra(EXTRA_URI);
-            String flt  = intent.getStringExtra(EXTRA_FILTER);
+            Uri     uri  = intent.getParcelableExtra(EXTRA_URI);
+            String  flt  = intent.getStringExtra(EXTRA_FILTER);
             boolean sign = intent.getBooleanExtra(EXTRA_SIGN, false);
-            startProtection(uri, flt, sign);
+            boolean vmp  = intent.getBooleanExtra(EXTRA_VMP,  false);
+            startProtection(uri, flt, sign, vmp);
         }
         return START_NOT_STICKY;
     }
 
-    private void startProtection(Uri uri, String filter, boolean sign) {
+    private void startProtection(Uri uri, String filter, boolean sign, boolean vmp) {
         if (running) return;
         running = true;
         SERVICE_RUNNING = true;
@@ -96,7 +98,7 @@ public class ProtectionService extends Service {
                     broadcast(pct, msg, null, null);
                     updateRunningNotification(msg, pct);
                 });
-                String output = protector.protect(uri, filter, sign);
+                String output = protector.protect(uri, filter, sign, vmp);
                 broadcast(100, "Done!", output, null);
                 finishWithSuccess("Protection complete! Output saved.");
             } catch (Exception e) {

@@ -29,7 +29,12 @@ public class ApkProtector {
         if (callback != null) callback.onProgress(pct, msg);
     }
 
+    /** Legacy overload — defaults to dex2c mode (backwards-compatible). */
     public String protect(Uri inputUri, String filterText, boolean signOutput) throws Exception {
+        return protect(inputUri, filterText, signOutput, false);
+    }
+
+    public String protect(Uri inputUri, String filterText, boolean signOutput, boolean useVmp) throws Exception {
         // Clear all leftover dex2c_mega_* dirs from previous runs before starting fresh
         File baseCache = context.getCacheDir();
         File[] stale = baseCache.listFiles(f -> f.isDirectory() && f.getName().startsWith("dex2c_mega_"));
@@ -42,14 +47,14 @@ public class ApkProtector {
         try {
             report(5, "Copying APK…");
             File inputApk = copyToCache(inputUri, cacheDir);
-            return protectApk(inputApk, filterText, signOutput, cacheDir);
+            return protectApk(inputApk, filterText, signOutput, useVmp, cacheDir);
         } finally {
             deleteDir(cacheDir);
         }
     }
 
     private String protectApk(File inputApk, String filterText,
-                               boolean signOutput, File cacheDir) throws Exception {
+                               boolean signOutput, boolean useVmp, File cacheDir) throws Exception {
 
         String libName = getLibraryName();
         List<String> targetAbis = getTargetAbis();
@@ -79,18 +84,19 @@ public class ApkProtector {
         List<File> dexFiles = extractDexFiles(inputApk, dexDir);
         if (dexFiles.isEmpty()) throw new Exception("No DEX files found in APK.");
 
-        // ── 5. Transpile APK → C++ via codehasan/dex2c (filter_bridge.py) ────
-        // filter_bridge.py loads ALL DEX files from the APK in one androguard
-        // Analysis pass, applies codehasan's MethodFilter (subclassed with global
-        // multi-DEX R8 shadow-class taint check), and compiles each eligible method.
-        report(35, "Transpiling " + classCount + " class(es) to C++…");
+        // ── 5. Transpile APK → C / C++ ───────────────────────────────────────
+        // MODE_VMP  : maoabc/nmmp VMP interpreter — custom opcodes + C VM
+        // MODE_DEX2C: codehasan/dex2c Python transpiler (default)
+        int transpileMode = useVmp ? DexTranspiler.MODE_VMP : DexTranspiler.MODE_DEX2C;
+        String modeLabel  = useVmp ? "VMP" : "dex2c";
+        report(35, "Transpiling " + classCount + " class(es) [" + modeLabel + "]…");
         File cSourceDir = new File(cacheDir, "c_src");
         cSourceDir.mkdirs();
 
         DexTranspiler transpiler = new DexTranspiler(context);
         DexTranspiler.TranspileResult transpileResult = transpiler.transpile(
                 inputApk.getAbsolutePath(), filterText, cSourceDir,
-                msg -> report(40, msg));
+                transpileMode, msg -> report(40, msg));
 
         int transpiled = transpileResult != null ? transpileResult.successCount() : 0;
 

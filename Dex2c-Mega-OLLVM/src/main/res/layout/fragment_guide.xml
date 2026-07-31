@@ -22,7 +22,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Dex2c Mega"
+            android:text="Ultra Dex2C-VMP"
             android:textColor="@color/accent_green"
             android:textSize="28sp"
             android:textStyle="bold"
@@ -76,7 +76,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Dex2c Mega has two completely different protection engines. You pick which one to use before each protection job — they can even be used together on different classes of the same APK."
+                    android:text="Ultra Dex2C-VMP has two completely different protection engines. You pick which one to use before each protection job — they can even be used together on different classes of the same APK."
                     android:textColor="@color/text_secondary"
                     android:textSize="13sp"
                     android:lineSpacingExtra="5dp"
@@ -696,7 +696,7 @@
                         android:textColor="@color/text_primary" android:textSize="14sp" android:textStyle="bold"
                         android:layout_marginBottom="4dp" />
                     <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                        android:text="The protected APK is saved to /storage/emulated/0/Dex2c Mega. Install it normally — it behaves identically to the original, but its logic is locked in native code or running inside the private VM."
+                        android:text="The protected APK is saved to /storage/emulated/0/Ultra Dex2C-VMP. Install it normally — it behaves identically to the original, but its logic is locked in native code or running inside the private VM."
                         android:textColor="@color/text_secondary" android:textSize="13sp"
                         android:lineSpacingExtra="4dp" />
                 </LinearLayout>
@@ -745,7 +745,7 @@
                             android:textColor="@color/text_primary" android:textSize="13sp"
                             android:textStyle="bold" android:layout_marginBottom="3dp" />
                         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                            android:text="Dex2c Mega automatically reads the cert from your input APK and stamps its SHA-256 into the protected .so. Toggle Auto-Sign OFF so the output stays unsigned. Re-sign the protected APK with your own key as usual — the cert check will pass at runtime. Your update chain is never broken."
+                            android:text="Ultra Dex2C-VMP automatically reads the cert from your input APK and stamps its SHA-256 into the protected .so. Toggle Auto-Sign OFF so the output stays unsigned. Re-sign the protected APK with your own key as usual — the cert check will pass at runtime. Your update chain is never broken."
                             android:textColor="@color/text_secondary" android:textSize="12sp"
                             android:lineSpacingExtra="4dp" />
                     </LinearLayout>
@@ -791,7 +791,7 @@
                             android:textColor="@color/text_primary" android:textSize="13sp"
                             android:textStyle="bold" android:layout_marginBottom="3dp" />
                         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                            android:text="The output is signed with Dex2c Mega's built-in key and the cert check is stamped to match. This works but will break your app's update chain — any future update you push must also be signed with the same built-in key. Only use this for apps you will never push to a store or update."
+                            android:text="The output is signed with Ultra Dex2C-VMP's built-in key and the cert check is stamped to match. This works but will break your app's update chain — any future update you push must also be signed with the same built-in key. Only use this for apps you will never push to a store or update."
                             android:textColor="@color/text_secondary" android:textSize="12sp"
                             android:lineSpacingExtra="4dp" />
                     </LinearLayout>

@@ -148,7 +148,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="Browse for an APK file and Dex2c Mega will instantly show you its packages, classes and methods — tap what you want to protect."
+            android:text="Browse for an APK file and Ultra Dex2C-VMP will instantly show you its packages, classes and methods — tap what you want to protect."
             android:textColor="@color/text_secondary"
             android:textSize="13sp"
             android:gravity="center"

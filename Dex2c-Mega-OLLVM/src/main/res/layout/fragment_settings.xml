@@ -319,7 +319,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="⚠ Input APK must be signed BEFORE protection. Do NOT use Dex2c Mega's built-in signer for this — sign externally first, then protect."
+                    android:text="⚠ Input APK must be signed BEFORE protection. Do NOT use Ultra Dex2C-VMP's built-in signer for this — sign externally first, then protect."
                     android:textColor="@color/text_muted"
                     android:textSize="11sp"
                     android:lineSpacingExtra="2dp" />

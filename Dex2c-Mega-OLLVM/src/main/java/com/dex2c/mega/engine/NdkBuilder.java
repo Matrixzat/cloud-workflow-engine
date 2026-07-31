@@ -29,6 +29,7 @@ public class NdkBuilder {
     private final CompilerManager cm;
 
     private File headersDir;
+    private File vmSrcDir;   // extracted VMP runtime .cpp/.c source files
     private boolean initialized = false;
     private File resolvedClang;   // set once in setup(), reused in compile()
 
@@ -82,6 +83,20 @@ public class NdkBuilder {
             extractAssetDir(context, "vmp_headers", headersDir);
         } catch (IOException e) {
             Log.w(TAG, "VMP header extraction failed (non-fatal): " + e.getMessage());
+        }
+
+        // Extract VMP VM runtime source files (Interp.cpp, DexCatch.cpp,
+        // GlobalCache.cpp, Exception.cpp, InterpC-portable.cpp, JNIWrapper.c,
+        // ConstantPool.c) from assets/vmp_src/ into headersDir.
+        // These implement vmInterpret() + cacheInitial() etc. that the generated
+        // classes_native_functions.c calls. Without them the linker cannot resolve
+        // VM function symbols → unresolved symbol error at link time.
+        vmSrcDir = new File(context.getFilesDir(), "vmp_src");
+        vmSrcDir.mkdirs();
+        try {
+            extractAssetDir(context, "vmp_src", vmSrcDir);
+        } catch (IOException e) {
+            Log.w(TAG, "VMP source extraction failed (non-fatal): " + e.getMessage());
         }
 
         // Resolve clang once here — compile() reuses this same file,
@@ -424,11 +439,30 @@ public class NdkBuilder {
             File wkcImpl  = new File(headersDir, "well_known_classes.cpp");
 
             // All files to compile (runtime files first — must also be first in link)
-            // NOTE: guard is NOT added here — it ships as a prebuilt libcipher.so
+            // NOTE: guard is NOT added here — it ships as a prebuilt libcipher.a
             // and is absorbed at link time via --whole-archive (see link step below).
             List<File> allSrc = new ArrayList<>();
             if (d2cImpl.exists())  allSrc.add(d2cImpl);
             if (wkcImpl.exists())  allSrc.add(wkcImpl);
+
+            // VMP mode: add VM runtime source files (Interp.cpp, DexCatch.cpp,
+            // GlobalCache.cpp, Exception.cpp, InterpC-portable.cpp, JNIWrapper.c,
+            // ConstantPool.c) extracted from assets/vmp_src/ at setup() time.
+            // These implement vmInterpret() + cacheInitial() — called by the
+            // generated classes_native_functions.c. Without them the linker gets
+            // unresolved symbol errors for every VM function.
+            // In dex2c mode vmSrcDir is empty/missing so this is a no-op.
+            if (isVmpJniInit && vmSrcDir != null && vmSrcDir.exists()) {
+                File[] vmSrcs = vmSrcDir.listFiles(f -> {
+                    String n = f.getName();
+                    return n.endsWith(".c") || n.endsWith(".cpp");
+                });
+                if (vmSrcs != null) {
+                    java.util.Arrays.sort(vmSrcs); // deterministic order
+                    for (File vs : vmSrcs) allSrc.add(vs);
+                }
+            }
+
             allSrc.addAll(generatedFiles);
 
             File sysrootDir  = cm.getActiveSysrootDir();

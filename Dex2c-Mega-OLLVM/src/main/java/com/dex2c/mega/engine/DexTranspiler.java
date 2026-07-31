@@ -287,39 +287,80 @@ public class DexTranspiler {
     /**
      * Build a ClassAndMethodFilter from the user-supplied filter text.
      *
-     * Supports two formats:
-     *   1. NMMP SimpleRules ("class com.foo.Bar { *; }")
-     *   2. Plain class names, one per line ("com.foo.Bar") — auto-converted
-     *      to SimpleRules format so existing dex2c filter files work directly.
+     * Supports:
+     *   1. NMMP SimpleRules format  : "class com.foo.Bar { *; }"
+     *   2. Dot-notation class name  : "com.example.MyClass"
+     *   3. Smali whole-class        : "Lcom/example/MyClass;"
+     *   4. Smali method entry       : "Lcom/example/MyClass;->foo()V"
+     *
+     * For (4), the specific method name is preserved in the SimpleRule so only
+     * that method gets VMP'd — not the entire class.
+     * Multiple method entries for the same class are merged into one rule block.
      */
     private ClassAndMethodFilter buildFilter(String filterText,
                                              ClassAnalyzer classAnalyzer) throws IOException {
-        // Auto-convert class names → SimpleRules format.
-        // Handles three formats that may arrive from the UI:
-        //   1. Dot notation    : "com.example.MyClass"         (class-list paste tab)
-        //   2. Smali descriptor: "Lcom/example/MyClass;"       (manual tree tab, whole class)
-        //   3. Method entry    : "Lcom/example/MyClass;->f()V" (manual tree tab, method level)
-        // For VMP, whole-class granularity is used ({ *; }) and method entries are skipped
-        // (BasicKeepConfig + SimpleRules decide which individual methods to convert).
         String rulesText = filterText;
         if (!filterText.contains("class ")) {
-            StringBuilder sb = new StringBuilder();
+            // classEntry  → full class coverage   ("com.example.MyClass")
+            // methodEntry → class → [method, ...]
+            java.util.LinkedHashSet<String> classEntries = new java.util.LinkedHashSet<>();
+            java.util.LinkedHashMap<String, java.util.LinkedHashSet<String>> methodEntries =
+                    new java.util.LinkedHashMap<>();
+
             for (String line : filterText.split("\\r?\\n")) {
-                String cls = line.trim();
-                if (cls.isEmpty() || cls.startsWith("#")) continue;
+                String entry = line.trim();
+                if (entry.isEmpty() || entry.startsWith("#")) continue;
 
-                // Skip method-level entries — VMP converts at class granularity
-                if (cls.contains("->")) continue;
+                if (entry.contains("->")) {
+                    // Method-level: "Lcom/example/MyClass;->foo()V"
+                    int arrow = entry.indexOf("->");
+                    String smaliClass = entry.substring(0, arrow); // "Lcom/example/MyClass;"
+                    String rest       = entry.substring(arrow + 2); // "foo()V"
+                    // Extract bare method name (strip descriptor)
+                    int paren = rest.indexOf('(');
+                    String methodName = paren > 0 ? rest.substring(0, paren) : rest;
 
-                // Normalise smali descriptor → dot notation so classNameToType() works
-                // "Lcom/example/MyClass;" → "com.example.MyClass"
-                if (cls.startsWith("L") && cls.endsWith(";")) {
-                    cls = cls.substring(1, cls.length() - 1).replace('/', '.');
+                    // Skip constructors — BasicKeepConfig also rejects them,
+                    // but skip here for clarity (<init>, <clinit>)
+                    if ("<init>".equals(methodName) || "<clinit>".equals(methodName)) continue;
+
+                    // Normalise class descriptor → dot notation
+                    String dotClass = smaliClass.startsWith("L") && smaliClass.endsWith(";")
+                            ? smaliClass.substring(1, smaliClass.length() - 1).replace('/', '.')
+                            : smaliClass;
+
+                    // If this class is already selected whole, no need to add method entry
+                    if (!classEntries.contains(dotClass)) {
+                        methodEntries.computeIfAbsent(dotClass,
+                                k -> new java.util.LinkedHashSet<>()).add(methodName);
+                    }
+                } else {
+                    // Whole-class entry — normalise smali → dot
+                    String cls = entry;
+                    if (cls.startsWith("L") && cls.endsWith(";")) {
+                        cls = cls.substring(1, cls.length() - 1).replace('/', '.');
+                    }
+                    if (!cls.isEmpty()) {
+                        classEntries.add(cls);
+                        methodEntries.remove(cls); // whole-class supersedes method entries
+                    }
                 }
+            }
 
-                if (!cls.isEmpty()) {
-                    sb.append("class ").append(cls).append(" { *; }\n");
+            // Build SimpleRules text
+            StringBuilder sb = new StringBuilder();
+            // Whole-class entries → { *; }
+            for (String cls : classEntries) {
+                sb.append("class ").append(cls).append(" { *; }\n");
+            }
+            // Method-specific entries → { methodA; methodB; }
+            for (java.util.Map.Entry<String, java.util.LinkedHashSet<String>> e
+                    : methodEntries.entrySet()) {
+                sb.append("class ").append(e.getKey()).append(" {\n");
+                for (String m : e.getValue()) {
+                    sb.append("    ").append(m).append(";\n");
                 }
+                sb.append("}\n");
             }
             rulesText = sb.toString();
         }

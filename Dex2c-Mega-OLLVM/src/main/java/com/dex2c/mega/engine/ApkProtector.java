@@ -4,8 +4,12 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Environment;
+import com.dex2c.mega.engine.vmp.DexConfig;
+import com.dex2c.mega.engine.vmp.GlobalDexConfig;
 import com.dex2c.mega.ui.SettingsFragment;
 import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.zip.*;
 
@@ -189,9 +193,30 @@ public class ApkProtector {
         // soFile alias — used for the SO integrity hash below (arm64-v8a canonical)
         File soFile = primarySoFile;
 
-        // ── 7. Strip bytecode from DEX via vova7878/DexFile ──────────
+        // ── 7. Strip bytecode from DEX via vova7878/DexFile ──────────────────
         report(70, "Stripping bytecode…");
-        Set<String> compiledKeys = transpileResult.compiled.keySet();
+
+        // In VMP mode the bytecode has already been stripped by Dex2c.handleAllDex()
+        // into shell DEX files (classes_shell.dex, classes2_shell.dex, …).
+        // We must swap those shell DEX files back into dexDir BEFORE running
+        // Tier1DexPatcher, otherwise the patcher works on the unmodified originals.
+        //
+        // We also build sentinel compiledKeys from the VMP GlobalDexConfig so that
+        // Tier1DexPatcher's targetTypes set is populated for each converted class —
+        // this causes the patcher to enter the "target class" branch and inject
+        // System.loadLibrary into every <clinit> (or synthesise one if absent).
+        // The sentinel keys don't match any real method signature, so every already-
+        // native method in the shell DEX simply passes through the else-branch
+        // unchanged.  No double-nativing, no data loss.
+        Set<String> compiledKeys;
+        if (useVmp && transpileResult.vmpConfig != null) {
+            compiledKeys = buildVmpCompiledKeys(transpileResult.vmpConfig, dexDir);
+            report(70, "VMP: swapped " + transpileResult.vmpConfig.getConfigs().size()
+                    + " shell DEX file(s) into patch dir");
+        } else {
+            compiledKeys = transpileResult.compiled.keySet();
+        }
+
         int stripped = Tier1DexPatcher.patchAll(dexDir, compiledKeys, libName,
                 msg -> report(71, msg));
         report(78, "Stripped " + stripped + " method(s) — bytecode gone");
@@ -642,6 +667,58 @@ public class ApkProtector {
             while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
         }
         return dest;
+    }
+
+    /**
+     * VMP shell-DEX swap + sentinel compiledKeys builder.
+     *
+     * Dex2c.handleAllDex() produces one shell DEX per input DEX
+     * (e.g. "classes_shell.dex" for "classes.dex").  Each shell DEX already
+     * has every VMP-converted method marked ACC_NATIVE with null implementation.
+     * We copy them back over the originals in dexDir so Tier1DexPatcher works
+     * on the already-patched DEX instead of the untouched originals.
+     *
+     * We also return a sentinel compiledKeys set: one fake method key per
+     * converted class (e.g. "Lcom/foo/Bar;->_vmp_(V)V").  This populates
+     * Tier1DexPatcher's internal targetTypes so the patcher:
+     *   (a) enters the "target class" branch for every VMP-converted class
+     *   (b) injects System.loadLibrary into <clinit> (or synthesises one)
+     *   (c) merges the fonts/Metrics guard class into the first patched DEX
+     * No real method key matches the sentinel, so already-native methods pass
+     * through the else-branch unchanged — no double-patching.
+     *
+     * @param vmpConfig  GlobalDexConfig returned by Dex2c.handleAllDex()
+     * @param dexDir     directory holding the original extracted DEX files
+     * @return sentinel compiledKeys ready to pass to Tier1DexPatcher.patchAll()
+     */
+    private Set<String> buildVmpCompiledKeys(GlobalDexConfig vmpConfig,
+                                             File dexDir) throws IOException {
+        Set<String> keys = new HashSet<>();
+        for (DexConfig cfg : vmpConfig.getConfigs()) {
+            // ── Swap shell DEX back into dexDir ──────────────────────────────
+            File shellDex = cfg.getShellDexFile();   // e.g. c_src/vmp/classes_shell.dex
+            if (shellDex.exists()) {
+                // getDexName() == "classes" for classes.dex, "classes2" for classes2.dex
+                File target = new File(dexDir, cfg.getDexName() + ".dex");
+                Files.copy(shellDex.toPath(), target.toPath(),
+                        StandardCopyOption.REPLACE_EXISTING);
+                android.util.Log.i("ApkProtector",
+                        "VMP shell DEX swapped: " + shellDex.getName()
+                                + " → " + target.getName());
+            }
+
+            // ── Build one sentinel key per converted class ────────────────────
+            // Format: "L<class/path/Name>;->_vmp_(V)V"
+            // Tier1DexPatcher extracts the part before "->" to build targetTypes.
+            Set<String> handled = cfg.getHandledNativeClasses();
+            if (handled != null) {
+                for (String className : handled) {
+                    // className is "com/foo/Bar" (no L...;)
+                    keys.add("L" + className + ";->_vmp_(V)V");
+                }
+            }
+        }
+        return keys;
     }
 
     private void copyFile(File src, File dst) throws IOException {

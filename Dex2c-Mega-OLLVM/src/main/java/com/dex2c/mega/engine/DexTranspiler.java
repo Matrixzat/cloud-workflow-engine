@@ -13,6 +13,8 @@ import com.dex2c.mega.engine.vmp.filters.SimpleConvertConfig;
 import com.dex2c.mega.engine.vmp.filters.SimpleRules;
 
 import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -141,12 +143,27 @@ public class DexTranspiler {
                     dexFiles, filter, rewriter, classAnalyzer, vmpOutDir);
 
             result.vmpConfig = vmpConfig;
-            // Register the generated C files so NdkBuilder picks them up
-            File nativeFuncs = new File(vmpOutDir, "native_functions.c");
-            if (nativeFuncs.exists())
-                result.compiled.put("vmp_native_functions", nativeFuncs.getAbsolutePath());
 
-            progress(cb, "VMP: done — " + result.compiled.size() + " C files generated.");
+            // Register ALL generated C files so NdkBuilder compiles every one:
+            //   classes_native_functions.c  — method bodies as vmCode[] structs
+            //   classes_resolver.c          — RegisterNatives table
+            //   jni_init.c                  — JNI_OnLoad that calls each *_setup()
+            // We glob the whole vmpOutDir rather than hardcoding names so multi-DEX
+            // APKs (classes.dex + classes2.dex → two native_functions files) all land.
+            File[] cFiles = vmpOutDir.listFiles(f -> f.getName().endsWith(".c"));
+            if (cFiles != null) {
+                for (File cf : cFiles) {
+                    // Also copy each .c file one level up into outputDir (= cSourceDir)
+                    // so NdkBuilder's single-directory compile pass picks them up.
+                    File dest = new File(outputDir, cf.getName());
+                    Files.copy(cf.toPath(), dest.toPath(),
+                            StandardCopyOption.REPLACE_EXISTING);
+                    result.compiled.put("vmp_" + cf.getName(), dest.getAbsolutePath());
+                    Log.d(TAG, "VMP C file registered: " + cf.getName());
+                }
+            }
+
+            progress(cb, "VMP: done — " + result.compiled.size() + " C file(s) registered.");
         } catch (Exception e) {
             Log.e(TAG, "VMP transpile failed", e);
             result.errors.add("VMP error: " + e.getMessage());

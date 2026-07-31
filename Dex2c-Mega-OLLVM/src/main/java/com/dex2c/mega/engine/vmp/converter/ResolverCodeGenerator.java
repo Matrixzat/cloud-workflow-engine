@@ -35,7 +35,8 @@ public class ResolverCodeGenerator {
 
     public void generate(Writer writer) throws IOException {
         writer.write("#include \"GlobalCache.h\"\n");
-        writer.write("#include \"ConstantPool.h\"\n\n");
+        writer.write("#include \"ConstantPool.h\"\n");
+        writer.write("#include \"vm.h\"\n\n");       // vmField, vmMethod types
         writer.write("#include <pthread.h>\n\n\n");
 
         generateStringPool(writer);

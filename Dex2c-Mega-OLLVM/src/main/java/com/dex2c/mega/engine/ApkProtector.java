@@ -4,8 +4,13 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Environment;
+import com.android.tools.smali.dexlib2.dexbacked.DexBackedDexFile;
+import com.android.tools.smali.dexlib2.writer.io.FileDataStore;
+import com.android.tools.smali.dexlib2.writer.pool.DexPool;
+import com.android.tools.smali.dexlib2.iface.ClassDef;
 import com.dex2c.mega.engine.vmp.DexConfig;
 import com.dex2c.mega.engine.vmp.GlobalDexConfig;
+import com.dex2c.mega.engine.vmp.converter.structs.RegisterNativesUtilClassDef;
 import com.dex2c.mega.ui.SettingsFragment;
 import java.io.*;
 import java.nio.file.Files;
@@ -210,7 +215,7 @@ public class ApkProtector {
         // unchanged.  No double-nativing, no data loss.
         Set<String> compiledKeys;
         if (useVmp && transpileResult.vmpConfig != null) {
-            compiledKeys = buildVmpCompiledKeys(transpileResult.vmpConfig, dexDir);
+            compiledKeys = buildVmpCompiledKeys(transpileResult.vmpConfig, dexDir, libName);
             report(70, "VMP: swapped " + transpileResult.vmpConfig.getConfigs().size()
                     + " shell DEX file(s) into patch dir");
         } else {
@@ -692,7 +697,8 @@ public class ApkProtector {
      * @return sentinel compiledKeys ready to pass to Tier1DexPatcher.patchAll()
      */
     private Set<String> buildVmpCompiledKeys(GlobalDexConfig vmpConfig,
-                                             File dexDir) throws IOException {
+                                             File dexDir,
+                                             String libName) throws IOException {
         Set<String> keys = new HashSet<>();
         for (DexConfig cfg : vmpConfig.getConfigs()) {
             // ── Swap shell DEX back into dexDir ──────────────────────────────
@@ -708,16 +714,57 @@ public class ApkProtector {
             }
 
             // ── Build one sentinel key per converted class ────────────────────
-            // Format: "L<class/path/Name>;->_vmp_(V)V"
-            // Tier1DexPatcher extracts the part before "->" to build targetTypes.
             Set<String> handled = cfg.getHandledNativeClasses();
             if (handled != null) {
                 for (String className : handled) {
-                    // className is "com/foo/Bar" (no L...;)
                     keys.add("L" + className + ";->_vmp_(V)V");
                 }
             }
         }
+
+        // ── Inject NativeUtil into the main classes.dex ───────────────────────
+        // NativeUtil is a synthetic class that:
+        //   • has a static { System.loadLibrary(libName); } block
+        //   • declares one static native method per DEX: classesInit0(I)V,
+        //     classes2Init0(I)V, etc.
+        // RegisterNativesCallerClassDef injects a <clinit> call to the matching
+        // method in each VMP-protected class, so the native methods get registered
+        // before any protected method is invoked.
+        File mainDex = new File(dexDir, "classes.dex");
+        if (mainDex.exists() && !vmpConfig.getConfigs().isEmpty()) {
+            try {
+                List<String> nativeMethodNames = new ArrayList<>();
+                for (DexConfig cfg : vmpConfig.getConfigs()) {
+                    nativeMethodNames.add(cfg.getRegisterNativesMethodName());
+                }
+                String nativeUtilType = "L"
+                        + vmpConfig.getConfigs().get(0).getRegisterNativesClassName() + ";";
+
+                DexBackedDexFile dexFile = DexBackedDexFile.fromInputStream(
+                        null,
+                        new java.io.BufferedInputStream(new java.io.FileInputStream(mainDex)));
+                DexPool dexPool = new DexPool(dexFile.getOpcodes());
+
+                // Copy all existing classes
+                for (ClassDef cls : dexFile.getClasses()) {
+                    dexPool.internClass(cls);
+                }
+
+                // Add synthetic NativeUtil
+                dexPool.internClass(new RegisterNativesUtilClassDef(
+                        nativeUtilType, nativeMethodNames, libName));
+
+                // Write back
+                dexPool.writeTo(new FileDataStore(mainDex));
+                android.util.Log.i("ApkProtector",
+                        "VMP: injected NativeUtil (" + nativeMethodNames.size()
+                                + " native method(s)) into classes.dex");
+            } catch (Exception e) {
+                android.util.Log.e("ApkProtector",
+                        "VMP: failed to inject NativeUtil — " + e.getMessage(), e);
+            }
+        }
+
         return keys;
     }
 

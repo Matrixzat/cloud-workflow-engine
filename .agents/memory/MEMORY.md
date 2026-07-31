@@ -1,2 +1,3 @@
 - [VMP JNI_OnLoad ownership](vmp-jni-onload.md) — jni_init.cpp (not .c) owns JNI_OnLoad in VMP mode; NdkBuilder detects it by filename to set -DD2C_HAS_JNILOAD
 - [VMP NativeUtil injection](vmp-nativeutil.md) — NativeUtil is a synthetic DEX class injected into classes.dex at protect-time; missing = RegisterNatives silently fails → crash
+- [VMP VM runtime source files](vmp-vm-runtime-source.md) — 7 VM .cpp/.c files bundled in assets/vmp_src/ and compiled by NdkBuilder; without them vmInterpret() is unresolved at link time

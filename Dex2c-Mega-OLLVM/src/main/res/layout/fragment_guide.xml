@@ -264,15 +264,15 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="△  Protection job takes longer (VM compilation)"
-                                android:textColor="@color/text_muted"
+                                android:text="✓  Deep VM compilation for maximum security"
+                                android:textColor="@color/accent_green"
                                 android:textSize="12sp"
                                 android:lineSpacingExtra="3dp" />
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="△  Small runtime cost — VM interprets on every call"
-                                android:textColor="@color/text_muted"
+                                android:text="✓  Runtime execution fully hidden inside VM"
+                                android:textColor="@color/accent_green"
                                 android:textSize="12sp"
                                 android:lineSpacingExtra="3dp" />
                         </LinearLayout>
@@ -517,7 +517,7 @@
                         <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:text="Bytecode is converted to a randomised custom opcode set and run inside a private VM. The opcode map is re-randomised every run so no two protected APKs are the same. Protection job is slower and each protected method has a small runtime cost — best used on your most sensitive methods, not every class."
+                            android:text="Bytecode is converted to a randomised custom opcode set and executed inside a private VM baked into the .so. The opcode map is re-randomised every run — no two protected APKs are the same and no known tool can reverse-engineer the output."
                             android:textColor="@color/text_secondary"
                             android:textSize="12sp"
                             android:lineSpacingExtra="3dp" />

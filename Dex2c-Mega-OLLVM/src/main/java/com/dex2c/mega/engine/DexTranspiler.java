@@ -150,28 +150,23 @@ public class DexTranspiler {
             //   jni_init.c                  — JNI_OnLoad that calls each *_setup()
             // We glob the whole vmpOutDir rather than hardcoding names so multi-DEX
             // APKs (classes.dex + classes2.dex → two native_functions files) all land.
-            File[] cFiles = vmpOutDir.listFiles(f -> f.getName().endsWith(".c"));
-            if (cFiles != null) {
-                for (File cf : cFiles) {
-                    // Also copy each .c file one level up into outputDir (= cSourceDir)
-                    // so NdkBuilder's single-directory compile pass picks them up.
-                    File dest = new File(outputDir, cf.getName());
-                    Files.copy(cf.toPath(), dest.toPath(),
+            // Glob all generated source files (.c and .cpp — jni_init is now .cpp)
+            // and headers (.h) from vmpOutDir into outputDir (= cSourceDir).
+            File[] srcFiles = vmpOutDir.listFiles(f -> {
+                String n = f.getName();
+                return n.endsWith(".c") || n.endsWith(".cpp") || n.endsWith(".h");
+            });
+            if (srcFiles != null) {
+                for (File sf : srcFiles) {
+                    File dest = new File(outputDir, sf.getName());
+                    Files.copy(sf.toPath(), dest.toPath(),
                             StandardCopyOption.REPLACE_EXISTING);
-                    result.compiled.put("vmp_" + cf.getName(), dest.getAbsolutePath());
-                    Log.d(TAG, "VMP C file registered: " + cf.getName());
-                }
-            }
-
-            // Also copy any generated .h files (e.g. classes_resolver.h) so that
-            // native_functions.c can #include them via the file's own directory.
-            File[] hFiles = vmpOutDir.listFiles(f -> f.getName().endsWith(".h"));
-            if (hFiles != null) {
-                for (File hf : hFiles) {
-                    File dest = new File(outputDir, hf.getName());
-                    Files.copy(hf.toPath(), dest.toPath(),
-                            StandardCopyOption.REPLACE_EXISTING);
-                    Log.d(TAG, "VMP header copied: " + hf.getName());
+                    if (sf.getName().endsWith(".h")) {
+                        Log.d(TAG, "VMP header copied: " + sf.getName());
+                    } else {
+                        result.compiled.put("vmp_" + sf.getName(), dest.getAbsolutePath());
+                        Log.d(TAG, "VMP source registered: " + sf.getName());
+                    }
                 }
             }
 
@@ -301,8 +296,11 @@ public class DexTranspiler {
                                              ClassAnalyzer classAnalyzer) throws IOException {
         String rulesText = filterText;
         if (!filterText.contains("class ")) {
-            // classEntry  → full class coverage   ("com.example.MyClass")
-            // methodEntry → class → [method, ...]
+            // Collect whole-class entries and per-method entries independently.
+            // Nothing supersedes — both manual tree and class-paste are fully honoured.
+            // If the same class appears as whole AND with specific methods, SimpleRules
+            // stores both MethodRules under the same ClassRule key; { *; } then matches
+            // any method so all methods get VMP'd — correct behaviour.
             java.util.LinkedHashSet<String> classEntries = new java.util.LinkedHashSet<>();
             java.util.LinkedHashMap<String, java.util.LinkedHashSet<String>> methodEntries =
                     new java.util.LinkedHashMap<>();
@@ -314,23 +312,16 @@ public class DexTranspiler {
                 if (entry.contains("->")) {
                     // Method-level: "Lcom/example/MyClass;->foo()V"
                     int arrow = entry.indexOf("->");
-                    String smaliClass = entry.substring(0, arrow); // "Lcom/example/MyClass;"
-                    String rest       = entry.substring(arrow + 2); // "foo()V"
-                    // Extract bare method name (strip descriptor)
+                    String smaliClass = entry.substring(0, arrow);
+                    String rest       = entry.substring(arrow + 2);
                     int paren = rest.indexOf('(');
                     String methodName = paren > 0 ? rest.substring(0, paren) : rest;
-
-                    // Skip constructors — BasicKeepConfig also rejects them,
-                    // but skip here for clarity (<init>, <clinit>)
                     if ("<init>".equals(methodName) || "<clinit>".equals(methodName)) continue;
 
-                    // Normalise class descriptor → dot notation
                     String dotClass = smaliClass.startsWith("L") && smaliClass.endsWith(";")
                             ? smaliClass.substring(1, smaliClass.length() - 1).replace('/', '.')
                             : smaliClass;
-
-                    // If this class is already selected whole, no need to add method entry
-                    if (!classEntries.contains(dotClass)) {
+                    if (!dotClass.isEmpty()) {
                         methodEntries.computeIfAbsent(dotClass,
                                 k -> new java.util.LinkedHashSet<>()).add(methodName);
                     }
@@ -340,26 +331,19 @@ public class DexTranspiler {
                     if (cls.startsWith("L") && cls.endsWith(";")) {
                         cls = cls.substring(1, cls.length() - 1).replace('/', '.');
                     }
-                    if (!cls.isEmpty()) {
-                        classEntries.add(cls);
-                        methodEntries.remove(cls); // whole-class supersedes method entries
-                    }
+                    if (!cls.isEmpty()) classEntries.add(cls);
                 }
             }
 
-            // Build SimpleRules text
+            // Build SimpleRules text — whole-class first, then per-method
             StringBuilder sb = new StringBuilder();
-            // Whole-class entries → { *; }
             for (String cls : classEntries) {
                 sb.append("class ").append(cls).append(" { *; }\n");
             }
-            // Method-specific entries → { methodA; methodB; }
             for (java.util.Map.Entry<String, java.util.LinkedHashSet<String>> e
                     : methodEntries.entrySet()) {
                 sb.append("class ").append(e.getKey()).append(" {\n");
-                for (String m : e.getValue()) {
-                    sb.append("    ").append(m).append(";\n");
-                }
+                for (String m : e.getValue()) sb.append("    ").append(m).append(";\n");
                 sb.append("}\n");
             }
             rulesText = sb.toString();

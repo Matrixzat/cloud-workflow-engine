@@ -464,21 +464,31 @@ public class NdkBuilder {
             compileFlags.add("-D__ANDROID__");
             compileFlags.add("-DANDROID");
 
-            // When the obfuscator generated jni_onload.cpp, it owns JNI_OnLoad.
-            // We must patch it to call fonts_register_natives() so that
-            // guard.Metrics.measure() is resolvable when attachBaseContext() fires.
+            // Detect which file owns JNI_OnLoad:
+            //   dex2c mode → transpiler generates jni_onload.cpp (patch + -DD2C_HAS_JNILOAD)
+            //   VMP mode   → GlobalDexConfig generates jni_init.cpp which already contains
+            //                the full guard bootstrap + classloader capture — no patch needed,
+            //                just set -DD2C_HAS_JNILOAD so Dex2C_impl.cpp + fonts_jni_stub.cpp
+            //                do NOT emit their own JNI_OnLoad (duplicate symbol otherwise).
             boolean hasJniOnload = false;
             File jniOnloadFile = null;
+            boolean isVmpJniInit = false;
             for (File f : generatedFiles) {
                 if ("jni_onload.cpp".equals(f.getName())) {
                     hasJniOnload = true;
                     jniOnloadFile = f;
                     break;
                 }
+                if ("jni_init.cpp".equals(f.getName())) {
+                    hasJniOnload = true;
+                    isVmpJniInit = true;
+                    // jni_init.cpp already has fonts_register_natives + classloader capture
+                    // baked in by GlobalDexConfig — no patchJniOnload() call needed.
+                }
             }
             if (hasJniOnload) {
                 compileFlags.add("-DD2C_HAS_JNILOAD");
-                patchJniOnload(jniOnloadFile);
+                if (!isVmpJniInit) patchJniOnload(jniOnloadFile); // dex2c path only
             }
 
             // ── LAYER 3: OLLVM obfuscation passes ────────────────────────────

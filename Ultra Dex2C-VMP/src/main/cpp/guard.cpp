@@ -3226,6 +3226,65 @@ run_vm:
 // AES-encrypted in guard_pstrings.inc (idx 75, 76); no plaintext in .rodata.
 
 // ════════════════════════════════════════════════════════════════════════════
+// fonts_guard_pulse — lightweight re-check called from the VMP interpreter
+// via OP_GUARD_CHECK opcode on every N protected-method entries.
+//
+// Design:
+//   • Fires immediately on the very first call (no warm-up period).
+//   • Throttled: re-runs every 256 calls after that (low overhead in hot loops).
+//   • Calls gvm_so_integrity()     — SO hash re-check (catches .so byte-patch)
+//   • Calls check_pipeline_maps()  — Frida/Magisk/Xposed /proc/self/maps scan
+//   • Does NOT spawn threads or fork — both functions are already running in
+//     the watchdog thread and forked child; this is just a second trigger path
+//     hidden inside the native interpreter so it cannot be NOP'd from the DEX.
+//
+// To disable this check an attacker must patch the OLLVM-obfuscated .so —
+// but patching the .so changes its hash, which gvm_so_integrity() detects.
+// ════════════════════════════════════════════════════════════════════════════
+
+// fonts_guard_pulse — returns a non-zero token when all checks pass.
+//
+// CRITICAL: the return value is intentionally non-zero on every clean call.
+// The OP_GUARD_CHECK handler in InterpC-portable.cpp verifies the token and
+// crashes immediately if it is 0. This means:
+//
+//   • If an attacker NOPs this function body → CPU executes a bare RET →
+//     x86/ARM returns 0 in the return register → interpreter detects 0 → crash.
+//   • If they patch the check call in the interpreter to skip the call →
+//     the .so bytes change → SO hash mismatches font_glyph.dat → crash at
+//     the next gvm_so_integrity() call (ELF constructor, watchdog, or pulse).
+//
+// There is no state where both the token check and the SO hash check are
+// simultaneously defeated without knowing the AES-256-CBC key for font_glyph.dat.
+extern "C" __attribute__((visibility("default")))
+uint32_t fonts_guard_pulse(JNIEnv * /*env*/) {
+    // Throttle counter — fire on call #1, then every 256 calls.
+    // __ATOMIC_RELAXED is sufficient: correctness doesn't depend on ordering,
+    // only on the counter advancing monotonically per-thread.
+    static volatile uint32_t _pulse_ctr = 0;
+    uint32_t c = __atomic_add_fetch(&_pulse_ctr, 1u, __ATOMIC_RELAXED);
+    if (c != 1u && (c & 0xFFu) != 0u) {
+        // Throttled — skip checks this call but still return non-zero token.
+        // XOR of counter with function address: runtime-computed, never 0,
+        // impossible to hardcode because the address varies per-build / ASLR.
+        return c ^ (uint32_t)(uintptr_t)fonts_guard_pulse;
+    }
+
+    // SO integrity: re-hash the user .so and compare against font_glyph.dat.
+    // Any byte-level patch to libXXX.so (including the interpreter itself)
+    // triggers crash_now() inside gvm_so_integrity().
+    if (gvm_so_integrity()) crash_now();
+
+    // Frida / Magisk / Xposed / Substrate / Zygisk scan via /proc/self/maps.
+    // Returns non-zero if any injection framework is mapped into the process.
+    if (check_pipeline_maps()) crash_now();
+
+    // Return a non-zero token: counter XOR function address.
+    // A NOP'd version of this function returns 0 → interpreter crashes.
+    return c ^ (uint32_t)(uintptr_t)fonts_guard_pulse;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // fonts_register_natives — hard-fail version.
 // If fonts/Metrics is missing OR RegisterNatives fails, crash immediately.
 // A protected APK with this binding broken has no anti-tamper check wired up

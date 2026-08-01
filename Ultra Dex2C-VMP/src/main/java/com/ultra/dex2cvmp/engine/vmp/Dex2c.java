@@ -26,6 +26,10 @@ import java.io.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 public class Dex2c {
 
@@ -54,6 +58,41 @@ public class Dex2c {
     }
 
     /**
+     * Holds the method lists computed for one class during the parallel phase
+     * of splitDex().  The serial phase then calls internClass() in original
+     * DEX order — which is required for deterministic pool ordering.
+     */
+    private static final class ClassBuildResult {
+        final ClassDef classDef;
+        final boolean accepted;
+        // non-null only when accepted == true
+        final List<Method> shellDirect;
+        final List<Method> shellVirtual;
+        final List<Method> implDirect;
+        final List<Method> implVirtual;
+        // one entry per converted method (pair.first); added to shellMethods multimap
+        final List<List<? extends Method>> shellMethodEntries;
+
+        /** Rejected — pass the class through to shellDexPool unchanged. */
+        ClassBuildResult(ClassDef cd) {
+            classDef = cd; accepted = false;
+            shellDirect = shellVirtual = implDirect = implVirtual = null;
+            shellMethodEntries = null;
+        }
+
+        /** Accepted — carries the fully-computed method lists. */
+        ClassBuildResult(ClassDef cd,
+                         List<Method> sd, List<Method> sv,
+                         List<Method> id, List<Method> iv,
+                         List<List<? extends Method>> sme) {
+            classDef = cd; accepted = true;
+            shellDirect = sd; shellVirtual = sv;
+            implDirect = id; implVirtual = iv;
+            shellMethodEntries = sme;
+        }
+    }
+
+    /**
      * 处理多个dex文件
      *
      * @param dexFiles dex文件列表
@@ -69,13 +108,36 @@ public class Dex2c {
         if (!outDir.exists()) outDir.mkdirs();
         final GlobalDexConfig globalConfig = new GlobalDexConfig(outDir);
 
+        // ── Parallel DEX processing ───────────────────────────────────────────
+        // Each DEX file writes to its own output files (shell/impl DEX, C files).
+        // ClassAnalyzer is read-only after construction → safe for concurrent reads.
+        int threads = Math.max(1, Math.min(dexFiles.size(),
+                Runtime.getRuntime().availableProcessors()));
+        ExecutorService exec = Executors.newFixedThreadPool(threads);
+        List<Future<DexConfig>> futures = new ArrayList<>(dexFiles.size());
+
         for (File file : dexFiles) {
-            final DexConfig config = handleDex(file, filter, classAnalyzer, instructionRewriter, outDir);
+            futures.add(exec.submit(() -> {
+                DexConfig cfg = handleDex(file, filter, classAnalyzer,
+                        instructionRewriter, outDir);
+                cfg.setShellMethods(null);
+                return cfg;
+            }));
+        }
+        exec.shutdown();
 
-            //不需要给外部
-            config.setShellMethods(null);
-
-            globalConfig.addDexConfig(config);
+        // Collect in original order (preserves classes.dex / classes2.dex ordering)
+        for (Future<DexConfig> future : futures) {
+            try {
+                globalConfig.addDexConfig(future.get());
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause();
+                if (cause instanceof IOException) throw (IOException) cause;
+                throw new IOException("DEX processing failed", cause);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("DEX processing interrupted", e);
+            }
         }
         globalConfig.generateJniInitCode();
         return globalConfig;
@@ -158,50 +220,73 @@ public class Dex2c {
 
         //把方法变为本地方法,用它替换掉原本的dex
         DexPool shellDexPool = new DexPool(originDexFile.getOpcodes());
-
         DexPool nativeImplDexPool = new DexPool(originDexFile.getOpcodes());
 
         final MethodConverter methodConverter = new MethodConverter(classAnalyzer);
-
         HashMultimap<String, List<? extends Method>> shellMethods = HashMultimap.create();
 
-        for (final ClassDef classDef : originDexFile.getClasses()) {
-            if (filter.acceptClass(classDef)) {
-                final ArrayList<Method> shellDirectMethods = new ArrayList<>();
-                final ArrayList<Method> shellVirtualMethods = new ArrayList<>();
+        // ── Parallel class processing ─────────────────────────────────────────
+        // Phase 1 (parallel): method conversion is pure computation — it reads
+        //   read-only dexlib2 objects and ClassAnalyzer (read-only after init).
+        // Phase 2 (serial):   DexPool.internClass() is not thread-safe; intern
+        //   in the same order as the original DEX to guarantee deterministic output.
+        List<ClassDef> classes = new ArrayList<>(originDexFile.getClasses());
+        int threads = Math.max(1, Math.min(classes.size(),
+                Runtime.getRuntime().availableProcessors()));
+        ExecutorService exec = Executors.newFixedThreadPool(threads);
+        List<Future<ClassBuildResult>> futures = new ArrayList<>(classes.size());
 
-                final ArrayList<Method> implDirectMethods = new ArrayList<>();
-                final ArrayList<Method> implVirtualMethods = new ArrayList<>();
+        for (final ClassDef classDef : classes) {
+            futures.add(exec.submit(() -> {
+                if (!filter.acceptClass(classDef)) {
+                    return new ClassBuildResult(classDef);
+                }
+                ArrayList<Method> shellDirect = new ArrayList<>();
+                ArrayList<Method> shellVirtual = new ArrayList<>();
+                ArrayList<Method> implDirect  = new ArrayList<>();
+                ArrayList<Method> implVirtual = new ArrayList<>();
+                ArrayList<List<? extends Method>> shellEntries = new ArrayList<>();
 
-                // 处理所有需要转换的方法
                 for (Method method : classDef.getMethods()) {
-                    if (filter.acceptMethod(method)
-                        // 有直接调用jna方法的指令,则不能进行native化
-                        // 感觉很少会发生,默认就把这个判断注释掉了,谁需要再去掉注释
-//                            && !classAnalyzer.hasCallJnaMethod(method)
-                    ) {
-                        final Pair<List<? extends Method>, Method> pair = methodConverter.convert(method);
-                        // 转换后可能出现变为多个方法
-                        addMethods(shellDirectMethods, shellVirtualMethods, pair.first);
-
-                        //记录当前类，所有需要被修改的方法
-                        shellMethods.put(classDef.getType(), pair.first);
-
-                        //只有一个具体实现
-                        addMethod(implDirectMethods, implVirtualMethods, pair.second);
+                    if (filter.acceptMethod(method)) {
+                        final Pair<List<? extends Method>, Method> pair =
+                                methodConverter.convert(method);
+                        addMethods(shellDirect, shellVirtual, pair.first);
+                        shellEntries.add(pair.first);
+                        addMethod(implDirect, implVirtual, pair.second);
                     } else {
-                        //不需要进行处理
-                        addMethod(shellDirectMethods, shellVirtualMethods, method);
+                        addMethod(shellDirect, shellVirtual, method);
                     }
                 }
+                return new ClassBuildResult(classDef,
+                        shellDirect, shellVirtual, implDirect, implVirtual, shellEntries);
+            }));
+        }
+        exec.shutdown();
 
-                //把需要转换的方法设为native
-                shellDexPool.internClass(new MyClassDef(classDef, shellDirectMethods, shellVirtualMethods));
-                //收集所有需要转换的方法生成新dex
-                nativeImplDexPool.internClass(new MyClassDef(classDef, implDirectMethods, implVirtualMethods));
+        // Phase 2 — serial intern (preserves original DEX class ordering)
+        for (Future<ClassBuildResult> future : futures) {
+            final ClassBuildResult r;
+            try {
+                r = future.get();
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause();
+                if (cause instanceof IOException) throw (IOException) cause;
+                throw new IOException("Class conversion failed", cause);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Class conversion interrupted", e);
+            }
+            if (r.accepted) {
+                shellDexPool.internClass(
+                        new MyClassDef(r.classDef, r.shellDirect, r.shellVirtual));
+                nativeImplDexPool.internClass(
+                        new MyClassDef(r.classDef, r.implDirect, r.implVirtual));
+                for (List<? extends Method> entry : r.shellMethodEntries) {
+                    shellMethods.put(r.classDef.getType(), entry);
+                }
             } else {
-                //不需要处理的class,直接复制
-                shellDexPool.internClass(classDef);
+                shellDexPool.internClass(r.classDef);
             }
         }
         DexConfig config = new DexConfig(outDir, dexFileName);

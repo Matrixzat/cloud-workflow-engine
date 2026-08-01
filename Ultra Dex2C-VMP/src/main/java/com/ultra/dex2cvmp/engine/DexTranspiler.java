@@ -128,10 +128,28 @@ public class DexTranspiler {
                 return result;
             }
             progress(cb, "VMP: parsing class hierarchy…");
+            // buildClassAnalyzer runs on ALL DEX files — needed for correct
+            // virtual-method dispatch resolution during VMP conversion.
             ClassAnalyzer classAnalyzer = buildClassAnalyzer(dexFiles);
 
             progress(cb, "VMP: building filter rules…");
             ClassAndMethodFilter filter = buildFilter(filterText, classAnalyzer);
+
+            // ── Smart DEX targeting ─────────────────────────────────────────
+            // Identify which DEX files actually contain the user's target classes.
+            // DEX files with no target classes ("cold") are skipped by handleAllDex;
+            // they remain in dexDir untouched so ApkRebuilder includes them as-is.
+            Set<String> targetDescriptors = parseTargetDescriptors(filterText);
+            List<File> hotDexFiles = filterHotDexFiles(dexFiles, targetDescriptors, cb);
+            if (hotDexFiles.isEmpty()) {
+                // Fallback: target classes not found in index — process all DEX files
+                Log.w(TAG, "VMP smart targeting: no matches found, falling back to full scan");
+                hotDexFiles = dexFiles;
+            } else if (hotDexFiles.size() < dexFiles.size()) {
+                progress(cb, "VMP: smart targeting — " + hotDexFiles.size()
+                        + " hot / " + (dexFiles.size() - hotDexFiles.size())
+                        + " cold DEX files (cold skipped)");
+            }
 
             // Random opcode map — different every protect run
             RandomInstructionRewriter rewriter = new RandomInstructionRewriter();
@@ -141,7 +159,7 @@ public class DexTranspiler {
             if (!vmpOutDir.exists()) vmpOutDir.mkdirs();
 
             GlobalDexConfig vmpConfig = Dex2c.handleAllDex(
-                    dexFiles, filter, rewriter, classAnalyzer, vmpOutDir,
+                    hotDexFiles, filter, rewriter, classAnalyzer, vmpOutDir,
                     msg -> progress(cb, msg));
 
             result.vmpConfig = vmpConfig;
@@ -468,6 +486,114 @@ public class DexTranspiler {
         try (FileWriter fw = new FileWriter(dest)) {
             fw.write(result);
         }
+    }
+
+    /**
+     * Extract smali class descriptors (e.g. "Lcom/foo/Bar;") from filter text
+     * without building a full ClassAndMethodFilter.  Used by filterHotDexFiles
+     * to identify target classes before committing to a full DEX parse.
+     *
+     * Handles all four filter formats:
+     *   1. NMMP SimpleRules  : "class com.foo.Bar { *; }"
+     *   2. Dot-notation      : "com.example.MyClass"
+     *   3. Smali whole-class : "Lcom/example/MyClass;"
+     *   4. Smali method      : "Lcom/example/MyClass;->foo()V"
+     */
+    private static Set<String> parseTargetDescriptors(String filterText) {
+        Set<String> descriptors = new HashSet<>();
+        for (String line : filterText.split("\\r?\\n")) {
+            String entry = line.trim();
+            if (entry.isEmpty() || entry.startsWith("#")) continue;
+
+            String cls = null;
+            if (entry.startsWith("class ")) {
+                // SimpleRules: "class com.foo.Bar { ... }"
+                String body = entry.substring(6).trim();
+                int brace = body.indexOf('{');
+                cls = (brace > 0 ? body.substring(0, brace) : body).trim();
+                // dot → smali
+                cls = 'L' + cls.replace('.', '/') + ';';
+            } else {
+                // Strip method part if present
+                int arrow = entry.indexOf("->");
+                String clsPart = arrow >= 0 ? entry.substring(0, arrow) : entry;
+
+                // Strip trailing semicolon ambiguity from method entries without arrow:
+                // "com/foo/Bar;methodName(I)V" — split at first ";" before "("
+                if (arrow < 0 && clsPart.contains("(")) {
+                    int paren = clsPart.indexOf('(');
+                    int semi  = clsPart.lastIndexOf(';', paren);
+                    if (semi >= 0) clsPart = clsPart.substring(0, semi + 1);
+                }
+
+                // Normalise → "Lcom/foo/Bar;"
+                if (clsPart.startsWith("L") && clsPart.endsWith(";")) {
+                    cls = clsPart;                             // already smali
+                } else if (clsPart.endsWith(";")) {
+                    cls = 'L' + clsPart;                      // "com/foo/Bar;" → add L
+                } else {
+                    cls = 'L' + clsPart.replace('.', '/') + ';'; // dot or slash, no semi
+                }
+            }
+            if (cls != null && cls.length() > 2) descriptors.add(cls);
+        }
+        return descriptors;
+    }
+
+    /**
+     * Use dexlib2's lazy class-list loading to identify which DEX files contain
+     * at least one of the target class descriptors.
+     *
+     * dexlib2's DexBackedDexFile.getClasses() reads only the class_defs section
+     * (class names, superclass, interfaces) — no method bytecode is loaded.
+     * This is ~50× cheaper than a full Androguard/dexlib2 parse and completes
+     * in milliseconds per DEX file regardless of its size.
+     *
+     * For a 15-DEX app where the user's classes live in 2 DEX files:
+     *   Old: handleAllDex processes all 15 → splitDex + C gen × 15
+     *   New: handleAllDex processes 2 hot files only → splitDex + C gen × 2
+     *        Cold 13 DEX files stay in dexDir untouched → ApkRebuilder includes them as-is
+     *
+     * @param dexFiles         all extracted DEX files
+     * @param targetDescriptors smali descriptors e.g. "Lcom/foo/Bar;"
+     * @param cb               progress callback (may be null)
+     * @return subset of dexFiles that contain at least one target class;
+     *         returns the full list unchanged if any per-file scan throws
+     */
+    private List<File> filterHotDexFiles(List<File> dexFiles,
+                                          Set<String> targetDescriptors,
+                                          TranspileCallback cb) {
+        if (targetDescriptors.isEmpty() || dexFiles.size() <= 1) return dexFiles;
+
+        progress(cb, "VMP: building class→DEX index ("
+                + dexFiles.size() + " DEX, no bytecode)…");
+
+        List<File> hot = new ArrayList<>();
+        for (File dexFile : dexFiles) {
+            try {
+                DexBackedDexFile dex = DexBackedDexFile.fromInputStream(
+                        null, new BufferedInputStream(new FileInputStream(dexFile)));
+                boolean isHot = false;
+                for (com.android.tools.smali.dexlib2.iface.ClassDef c : dex.getClasses()) {
+                    if (targetDescriptors.contains(c.getType())) {
+                        isHot = true;
+                        break;
+                    }
+                }
+                if (isHot) {
+                    hot.add(dexFile);
+                    Log.d(TAG, "VMP hot DEX: " + dexFile.getName());
+                } else {
+                    Log.d(TAG, "VMP cold DEX (skipped): " + dexFile.getName());
+                }
+            } catch (Exception e) {
+                // Scan failed for this DEX — include it to be safe
+                Log.w(TAG, "VMP DEX index scan failed for " + dexFile.getName()
+                        + ": " + e.getMessage());
+                hot.add(dexFile);
+            }
+        }
+        return hot;
     }
 
     private static void progress(TranspileCallback cb, String msg) {

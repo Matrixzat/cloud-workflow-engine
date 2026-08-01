@@ -6,6 +6,11 @@ import com.android.tools.smali.dexlib2.iface.Method;
 import com.android.tools.smali.dexlib2.util.MethodUtil;
 import com.android.tools.smali.dexlib2.writer.io.FileDataStore;
 import com.android.tools.smali.dexlib2.writer.pool.DexPool;
+import com.v7878.dex.DexIO;
+import com.v7878.dex.DexVersion;
+import com.v7878.dex.WriteOptions;
+import com.v7878.dex.immutable.Dex;
+import java.nio.file.Files;
 import com.google.common.collect.HashMultimap;
 import com.ultra.dex2cvmp.engine.vmp.converter.ClassAnalyzer;
 import com.ultra.dex2cvmp.engine.vmp.converter.JniCodeGenerator;
@@ -25,6 +30,25 @@ import java.util.Set;
 public class Dex2c {
 
     public static final String LANDROID_APP_APPLICATION = "Landroid/app/Application;";
+
+    // Same pattern as Tier1DexPatcher — lock every written DEX to version 035.
+    // dexlib2's DexPool can silently mis-encode wide types, try-catch tables,
+    // and annotations; passing the output through vova7878/DexIO corrects it.
+    private static final WriteOptions WRITE_OPTIONS_035 =
+            WriteOptions.defaultOptions().withDexVersion(DexVersion.DEX035);
+
+    /**
+     * Write a dexlib2 DexPool to {@code file} and then re-encode it through
+     * vova7878/DexFile with WriteOptions locked to DEX 035.  This fixes
+     * wide-type register miscounts, try-catch mis-encodings, annotation bugs,
+     * and string-pool issues that dexlib2's own writer occasionally produces.
+     */
+    static void writeDexPool035(DexPool pool, File file) throws IOException {
+        pool.writeTo(new FileDataStore(file));
+        byte[] raw = Files.readAllBytes(file.toPath());
+        Dex fixed = DexIO.read(raw);
+        Files.write(file.toPath(), DexIO.write(WRITE_OPTIONS_035, fixed));
+    }
 
     private Dex2c() {
     }
@@ -184,10 +208,10 @@ public class Dex2c {
 
         config.setShellMethods(shellMethods);
 
-        //写入需要运行的dex
-        shellDexPool.writeTo(new FileDataStore(config.getShellDexFile()));
-        //写入符号dex
-        nativeImplDexPool.writeTo(new FileDataStore(config.getImplDexFile()));
+        //写入需要运行的dex (re-encoded to DEX 035 via vova7878)
+        writeDexPool035(shellDexPool, config.getShellDexFile());
+        //写入符号dex (re-encoded to DEX 035 via vova7878)
+        writeDexPool035(nativeImplDexPool, config.getImplDexFile());
         return config;
     }
 
@@ -231,7 +255,7 @@ public class Dex2c {
 
             if (lastDexPool.hasOverflowed(maxPoolSize)) {
                 lastDexPool = new DexPool(dexNativeFile.getOpcodes());
-                dexPools.add(lastDexPool);
+                dexPools.add(lastDexPool); // written via writeDexPool035 by the caller
             }
         }
         return dexPools;

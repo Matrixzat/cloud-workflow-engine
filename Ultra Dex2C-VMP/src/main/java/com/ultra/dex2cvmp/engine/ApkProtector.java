@@ -8,7 +8,6 @@ import com.android.tools.smali.dexlib2.Opcodes;
 import com.android.tools.smali.dexlib2.dexbacked.DexBackedClassDef;
 import com.android.tools.smali.dexlib2.dexbacked.DexBackedDexFile;
 import com.android.tools.smali.dexlib2.iface.ClassDef;
-import com.android.tools.smali.dexlib2.writer.io.FileDataStore;
 import com.android.tools.smali.dexlib2.writer.pool.DexPool;
 import com.ultra.dex2cvmp.engine.vmp.Dex2c;
 import com.ultra.dex2cvmp.engine.vmp.DexConfig;
@@ -738,7 +737,7 @@ public class ApkProtector {
                         : "classes" + (dexDir.listFiles(
                                 f -> f.getName().matches("classes\\d*\\.dex")).length + i) + ".dex";
                 File target = new File(dexDir, name);
-                pools.get(i).writeTo(new FileDataStore(target));
+                Dex2c.writeDexPool035(pools.get(i), target);
                 android.util.Log.i("ApkProtector",
                         "VMP NativeUtil: wrote classesInit0-injected DEX → " + target.getName());
             }
@@ -756,7 +755,7 @@ public class ApkProtector {
                 DexPool pool = new DexPool(dexFile.getOpcodes());
                 for (ClassDef cls : dexFile.getClasses()) pool.internClass(cls);
                 pool.internClass(new RegisterNativesUtilClassDef(utilType, methodNames, libName));
-                pool.writeTo(new FileDataStore(mainDex));
+                Dex2c.writeDexPool035(pool, mainDex);
                 android.util.Log.i("ApkProtector",
                         "VMP NativeUtil: injected NativeUtil ("
                                 + methodNames.size() + " method(s)) into classes.dex");

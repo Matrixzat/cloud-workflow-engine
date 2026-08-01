@@ -141,7 +141,8 @@ public class DexTranspiler {
             if (!vmpOutDir.exists()) vmpOutDir.mkdirs();
 
             GlobalDexConfig vmpConfig = Dex2c.handleAllDex(
-                    dexFiles, filter, rewriter, classAnalyzer, vmpOutDir);
+                    dexFiles, filter, rewriter, classAnalyzer, vmpOutDir,
+                    msg -> progress(cb, msg));
 
             result.vmpConfig = vmpConfig;
 

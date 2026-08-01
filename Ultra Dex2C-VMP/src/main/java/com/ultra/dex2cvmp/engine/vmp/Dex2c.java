@@ -31,6 +31,11 @@ public class Dex2c {
 
     public static final String LANDROID_APP_APPLICATION = "Landroid/app/Application;";
 
+    /** Simple callback so callers can surface per-class / per-DEX progress. */
+    public interface ProgressListener {
+        void onMessage(String msg);
+    }
+
     // Same pattern as Tier1DexPatcher — lock every written DEX to version 035.
     // dexlib2's DexPool can silently mis-encode wide types, try-catch tables,
     // and annotations; passing the output through vova7878/DexIO corrects it.
@@ -61,23 +66,40 @@ public class Dex2c {
      * @return 输出结果配置
      * @throws IOException
      */
+    /** Backward-compatible overload — no progress reporting. */
     public static GlobalDexConfig handleAllDex(@Nonnull List<File> dexFiles,
                                                @Nonnull ClassAndMethodFilter filter,
                                                @Nonnull InstructionRewriter instructionRewriter,
                                                @Nonnull ClassAnalyzer classAnalyzer,
                                                @Nonnull File outDir) throws IOException {
+        return handleAllDex(dexFiles, filter, instructionRewriter, classAnalyzer, outDir, null);
+    }
+
+    public static GlobalDexConfig handleAllDex(@Nonnull List<File> dexFiles,
+                                               @Nonnull ClassAndMethodFilter filter,
+                                               @Nonnull InstructionRewriter instructionRewriter,
+                                               @Nonnull ClassAnalyzer classAnalyzer,
+                                               @Nonnull File outDir,
+                                               @javax.annotation.Nullable ProgressListener progress) throws IOException {
         if (!outDir.exists()) outDir.mkdirs();
         final GlobalDexConfig globalConfig = new GlobalDexConfig(outDir);
 
-        for (File file : dexFiles) {
-            final DexConfig config = handleDex(file, filter, classAnalyzer, instructionRewriter, outDir);
+        for (int i = 0; i < dexFiles.size(); i++) {
+            File file = dexFiles.get(i);
+            if (progress != null) {
+                progress.onMessage("VMP: processing " + file.getName()
+                        + " (" + (i + 1) + "/" + dexFiles.size() + ")…");
+            }
+            final DexConfig config = handleDex(file, filter, classAnalyzer, instructionRewriter, outDir, progress);
 
             //不需要给外部
             config.setShellMethods(null);
 
             globalConfig.addDexConfig(config);
         }
+        if (progress != null) progress.onMessage("VMP: generating JNI init tables…");
         globalConfig.generateJniInitCode();
+        if (progress != null) progress.onMessage("VMP: JNI init tables ready");
         return globalConfig;
     }
 
@@ -89,12 +111,22 @@ public class Dex2c {
                                       @Nonnull ClassAnalyzer classAnalyzer,
                                       @Nonnull InstructionRewriter instructionRewriter,
                                       @Nonnull File outDir) throws IOException {
+        return handleDex(dexFile, filter, classAnalyzer, instructionRewriter, outDir, null);
+    }
+
+    public static DexConfig handleDex(@Nonnull File dexFile,
+                                      @Nonnull ClassAndMethodFilter filter,
+                                      @Nonnull ClassAnalyzer classAnalyzer,
+                                      @Nonnull InstructionRewriter instructionRewriter,
+                                      @Nonnull File outDir,
+                                      @javax.annotation.Nullable ProgressListener progress) throws IOException {
         return handleDex(new BufferedInputStream(new FileInputStream(dexFile)),
                 dexFile.getName(),
                 filter,
                 classAnalyzer,
                 instructionRewriter,
-                outDir);
+                outDir,
+                progress);
     }
 
     public static DexConfig handleModuleDex(@Nonnull File dexFile,
@@ -119,9 +151,20 @@ public class Dex2c {
                                       @Nonnull ClassAnalyzer classAnalyzer,
                                       @Nonnull InstructionRewriter instructionRewriter,
                                       @Nonnull File outDir) throws IOException {
-        if (!outDir.exists()) outDir.mkdirs();
-        DexConfig config = splitDex(dex, dexFileName, filter, classAnalyzer, outDir);
+        return handleDex(dex, dexFileName, filter, classAnalyzer, instructionRewriter, outDir, null);
+    }
 
+    public static DexConfig handleDex(@Nonnull InputStream dex,
+                                      @Nonnull String dexFileName,
+                                      @Nonnull ClassAndMethodFilter filter,
+                                      @Nonnull ClassAnalyzer classAnalyzer,
+                                      @Nonnull InstructionRewriter instructionRewriter,
+                                      @Nonnull File outDir,
+                                      @javax.annotation.Nullable ProgressListener progress) throws IOException {
+        if (!outDir.exists()) outDir.mkdirs();
+        DexConfig config = splitDex(dex, dexFileName, filter, classAnalyzer, outDir, progress);
+
+        if (progress != null) progress.onMessage("VMP: generating C code for " + dexFileName + "…");
 
         final DexBackedDexFile nativeImplDexFile = DexBackedDexFile.fromInputStream(null,
                 new BufferedInputStream(new FileInputStream(config.getImplDexFile())));
@@ -142,6 +185,7 @@ public class Dex2c {
             config.setResult(codeGenerator);
         }
 
+        if (progress != null) progress.onMessage("VMP: C code written for " + dexFileName);
         return config;
     }
 
@@ -151,7 +195,8 @@ public class Dex2c {
                                       @Nonnull String dexFileName,
                                       @Nonnull ClassAndMethodFilter filter,
                                       @Nonnull ClassAnalyzer classAnalyzer,
-                                      @Nonnull File outDir) throws IOException {
+                                      @Nonnull File outDir,
+                                      @javax.annotation.Nullable ProgressListener progress) throws IOException {
         DexBackedDexFile originDexFile = DexBackedDexFile.fromInputStream(
                 null,
                 dex);
@@ -165,8 +210,26 @@ public class Dex2c {
 
         HashMultimap<String, List<? extends Method>> shellMethods = HashMultimap.create();
 
-        for (final ClassDef classDef : originDexFile.getClasses()) {
+        // Collect classes into a list so we can report N/total progress
+        List<ClassDef> allClasses = new ArrayList<>();
+        for (ClassDef c : originDexFile.getClasses()) allClasses.add(c);
+        int total = allClasses.size();
+
+        // Emit every class if small; otherwise every 5th to avoid flooding the log
+        int stride = total <= 20 ? 1 : (total <= 100 ? 5 : 10);
+        int converted = 0;
+
+        for (int ci = 0; ci < total; ci++) {
+            final ClassDef classDef = allClasses.get(ci);
             if (filter.acceptClass(classDef)) {
+                converted++;
+                // Human-readable class name: "Lcom/foo/Bar;" → "com.foo.Bar"
+                String shortName = classDef.getType()
+                        .replaceAll("^L", "").replaceAll(";$", "").replace('/', '.');
+                if (progress != null && (ci % stride == 0 || ci == total - 1)) {
+                    progress.onMessage("  [" + (ci + 1) + "/" + total + "] " + shortName);
+                }
+
                 final ArrayList<Method> shellDirectMethods = new ArrayList<>();
                 final ArrayList<Method> shellVirtualMethods = new ArrayList<>();
 
@@ -204,6 +267,11 @@ public class Dex2c {
                 shellDexPool.internClass(classDef);
             }
         }
+        if (progress != null) {
+            progress.onMessage("VMP: converted " + converted + " class(es) in " + dexFileName
+                    + " → writing DEX 035…");
+        }
+
         DexConfig config = new DexConfig(outDir, dexFileName);
 
         config.setShellMethods(shellMethods);

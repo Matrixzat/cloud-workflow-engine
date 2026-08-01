@@ -201,7 +201,7 @@ public class ApkProtector {
         File soFile = primarySoFile;
 
         // ── 7. Strip bytecode from DEX via vova7878/DexFile ──────────────────
-        report(70, "Stripping bytecode…");
+        report(70, "Stripping bytecode from DEX…");
 
         // Determine which method stubs to make ACC_NATIVE and which classes need
         // System.loadLibrary injected into their <clinit>.
@@ -218,90 +218,79 @@ public class ApkProtector {
         Set<String> compiledKeys;
         if (useVmp && transpileResult.vmpConfig != null) {
             // Derive strip keys directly from the VMP shell DEX files.
-            // VMP's own buildFilter() already respected method-level selection when it
-            // produced the shell DEX — every method marked ACC_NATIVE there is exactly
-            // what the user chose to convert.  Reading from the shell DEX (in vmpOutDir,
-            // untouched by injectVmpNativeUtil which writes to dexDir) gives the same
-            // precision as dex2c mode using compiled.keySet() — no filter re-parsing needed.
             compiledKeys = buildVmpKeysFromShellDex(transpileResult.vmpConfig);
-            report(70, "VMP: " + compiledKeys.size() + " method(s) targeted for native strip");
-            report(70, "VMP: injecting NativeUtil + classesInit0 hooks…");
+            report(71, "VMP: " + compiledKeys.size() + " method(s) targeted for native strip");
+            report(72, "VMP: injecting NativeUtil class into DEX…");
             injectVmpNativeUtil(transpileResult.vmpConfig, dexDir, libName);
+            report(73, "VMP: NativeUtil + classesInit0 hooks injected");
         } else {
             compiledKeys = transpileResult.compiled.keySet();
         }
 
+        report(74, "Patching " + compiledKeys.size() + " method(s) → ACC_NATIVE stubs…");
         int stripped = Tier1DexPatcher.patchAll(dexDir, compiledKeys, libName,
-                msg -> report(71, msg));
-        report(78, "Stripped " + stripped + " method(s) — bytecode gone");
+                msg -> report(75, msg));
+        report(78, "Stripped " + stripped + " method(s) — bytecode gone from DEX");
 
         // Verify every selected method is actually ACC_NATIVE in the patched DEX files.
         // Catches filter mismatches or class-not-found issues before the APK is repacked.
         if (!compiledKeys.isEmpty()) {
+            report(79, "Verifying " + compiledKeys.size() + " method stubs…");
             verifyStrippedKeys(dexDir, compiledKeys);
+            report(79, "Verification passed — all stubs confirmed ACC_NATIVE");
         }
 
-        report(80, "Bootstrap via per-class <clinit> — attachBaseContext untouched ✓");
+        report(80, "Bootstrap via per-class <clinit> — attachBaseContext untouched");
 
         // ── 8. Repack APK ─────────────────────────────────────────
-        report(82, "Rebuilding APK…");
-
         File assetsDir = new File(cacheDir, "assets_inject");
         assetsDir.mkdirs();
 
         // ── 8b. Manifest-hash + dex-count integrity stamps ────────────────
-        // Must run AFTER patchAll() so dexDir contains the final DEX set, and
-        // AFTER assetsDir is created so stamp files land there for ApkRebuilder.
-        // If the user disabled the check in Settings, sentinel stamps (hash=0,
-        // count=0) are written instead — guard.cpp recognises (0,0) and skips.
         boolean manifestDexEnabled = context.getSharedPreferences(
                 SettingsFragment.PREFS_NAME, Context.MODE_PRIVATE)
                 .getBoolean(SettingsFragment.KEY_MANIFEST_DEX_CHECK, true);
         if (manifestDexEnabled) {
-            report(81, "Stamping integrity check…");
+            report(81, "Stamping manifest + DEX-count integrity check…");
             writeIntegrityStamps(inputApk, dexDir, assetsDir);
+            report(81, "Integrity stamps written");
         } else {
-            report(81, "Manifest & Dex check disabled — writing sentinel stamps…");
+            report(81, "Manifest & DEX check disabled — writing sentinel stamps…");
             writeDisabledStamps(assetsDir);
         }
 
         // ── 8c. Native SO self-integrity stamp ───────────────────────────────
-        // FNV-1a64 hash of the compiled .so → AES-256-CBC encrypted →
-        // assets/font_glyph.dat.  guard.cpp crashes at every lvm_method_exec
-        // pulse AND at ELF constructor time if this file is missing or the .so
-        // has been patched.  MUST be stamped after soFile is finalised.
-        report(82, "Stamping native SO integrity…");
+        report(82, "Hashing native .so → writing SO integrity stamp…");
         writeNativeSoHash(soFile, assetsDir);
+        report(82, "SO integrity stamp written (" + (soFile.length() / 1024) + " KB hashed)");
 
         // ── 8d. Signature certificate hash stamp ─────────────────────────────
-        // Reads META-INF/*.RSA from the input APK (must be pre-signed), SHA-256s
-        // the raw cert bytes, AES-encrypts the digest → assets/font_kern.dat.
-        // guard.cpp verifies this at ELF constructor time via direct syscall —
-        // bypassing libc IO hooks (SRPatch IO method, NP Manager, LSPatch).
-        // NOTE: the input APK MUST be signed before protection.  Using Dex2c
-        // Mega's own built-in signer is NOT compatible — sign first, then protect.
         boolean sigCheckEnabled = context.getSharedPreferences(
                 SettingsFragment.PREFS_NAME, android.content.Context.MODE_PRIVATE)
                 .getBoolean(SettingsFragment.KEY_SIG_CHECK, true);
         if (sigCheckEnabled) {
-            report(83, "Stamping signature certificate hash…");
+            report(83, "Stamping signing certificate hash…");
             writeSignatureHash(inputApk, assetsDir);
+            report(83, "Certificate stamp written");
         } else {
             report(83, "Signature check disabled — writing sentinel stamp…");
             writeDisabledSigHash(assetsDir);
         }
 
+        report(85, "Rebuilding APK — merging DEX + .so + assets…");
         File outputApk = buildOutputPath(signOutput);
         ApkRebuilder.rebuild(inputApk, outputApk, dexDir, libsDir, assetsDir,
-                msg -> report(85, msg));
+                msg -> report(87, msg));
+        report(92, "APK assembled (" + (outputApk.length() / 1024) + " KB)");
 
         if (signOutput) {
-            report(93, "Signing APK…");
+            report(93, "Signing APK with test key…");
             File signed = new File(outputApk.getParent(),
                     outputApk.getName().replace("_unsigned", ""));
             ApkSigner.sign(context, outputApk, signed);
             outputApk.delete();
             outputApk = signed;
+            report(98, "APK signed — " + (outputApk.length() / 1024) + " KB");
         }
 
         report(100, "Done! → " + outputApk.getName());

@@ -47,7 +47,7 @@ public class Dex2c {
      * wide-type register miscounts, try-catch mis-encodings, annotation bugs,
      * and string-pool issues that dexlib2's own writer occasionally produces.
      */
-    static void writeDexPool035(DexPool pool, File file) throws IOException {
+    public static void writeDexPool035(DexPool pool, File file) throws IOException {
         pool.writeTo(new FileDataStore(file));
         byte[] raw = Files.readAllBytes(file.toPath());
         Dex fixed = DexIO.read(raw);

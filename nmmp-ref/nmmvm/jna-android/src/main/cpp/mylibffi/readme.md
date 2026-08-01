@@ -1,2 +1,0 @@
-
-单独CMakeLists.txt跟libffi目录分开

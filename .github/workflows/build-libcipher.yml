@@ -16,7 +16,7 @@ name: Build libcipher.so
 #    static archives for ALL four supported ABIs:
 #
 #      libcipher_arm64.a        (arm64-v8a  — OLLVM all 8 passes, real devices)
-#      libcipher_armeabi-v7a.a  (armeabi-v7a — NDK clang, no OLLVM; CI clang is AArch64-only)
+#      libcipher_armeabi-v7a.a  (armeabi-v7a — OLLVM all 8 passes, cross-compiled via --target=armv7a-linux-androideabi21)
 #      libcipher_x86_64.a       (x86_64     — NDK clang, no OLLVM; emulator)
 #      libcipher_x86.a          (x86        — NDK clang, no OLLVM; emulator)
 #

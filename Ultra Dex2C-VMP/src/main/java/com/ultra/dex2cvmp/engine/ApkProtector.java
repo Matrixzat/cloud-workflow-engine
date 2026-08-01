@@ -18,10 +18,6 @@ import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.zip.*;
 
 public class ApkProtector {
@@ -158,72 +154,38 @@ public class ApkProtector {
         File traceLog = new File(Environment.getExternalStorageDirectory(), "Ultra Dex2C-VMP/build_trace.log");
         traceLog.getParentFile().mkdirs();
 
-        // ── Parallel ABI compilation ──────────────────────────────────────────
-        // Each ABI writes to its own .so file and obj dir; NdkBuilder.compile()
-        // only reads shared state (resolvedClang, initialized) which is set once
-        // at setup() and never mutated during compilation — fully thread-safe.
-        // Each ABI also gets its own trace log so logs never interleave.
-        int abiThreads = Math.max(1, Math.min(targetAbis.size(),
-                Runtime.getRuntime().availableProcessors()));
-        ExecutorService abiExec = Executors.newFixedThreadPool(abiThreads);
-
-        // Parallel lists indexed by abiIdx — avoids an inner class
-        List<File>                        abiSoFiles  = new ArrayList<>(targetAbis.size());
-        List<Future<NdkBuilder.BuildResult>> abiFutures = new ArrayList<>(targetAbis.size());
-
         for (int abiIdx = 0; abiIdx < targetAbis.size(); abiIdx++) {
-            final String abi      = targetAbis.get(abiIdx);
-            final File abiSoFile  = new File(cacheDir,
+            final String abi = targetAbis.get(abiIdx);
+            File abiSoFile = new File(cacheDir,
                     "lib" + libName + "_" + abi.replace("-", "_") + ".so");
-            // Each ABI gets its own trace log to avoid interleaved writes
-            final File abiTrace   = new File(traceLog.getParentFile(),
-                    "build_trace_" + abi.replace("-", "_") + ".log");
-            abiSoFiles.add(abiSoFile);
 
-            abiFutures.add(abiExec.submit(() -> {
-                PrintWriter tw = null;
-                try { tw = new PrintWriter(new FileWriter(abiTrace, false)); }
+            final PrintWriter traceWriter;
+            PrintWriter _tw = null;
+            if (abiIdx == 0) {
+                try { _tw = new PrintWriter(new FileWriter(traceLog, false)); }
                 catch (Exception ignored) {}
-                final PrintWriter traceWriter = tw;
-
-                NdkBuilder.BuildResult result = ndk.compile(cSourceDir, abiSoFile, abi,
-                        new NdkBuilder.BuildCallback() {
-                            public void onProgress(String m) {
-                                report(60, "[" + abi + "] " + m);
-                                android.util.Log.i("NdkBuilder", "[" + abi + "] " + m);
-                                if (traceWriter != null) { traceWriter.println("[PROGRESS][" + abi + "] " + m); traceWriter.flush(); }
-                            }
-                            public void onLog(String l) {
-                                report(61, l);
-                                android.util.Log.d("Clang", l);
-                                if (traceWriter != null) { traceWriter.println(l); traceWriter.flush(); }
-                            }
-                        });
-                if (traceWriter != null) traceWriter.close();
-                return result;
-            }));
-        }
-        abiExec.shutdown();
-
-        // Collect results in original list order — preserves arm64-v8a as primarySoFile
-        for (int i = 0; i < abiFutures.size(); i++) {
-            final String abi     = targetAbis.get(i);
-            final File abiSoFile = abiSoFiles.get(i);
-            NdkBuilder.BuildResult buildResult;
-            try {
-                buildResult = abiFutures.get(i).get();
-            } catch (ExecutionException e) {
-                throw new Exception("Compilation failed [" + abi + "]: " + e.getCause().getMessage(), e.getCause());
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new Exception("Compilation interrupted [" + abi + "]", e);
             }
+            traceWriter = _tw;
+
+            NdkBuilder.BuildResult buildResult = ndk.compile(cSourceDir, abiSoFile, abi,
+                    new NdkBuilder.BuildCallback() {
+                        public void onProgress(String m) {
+                            report(60, "[" + abi + "] " + m);
+                            android.util.Log.i("NdkBuilder", "[" + abi + "] " + m);
+                            if (traceWriter != null) { traceWriter.println("[PROGRESS][" + abi + "] " + m); traceWriter.flush(); }
+                        }
+                        public void onLog(String l) {
+                            report(61, l);
+                            android.util.Log.d("Clang", l);
+                            if (traceWriter != null) { traceWriter.println(l); traceWriter.flush(); }
+                        }
+                    });
+            if (traceWriter != null) traceWriter.close();
 
             if (!buildResult.success || buildResult.soFile == null) {
                 android.util.Log.e("ApkProtector", "Compile FAILED [" + abi + "]:\n" + buildResult.error);
                 throw new Exception("Compilation failed [" + abi + "]:\n" + buildResult.error
-                        + "\n(full log → /sdcard/Ultra Dex2C-VMP/build_trace_"
-                        + abi.replace("-", "_") + ".log)");
+                        + "\n(full log → /sdcard/Ultra Dex2C-VMP/build_trace.log)");
             }
             report(65, "[" + abi + "] Native library compiled (" + (abiSoFile.length() / 1024) + " KB)");
 

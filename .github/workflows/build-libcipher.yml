@@ -1,6 +1,36 @@
 name: Build libcipher.so
 
 # ─────────────────────────────────────────────────────────────────────────────
+# AGENT INSTRUCTIONS — read this before pushing or triggering the build
+#
+# Source files live in the Replit workspace (Ultra dex2c mega/).
+# Before triggering this workflow, make sure the cloud repo is up to date:
+#
+#   C sources  →  src/main/cpp/guard.cpp
+#                 src/main/cpp/guard_pstrings.inc
+#                 src/main/cpp/guard_mba.h
+#                 Push to cloud repo:  cpp/guard.cpp
+#                                      cpp/guard_pstrings.inc
+#                                      cpp/guard_mba.h
+#
+#   Stub-loader Java sources  →  stub-loader/src/main/java/
+#       com/ultra/dex2cvmp/ProxyApplication.java
+#       com/secure/dex/utils/DexProtector.java
+#       com/secure/dex/utils/Reflect.java
+#       com/secure/dex/data/Const.java
+#                 Push to cloud repo:  stub-loader/<same relative paths>
+#
+# After pushing, trigger this workflow with:
+#   curl -X POST \
+#     -H "Authorization: Bearer $GITHUB_PAT" \
+#     -H "Accept: application/vnd.github+json" \
+#     "https://api.github.com/repos/Matrixzat/cloud-workflow-engine/actions/workflows/build-libcipher.yml/dispatches" \
+#     -d '{"ref":"main"}'
+#
+# When done, download artifact "cipher-binaries" and commit all files to
+# src/main/assets/:  libcipher_arm64.a  libcipher_armeabi-v7a.a  stub.dex
+# ─────────────────────────────────────────────────────────────────────────────
+#
 # Single workflow that does everything:
 #
 #  Job 1 — build-ollvm

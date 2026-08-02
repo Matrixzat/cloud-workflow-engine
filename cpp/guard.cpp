@@ -3696,6 +3696,14 @@ static void stub_install_impl(JNIEnv *env, jclass /*cls*/, jobject context) {
     }
     free(dexPathList);
 
+    // ── d2. Wipe shard files from disk — rooted adb pull is useless now ───
+    for (uint32_t i = 0; i < shardCount; i++) {
+        char killPath[512];
+        snprintf(killPath, sizeof(killPath), "%s/%s%u%s",
+                 dexDirPath, pfx, i, ext);
+        unlink(killPath);
+    }
+
     // ── e. Read phantom/app.cfg and set Const.REAL_APP ────────────────────
     const char *cfgPath = GSTR_DECRYPT(SL_ASSET_CFG, SL_ASSET_CFG_LEN, SL_ASSET_CFG_KEY);
     size_t cfgLen = 0;

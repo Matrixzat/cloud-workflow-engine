@@ -17,7 +17,7 @@
 #         src/main/cpp/phantom
 #   cmake --build build-arm64
 #
-# Then AES-encrypt each output .so with the blob key defined in
+# Then ARX-encrypt each output .so with the blob key defined in
 # DexCrypto.blobKey() ("Ph4nt0mBl0bK3y!!") and store as:
 #   assets/phantom/libphantom_arm64.blob   (arm64-v8a)
 #   assets/phantom/libphantom_arm.blob     (armeabi-v7a)
@@ -55,7 +55,7 @@ target_compile_options(phantom PRIVATE
 
 # Only export the JNI entry-point.
 target_link_options(phantom PRIVATE
-    -Wl,--version-script,${CMAKE_CURRENT_SOURCE_DIR}/phantom.map
+    -Wl,--version-script,${CMAKE_CURRENT_BINARY_DIR}/phantom.map
     -Wl,-z,relro
     -Wl,-z,now
     -Wl,--strip-all
@@ -64,9 +64,10 @@ target_link_options(phantom PRIVATE
 target_link_libraries(phantom
     android
     log
+    z           # zlib — needed by inflate_alloc in phantom_key.c
 )
 
 # ── Export map — only the JNI symbol is visible ───────────────────────────────
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/phantom.map
-"{\n  global: Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeGetKey;\n  local: *;\n};\n"
+"{\n  global: Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeDecryptShard;\n  local: *;\n};\n"
 )

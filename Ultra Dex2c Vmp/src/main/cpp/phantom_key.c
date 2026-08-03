@@ -2,33 +2,43 @@
  * phantom_key.c — JNI entry-point for libphantom.so
  *
  * Exports:
- *   Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeGetKey
+ *   Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeDecryptShard
  *
- * The per-APK DEX decryption key is derived from two inputs:
+ * Security model (mirrors 360 Jiagu's approach):
+ *   The per-APK key is derived from (salt, sha256(pkg_name)) using the ARX KDF.
+ *   The key NEVER crosses the JNI boundary to Java.  Instead this function
+ *   performs the full pipeline in native:
  *
- *   key = ARX_KDF(salt[16], sha256(pkg_name)[0..7])
+ *     1. Derive key = ARX_KDF(salt, sha256(pkg_name))
+ *     2. Outer inflate  :  stored_bytes  → ARX_XOR(deflate(DEX))
+ *     3. ARX XOR        :  ARX_XOR(deflate(DEX)) → deflate(DEX)
+ *     4. Inner inflate  :  deflate(DEX) → plaintext DEX bytes
+ *     5. Return the plaintext DEX as a jbyteArray
  *
- * The same ARX_KDF is implemented on the Java/host side in PhantomKey.java.
- * Cert binding is omitted — signature tamper detection is handled by the
- * app's own tamper check.
+ *   Java receives one decrypted DEX shard per call.  The key is zeroed
+ *   on the stack before the function returns.  There is no Java-visible
+ *   byte[] containing the key at any point.
+ *
+ * Shard storage format (written by DexPacker / DexCrypto.encrypt on host):
+ *   deflate( ARX_XOR( deflate(plaintext_DEX) ) )
  *
  * Build requirements:
- *   • Compile with OLLVM (see phantom/CMakeLists.txt) for control-flow
- *     flattening + bogus-control-flow passes.
+ *   • Compile with OLLVM (see phantom/CMakeLists.txt).
  *   • Target ABIs: arm64-v8a and armeabi-v7a.
- *   • After building, AES-encrypt each .so with the blob key defined in
+ *   • After building, ARX-encrypt each .so with the blob key in
  *     DexCrypto.blobKey() and store as:
  *       assets/phantom/libphantom_arm64.blob
  *       assets/phantom/libphantom_arm.blob
  *
- * IMPORTANT: Do NOT compile this file on Replit.  Use the CI build in the
- * dedicated GitHub repo with OLLVM toolchain support.  See phantom/CMakeLists.txt
- * for the full build recipe.
+ * IMPORTANT: Do NOT compile on Replit.  Use the CI build with OLLVM toolchain.
+ *            See phantom/CMakeLists.txt for the full build recipe.
  */
 
 #include <jni.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
+#include <zlib.h>
 
 /* ── SHA-256 (minimal, self-contained) ──────────────────────────────────────
  * Used to hash the package name inside the native layer so the hashed value
@@ -116,7 +126,7 @@ static void sha256(const uint8_t *msg, size_t len, uint8_t out[32]) {
     }
 }
 
-/* ── ARX KDF — must stay byte-identical with PhantomKey.arx() in Java ────── */
+/* ── ARX KDF — must stay byte-identical with DexSeed.arx() in Java ────── */
 
 #define ROL32(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
 
@@ -134,13 +144,6 @@ static inline void put_le32(uint8_t *b, int off, uint32_t v) {
     b[off+3] = (uint8_t)(v >> 24);
 }
 
-/**
- * arx_kdf — derive a 16-byte key.
- *
- * @param salt      16-byte random salt (from assets/phantom/ph_salt).
- * @param pkg_hash  32-byte SHA-256 of the package name (first 8 bytes used).
- * @param out       16-byte output key.
- */
 static void arx_kdf(const uint8_t salt[16],
                     const uint8_t pkg_hash[32],
                     uint8_t out[16])
@@ -150,7 +153,6 @@ static void arx_kdf(const uint8_t salt[16],
     uint32_t s2 = le32(salt,  8);
     uint32_t s3 = le32(salt, 12);
 
-    /* Mix pkg hash: 8 rounds */
     int i;
     uint32_t ph0 = le32(pkg_hash, 0);
     uint32_t ph1 = le32(pkg_hash, 4);
@@ -167,48 +169,253 @@ static void arx_kdf(const uint8_t salt[16],
     put_le32(out, 12, s3);
 }
 
-/* ── JNI entry-point ─────────────────────────────────────────────────────── */
+/* ── ARX stream cipher — port of Java DexCrypto.{exfr,FxIjsF,nDnv} ─────────
+ *
+ * Key schedule (FxIjsF):
+ *   Produces a 27-word array from the four key words {k0,k1,k2,k3}.
+ *   ks[0] = k0; then for i2=0..25:
+ *     t[i2%3] = (ROR8(t[i2%3]) + prev_i) ^ i2
+ *     i       = ROL3(i) ^ t[i2%3]
+ *     ks[i2+1] = i
+ *
+ * Initial keystream state (iArr2 in Java):
+ *   state[0] = k0 ^ k2,  state[1] = k1 ^ k3
+ *   (computed from the ORIGINAL key words, before the schedule runs)
+ *
+ * Each 8-byte output block is produced by nDnv:
+ *   26 full rounds  : i2 = (ROR8(i2)+i)^ks[n]; i = ROL3(i)^i2;
+ *    1 partial round: i2 = (ROR8(i2)+i)^ks[26];
+ *   state[0] = ROL3(i)^i2;  state[1] = i2;
+ *
+ * Keystream bytes from 8-byte block: LE bytes of state[0] then state[1].
+ */
 
-JNIEXPORT jbyteArray JNICALL
-Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeGetKey(
-        JNIEnv *env,
-        jclass  clazz,
-        jbyteArray j_salt,
-        jbyteArray j_pkg_name_utf8)
+typedef struct {
+    uint32_t ks[27];   /* key schedule */
+    uint32_t st[2];    /* current 8-byte keystream block */
+    int      pos;      /* global byte counter (mod 8 triggers nDnv) */
+} arx_ctx_t;
+
+static void arx_ctx_init(arx_ctx_t *s, const uint8_t key[16])
 {
-    (void)clazz;
+    uint32_t k0 = le32(key, 0);
+    uint32_t k1 = le32(key, 4);
+    uint32_t k2 = le32(key, 8);
+    uint32_t k3 = le32(key, 12);
 
+    /* Initial keystream block — from original key words */
+    s->st[0] = k0 ^ k2;
+    s->st[1] = k1 ^ k3;
+    s->pos   = 0;
+
+    /* Key schedule */
+    {
+        int i2;
+        uint32_t iv = k0;
+        uint32_t t[3];
+        t[0] = k1; t[1] = k2; t[2] = k3;
+        s->ks[0] = iv;
+        for (i2 = 0; i2 < 26; i2++) {
+            t[i2 % 3] = (ROR32(t[i2 % 3], 8) + iv) ^ (uint32_t)i2;
+            iv         = ROL32(iv, 3) ^ t[i2 % 3];
+            s->ks[i2 + 1] = iv;
+        }
+    }
+}
+
+static void arx_advance_block(arx_ctx_t *s)
+{
+    const uint32_t *ks = s->ks;
+    uint32_t i = s->st[0], i2 = s->st[1];
+    i2=(ROR32(i2,8)+i)^ks[0];  i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[1];  i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[2];  i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[3];  i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[4];  i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[5];  i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[6];  i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[7];  i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[8];  i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[9];  i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[10]; i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[11]; i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[12]; i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[13]; i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[14]; i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[15]; i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[16]; i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[17]; i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[18]; i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[19]; i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[20]; i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[21]; i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[22]; i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[23]; i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[24]; i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[25]; i=ROL32(i,3)^i2;
+    i2=(ROR32(i2,8)+i)^ks[26];
+    s->st[0] = ROL32(i,3)^i2;
+    s->st[1] = i2;
+}
+
+/* XOR buf[0..len) in-place with the ARX keystream.  Maintains position
+ * across multiple calls so the keystream advances correctly across shards. */
+static void arx_xor(arx_ctx_t *s, uint8_t *buf, size_t len)
+{
+    size_t n;
+    for (n = 0; n < len; n++) {
+        int i6    = s->pos % 8;
+        int word  = (int)s->st[i6 >> 2];          /* i6/4: word 0 for 0-3, word 1 for 4-7 */
+        int shift = (s->pos % 4) * 8;              /* LE byte extraction */
+        if (i6 == 0) arx_advance_block(s);         /* matches Java: advance THEN read */
+        word  = (int)s->st[i6 >> 2];
+        buf[n] ^= (uint8_t)(word >> shift);
+        s->pos++;
+    }
+}
+
+/* ── zlib inflate helper ─────────────────────────────────────────────────────
+ *
+ * Decompresses a zlib-wrapped deflate stream (as produced by Java's
+ * DeflaterOutputStream / DeflaterInputStream defaults) into a freshly
+ * malloc'd buffer.  Caller must free() the result.
+ * Returns NULL on error; sets *out_len on success.
+ */
+static uint8_t *inflate_alloc(const uint8_t *in, size_t in_len, size_t *out_len)
+{
+    z_stream zs;
+    size_t   cap, used;
+    uint8_t *buf, *tmp;
+    int      ret;
+
+    memset(&zs, 0, sizeof(zs));
+    if (inflateInit(&zs) != Z_OK) return NULL;
+
+    cap = in_len * 4 + 4096;
+    buf = (uint8_t *)malloc(cap);
+    if (!buf) { inflateEnd(&zs); return NULL; }
+
+    zs.next_in   = (Bytef *)in;
+    zs.avail_in  = (uInt)in_len;
+    zs.next_out  = (Bytef *)buf;
+    zs.avail_out = (uInt)cap;
+
+    for (;;) {
+        ret = inflate(&zs, Z_FINISH);
+        if (ret == Z_STREAM_END) break;
+        if (ret != Z_OK && ret != Z_BUF_ERROR) {
+            free(buf); inflateEnd(&zs); return NULL;
+        }
+        /* Output buffer full — double it */
+        used    = cap - zs.avail_out;
+        cap    *= 2;
+        tmp     = (uint8_t *)realloc(buf, cap);
+        if (!tmp) { free(buf); inflateEnd(&zs); return NULL; }
+        buf              = tmp;
+        zs.next_out      = (Bytef *)(buf + used);
+        zs.avail_out     = (uInt)(cap - used);
+    }
+
+    *out_len = cap - zs.avail_out;
+    inflateEnd(&zs);
+    return buf;
+}
+
+/* ── JNI entry-point ─────────────────────────────────────────────────────────
+ *
+ * Fully decrypts one encrypted DEX shard and returns the plaintext DEX bytes.
+ * The derived key NEVER leaves this function — it lives only on the C stack
+ * and is zeroed before return.
+ *
+ * Pipeline (mirrors DexCrypto.encrypt on the host packer side):
+ *   stored_shard = deflate( ARX_XOR( deflate(plaintext_DEX) ) )
+ *
+ * Reversal here:
+ *   step 1 — outer inflate  : stored_shard          → ARX_XOR(deflate(DEX))
+ *   step 2 — ARX XOR        : ARX_XOR(deflate(DEX)) → deflate(DEX)
+ *   step 3 — inner inflate  : deflate(DEX)           → plaintext DEX
+ */
+JNIEXPORT jbyteArray JNICALL
+Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeDecryptShard(
+        JNIEnv    *env,
+        jclass     clazz,
+        jbyteArray j_salt,
+        jbyteArray j_pkg_name_utf8,
+        jbyteArray j_encrypted)
+{
+    jbyteArray result = NULL;
+
+    /* Stack secrets — all zeroed before return */
     uint8_t salt[16]     = {0};
     uint8_t pkg_hash[32] = {0};
     uint8_t key[16]      = {0};
 
-    /* --- salt (exactly 16 bytes) --- */
-    if (j_salt == NULL || (*env)->GetArrayLength(env, j_salt) != 16) {
-        goto done; /* return zeros — graceful failure */
-    }
+    /* Heap buffers */
+    uint8_t *enc_buf   = NULL;
+    uint8_t *inter_buf = NULL;   /* after outer inflate */
+    uint8_t *plain_buf = NULL;   /* after inner inflate = DEX */
+    size_t   inter_len = 0;
+    size_t   plain_len = 0;
+    jint     enc_len   = 0;
+
+    (void)clazz;
+
+    /* ── 1. Derive key entirely inside native ───────────────────────────── */
+    if (j_salt == NULL || (*env)->GetArrayLength(env, j_salt) != 16)
+        goto cleanup;
     (*env)->GetByteArrayRegion(env, j_salt, 0, 16, (jbyte *)salt);
 
-    /* --- package name bytes → SHA-256 inside native --- */
     if (j_pkg_name_utf8 != NULL) {
         jint pkg_len = (*env)->GetArrayLength(env, j_pkg_name_utf8);
         if (pkg_len > 0 && pkg_len <= 512) {
             uint8_t pkg_buf[512];
-            (*env)->GetByteArrayRegion(env, j_pkg_name_utf8, 0, pkg_len, (jbyte *)pkg_buf);
+            (*env)->GetByteArrayRegion(env, j_pkg_name_utf8, 0, pkg_len,
+                                        (jbyte *)pkg_buf);
             sha256(pkg_buf, (size_t)pkg_len, pkg_hash);
             memset(pkg_buf, 0, sizeof(pkg_buf));
         }
     }
-
     arx_kdf(salt, pkg_hash, key);
 
-done:;
-    jbyteArray result = (*env)->NewByteArray(env, 16);
-    if (result) (*env)->SetByteArrayRegion(env, result, 0, 16, (jbyte *)key);
+    /* ── 2. Copy encrypted shard to native heap ─────────────────────────── */
+    if (j_encrypted == NULL) goto cleanup;
+    enc_len = (*env)->GetArrayLength(env, j_encrypted);
+    if (enc_len <= 0) goto cleanup;
 
-    /* Zero stack secrets before returning. */
+    enc_buf = (uint8_t *)malloc((size_t)enc_len);
+    if (!enc_buf) goto cleanup;
+    (*env)->GetByteArrayRegion(env, j_encrypted, 0, enc_len, (jbyte *)enc_buf);
+
+    /* ── 3. Outer inflate ───────────────────────────────────────────────── */
+    inter_buf = inflate_alloc(enc_buf, (size_t)enc_len, &inter_len);
+    free(enc_buf); enc_buf = NULL;
+    if (!inter_buf) goto cleanup;
+
+    /* ── 4. ARX XOR in-place (key stays on native stack) ───────────────── */
+    {
+        arx_ctx_t arx;
+        arx_ctx_init(&arx, key);
+        arx_xor(&arx, inter_buf, inter_len);
+        memset(&arx, 0, sizeof(arx));   /* zero keystream state */
+    }
+
+    /* ── 5. Inner inflate ───────────────────────────────────────────────── */
+    plain_buf = inflate_alloc(inter_buf, inter_len, &plain_len);
+    if (!plain_buf) goto cleanup;
+
+    /* ── 6. Hand DEX bytes back to Java ─────────────────────────────────── */
+    result = (*env)->NewByteArray(env, (jsize)plain_len);
+    if (result)
+        (*env)->SetByteArrayRegion(env, result, 0, (jsize)plain_len,
+                                   (jbyte *)plain_buf);
+
+cleanup:
+    /* Zero all key material before returning */
     memset(salt,     0, sizeof(salt));
     memset(pkg_hash, 0, sizeof(pkg_hash));
     memset(key,      0, sizeof(key));
-
+    if (enc_buf)   free(enc_buf);
+    if (inter_buf) { memset(inter_buf, 0, inter_len); free(inter_buf); }
+    if (plain_buf) free(plain_buf);
     return result;
 }

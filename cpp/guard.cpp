@@ -3538,9 +3538,14 @@ static uint8_t *sl_read_asset(JNIEnv *env, jobject context,
     return buf;  // nullptr on alloc failure
 }
 
-// ── §9.5  stub_install_impl — native DexProtector.install(Context) ────────
+// ── §9.5  DexProtector.install — bound via static JNI export (no RegisterNatives) ──
+// Using the standard Java_<pkg>_<class>_<method> name so the JVM resolves it
+// automatically on first call. This avoids any JNI_OnLoad FindClass / RegisterNatives
+// failure path entirely. The symbol is visible in .dynsym but the class + method names
+// are already plaintext in stub.dex, so no new information is exposed.
 
-static void stub_install_impl(JNIEnv *env, jclass /*cls*/, jobject context) {
+extern "C" JNIEXPORT void JNICALL
+Java_com_secure_dex_utils_DexProtector_install(JNIEnv *env, jclass /*cls*/, jobject context) {
     GLOGI("§9 stub_install_impl: enter");
 
     // ── a. Resolve output directory path via context.getDir("app_dex",0) ──
@@ -3776,32 +3781,9 @@ static void stub_install_impl(JNIEnv *env, jclass /*cls*/, jobject context) {
     GLOGI("§9 stub_install_impl: complete");
 }
 
-// ── §9.6  Register DexProtector.install → stub_install_impl ──────────────
-
-static void stub_register_natives(JNIEnv *env) {
-    const char *clsName = GSTR_DECRYPT(SL_DP_CLASS, SL_DP_CLASS_LEN, SL_DP_CLASS_KEY);
-    GLOGI("stub_register_natives: FindClass(%s)", clsName ? clsName : "(null)");
-    jclass dpCls = env->FindClass(clsName);
-    GLOGI("stub_register_natives: dpCls=%p exc=%d", (void*)dpCls, env->ExceptionCheck());
-    if (!dpCls || env->ExceptionCheck()) {
-        GLOGE("stub_register_natives: FindClass failed — DexProtector not in stub.dex?");
-        env->ExceptionClear();
-        return;
-    }
-    // Avoid static const init with GSTR_DECRYPT lambdas — OLLVM can break static
-    // local initializers that contain nested lambdas. Build the method entry directly.
-    JNINativeMethod m;
-    m.name      = const_cast<char *>(GSTR_DECRYPT(SL_INSTALL, SL_INSTALL_LEN, SL_INSTALL_KEY));
-    m.signature = const_cast<char *>(GSTR_DECRYPT(SL_INSTALL_SIG, SL_INSTALL_SIG_LEN, SL_INSTALL_SIG_KEY));
-    m.fnPtr     = reinterpret_cast<void *>(stub_install_impl);
-    GLOGI("stub_register_natives: binding %s %s → stub_install_impl", m.name, m.signature);
-    jint rc = env->RegisterNatives(dpCls, &m, 1);
-    if (env->ExceptionCheck()) { GLOGE("stub_register_natives: RegisterNatives threw"); env->ExceptionDescribe(); env->ExceptionClear(); }
-    GLOGI("stub_register_natives: RegisterNatives rc=%d", (int)rc);
-    env->DeleteLocalRef(dpCls);
-}
-
-// ── JNI_OnLoad (only compiled when the transpiler did NOT generate one) ───
+// ── §9.6  JNI_OnLoad (only compiled when the transpiler did NOT generate one) ──
+// stub_register_natives is gone — DexProtector.install is resolved by the JVM
+// via the static export name above, so nothing to register here.
 
 #ifndef D2C_HAS_JNILOAD
 extern "C" JNIEXPORT jint JNICALL
@@ -3809,7 +3791,6 @@ JNI_OnLoad(JavaVM *vm, void * /*reserved*/) {
     JNIEnv *env = nullptr;
     if (vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK)
         return JNI_ERR;
-    stub_register_natives(env);
     fonts_register_natives(env);
     fonts_apply_metrics(env);
     return JNI_VERSION_1_6;

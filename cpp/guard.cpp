@@ -2223,6 +2223,12 @@ struct ZipEntryInfo {
     int      found;
 };
 #endif
+// Forward declarations for ZIP helpers defined in the LAYER 2 section below.
+static int zip_scan_central_dir(FILE *f, uint32_t cd_offset, uint32_t cd_size,
+                                 const char *want_name, ZipEntryInfo *want_info,
+                                 int *dex_count_out);
+static int zip_read_entry_data(FILE *f, const ZipEntryInfo *info,
+                                uint8_t *out, uint32_t out_cap, uint32_t *out_len);
 // ─────────────────────────────────────────────────────────────────────────────
 // detect_root_guard() — reads font_shade.dat from the installed APK assets,
 // decrypts with the same build_key256/build_iv pair as every other stamp, and

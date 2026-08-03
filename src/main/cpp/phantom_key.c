@@ -4,14 +4,13 @@
  * Exports:
  *   Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeGetKey
  *
- * The per-APK DEX decryption key is derived from three inputs:
+ * The per-APK DEX decryption key is derived from two inputs:
  *
- *   key = ARX_KDF(salt[16], cert_sha256[32], sha256(pkg_name)[0..7])
+ *   key = ARX_KDF(salt[16], sha256(pkg_name)[0..7])
  *
  * The same ARX_KDF is implemented on the Java/host side in PhantomKey.java.
- * If any input differs (tampered cert, wrong package, wrong salt) the derived
- * key is different and decryption silently produces garbage — no error string
- * is exposed.
+ * Cert binding is omitted — signature tamper detection is handled by the
+ * app's own tamper check.
  *
  * Build requirements:
  *   • Compile with OLLVM (see phantom/CMakeLists.txt) for control-flow
@@ -138,13 +137,11 @@ static inline void put_le32(uint8_t *b, int off, uint32_t v) {
 /**
  * arx_kdf — derive a 16-byte key.
  *
- * @param salt       16-byte random salt (from assets/phantom/ph_salt).
- * @param cert_hash  32-byte SHA-256 of the signing certificate.
- * @param pkg_hash   32-byte SHA-256 of the package name (first 8 bytes used).
- * @param out        16-byte output key (zeroed before filling).
+ * @param salt      16-byte random salt (from assets/phantom/ph_salt).
+ * @param pkg_hash  32-byte SHA-256 of the package name (first 8 bytes used).
+ * @param out       16-byte output key.
  */
 static void arx_kdf(const uint8_t salt[16],
-                    const uint8_t cert_hash[32],
                     const uint8_t pkg_hash[32],
                     uint8_t out[16])
 {
@@ -153,18 +150,8 @@ static void arx_kdf(const uint8_t salt[16],
     uint32_t s2 = le32(salt,  8);
     uint32_t s3 = le32(salt, 12);
 
-    /* Mix cert hash: 8 rounds × 4 bytes = 32 bytes */
-    int i;
-    for (i = 0; i < 8; i++) {
-        uint32_t cv = le32(cert_hash, i * 4);
-        s0 ^= cv;
-        s0 = ROL32(s0,  7) + s1;
-        s1 = ROL32(s1, 13) + s2;
-        s2 = ROL32(s2, 17) + s3;
-        s3 = ROL32(s3, 19) + s0;
-    }
-
     /* Mix pkg hash: 8 rounds */
+    int i;
     uint32_t ph0 = le32(pkg_hash, 0);
     uint32_t ph1 = le32(pkg_hash, 4);
     for (i = 0; i < 8; i++) {
@@ -187,15 +174,13 @@ Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeGetKey(
         JNIEnv *env,
         jclass  clazz,
         jbyteArray j_salt,
-        jbyteArray j_cert_hash,
         jbyteArray j_pkg_name_utf8)
 {
     (void)clazz;
 
-    uint8_t salt[16]      = {0};
-    uint8_t cert_hash[32] = {0};
-    uint8_t pkg_hash[32]  = {0};
-    uint8_t key[16]       = {0};
+    uint8_t salt[16]     = {0};
+    uint8_t pkg_hash[32] = {0};
+    uint8_t key[16]      = {0};
 
     /* --- salt (exactly 16 bytes) --- */
     if (j_salt == NULL || (*env)->GetArrayLength(env, j_salt) != 16) {
@@ -203,19 +188,10 @@ Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeGetKey(
     }
     (*env)->GetByteArrayRegion(env, j_salt, 0, 16, (jbyte *)salt);
 
-    /* --- cert hash (exactly 32 bytes) --- */
-    if (j_cert_hash != NULL && (*env)->GetArrayLength(env, j_cert_hash) == 32) {
-        (*env)->GetByteArrayRegion(env, j_cert_hash, 0, 32, (jbyte *)cert_hash);
-    }
-    /* zeros → no cert binding (weak but non-fatal) */
-
-    /* --- package name bytes → SHA-256 inside native ---
-     * The caller pre-encodes the package name as standard UTF-8 bytes
-     * (String.getBytes(StandardCharsets.UTF_8)), so we use the byte array
-     * directly — no GetStringUTFChars modified-UTF-8 ambiguity. */
+    /* --- package name bytes → SHA-256 inside native --- */
     if (j_pkg_name_utf8 != NULL) {
         jint pkg_len = (*env)->GetArrayLength(env, j_pkg_name_utf8);
-        if (pkg_len > 0 && pkg_len <= 512) { /* sanity bound */
+        if (pkg_len > 0 && pkg_len <= 512) {
             uint8_t pkg_buf[512];
             (*env)->GetByteArrayRegion(env, j_pkg_name_utf8, 0, pkg_len, (jbyte *)pkg_buf);
             sha256(pkg_buf, (size_t)pkg_len, pkg_hash);
@@ -223,17 +199,16 @@ Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeGetKey(
         }
     }
 
-    arx_kdf(salt, cert_hash, pkg_hash, key);
+    arx_kdf(salt, pkg_hash, key);
 
 done:;
     jbyteArray result = (*env)->NewByteArray(env, 16);
     if (result) (*env)->SetByteArrayRegion(env, result, 0, 16, (jbyte *)key);
 
     /* Zero stack secrets before returning. */
-    memset(salt,      0, sizeof(salt));
-    memset(cert_hash, 0, sizeof(cert_hash));
-    memset(pkg_hash,  0, sizeof(pkg_hash));
-    memset(key,       0, sizeof(key));
+    memset(salt,     0, sizeof(salt));
+    memset(pkg_hash, 0, sizeof(pkg_hash));
+    memset(key,      0, sizeof(key));
 
     return result;
 }

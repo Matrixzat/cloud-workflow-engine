@@ -11,17 +11,16 @@ import java.util.List;
  *
  * Security model (per-APK random key):
  *   • A 16-byte cryptographically random salt is generated for every pack operation.
- *   • The 16-byte session key is derived via PhantomKey.deriveKey(salt, certDer, pkgName).
+ *   • The 16-byte session key is derived via PhantomKey.deriveKey(salt, pkgName).
  *   • salt is written to assets/phantom/ph_salt (raw, 16 bytes) so the stub can read it
  *     at runtime and call nativeGetKey() to reproduce the same key inside libphantom.so.
- *   • The signing certificate DER bytes bind the key to the signer — if the APK is
- *     re-signed the derived key is different and decryption silently fails.
  *   • No static PROTECT_KEY string exists anywhere in the project.
+ *   • Cert binding is omitted — signature tamper detection is handled by the app itself.
  *
  * Flow:
  *  1. Extract classes*.dex + AndroidManifest.xml from input APK.
  *  2. Parse manifest → capture real Application class, patch android:name → ProxyApplication.
- *  3. Generate random salt; derive session key from (salt, certDer, pkgName).
+ *  3. Generate random salt; derive session key from (salt, pkgName).
  *  4. Encrypt all DEX shards and bundle them into a single phantom.vmp payload.
  *     Bundle format: [4-byte shard count][count × 4-byte shard sizes][encrypted bytes…]
  *  5. Write assets/phantom/app.cfg  (real app class name, UTF-8).
@@ -46,14 +45,6 @@ public class DexPacker {
     /** Asset name for the 16-byte per-APK salt. Must match Const.SALT_ASSET. */
     public static final String SALT_ASSET = "ph_salt";
 
-    /**
-     * Asset name for the 32-byte cert SHA-256 baked at pack time.
-     * The stub reads this value and passes it verbatim to nativeGetKey() so
-     * the KDF input is always consistent regardless of when the APK is signed.
-     * Must match Const.CERT_ASSET.
-     */
-    public static final String CERT_ASSET = "ph_cert";
-
     /** Asset names for the OLLVM-compiled native KDF library, one per ABI. */
     public static final String BLOB_ARM64 = "libphantom_arm64.blob";
     public static final String BLOB_ARM   = "libphantom_arm.blob";
@@ -67,14 +58,11 @@ public class DexPacker {
     /**
      * Pack {@code inputApk} into {@code outputApk} using the stub loader.
      *
-     * @param inputApk   Dex2c/VMP-processed APK (will not be modified).
-     * @param outputApk  Destination for the packed APK (unsigned; sign separately).
-     * @param workDir    Scratch directory for extracted + encrypted files.
-     * @param certDer    DER bytes of the signing certificate that will be used to
-     *                   sign {@code outputApk}.  Pass null to disable cert binding
-     *                   (key will be reproducible from salt + pkg name only).
+     * @param inputApk  Dex2c/VMP-processed APK (will not be modified).
+     * @param outputApk Destination for the packed APK (unsigned; sign separately).
+     * @param workDir   Scratch directory for extracted + encrypted files.
      */
-    public void pack(File inputApk, File outputApk, File workDir, byte[] certDer) throws Exception {
+    public void pack(File inputApk, File outputApk, File workDir) throws Exception {
         // ── 1. Extract manifest + DEX files from input APK ───────────────────
         File extractDir = new File(workDir, "extracted");
         FastZip.extract(inputApk, extractDir);
@@ -94,7 +82,7 @@ public class DexPacker {
 
         // ── 3. Generate per-APK salt and derive session key ───────────────────
         byte[] salt = PhantomKey.randomSalt();
-        byte[] key  = PhantomKey.deriveKey(salt, certDer, pkgName);
+        byte[] key  = PhantomKey.deriveKey(salt, pkgName);
 
         // ── 4. Encrypt all DEX shards and bundle into one phantom.vmp ─────────
         File shardsDir = new File(workDir, "shards");
@@ -120,7 +108,7 @@ public class DexPacker {
             for (byte[] shard : shards) dos.write(shard);
         }
 
-        // ── 5. Write app.cfg, ph_salt, and ph_cert ────────────────────────────
+        // ── 5. Write app.cfg and ph_salt ─────────────────────────────────────
         File realAppFile = new File(shardsDir, REAL_APP_ASSET);
         try (FileOutputStream fos = new FileOutputStream(realAppFile)) {
             fos.write(realAppClass.getBytes("UTF-8"));
@@ -129,16 +117,6 @@ public class DexPacker {
         File saltFile = new File(shardsDir, SALT_ASSET);
         try (FileOutputStream fos = new FileOutputStream(saltFile)) {
             fos.write(salt);
-        }
-
-        // Compute cert hash (zeros when certDer is null — no cert binding).
-        byte[] certHash = new byte[32];
-        if (certDer != null && certDer.length > 0) {
-            certHash = java.security.MessageDigest.getInstance("SHA-256").digest(certDer);
-        }
-        File certFile = new File(shardsDir, CERT_ASSET);
-        try (FileOutputStream fos = new FileOutputStream(certFile)) {
-            fos.write(certHash);
         }
 
         // ── 6. Copy libphantom blobs from our own app assets into shardsDir ───
@@ -154,13 +132,6 @@ public class DexPacker {
         FastZip.repack(inputApk, outputApk, stubDex, shardsDir, ASSET_DIR, patchedManifest);
     }
 
-    /**
-     * Convenience overload — no cert binding.
-     * Equivalent to {@code pack(inputApk, outputApk, workDir, null)}.
-     */
-    public void pack(File inputApk, File outputApk, File workDir) throws Exception {
-        pack(inputApk, outputApk, workDir, null);
-    }
 
     // ── helpers ──────────────────────────────────────────────────────────────
 

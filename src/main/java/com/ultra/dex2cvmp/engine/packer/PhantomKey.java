@@ -9,17 +9,16 @@ import java.security.MessageDigest;
  * A fresh 16-byte random salt is generated each time an APK is packed.
  * The 16-byte session key is then derived as:
  *
- *   key = ARX_KDF(salt[16], cert_sha256[32], sha256(pkg_name)[0..7])
+ *   key = ARX_KDF(salt[16], sha256(pkg_name)[0..7])
  *
  * The same KDF is implemented in native C (phantom_key.c) and is called at
- * runtime by libphantom.so via DexCrypto.nativeGetKey(salt, certHash, pkgName).
- * If the signing certificate does not match, the derived key differs and
- * decryption silently produces garbage — no explicit error string is needed.
+ * runtime by libphantom.so via DexCrypto.nativeGetKey(salt, pkgNameUtf8).
+ * Cert binding has been removed — signature tamper detection is handled
+ * separately by the app's own tamper check.
  *
  * ── Usage (packer side) ───────────────────────────────────────────────────────
- *   byte[] salt    = PhantomKey.randomSalt();
- *   byte[] certDer = <read DER bytes of signing cert>;
- *   byte[] key     = PhantomKey.deriveKey(salt, certDer, "com.example.app");
+ *   byte[] salt = PhantomKey.randomSalt();
+ *   byte[] key  = PhantomKey.deriveKey(salt, "com.example.app");
  *   DexCrypto.encrypt(key, in, out);
  *   // store salt as assets/phantom/ph_salt (16 bytes, raw)
  * ─────────────────────────────────────────────────────────────────────────────
@@ -38,28 +37,16 @@ public final class PhantomKey {
     /**
      * Derive a 16-byte encryption key.
      *
-     * @param salt       16-byte random salt (stored as {@code assets/phantom/ph_salt}).
-     * @param certDer    DER bytes of the APK signing certificate (may be null/empty
-     *                   to disable cert binding — key will be predictable without it).
-     * @param pkgName    Package name exactly as it appears in AndroidManifest.xml.
+     * @param salt     16-byte random salt (stored as {@code assets/phantom/ph_salt}).
+     * @param pkgName  Package name exactly as it appears in AndroidManifest.xml.
      * @return 16-byte key suitable for {@link DexCrypto#encrypt}.
      */
-    public static byte[] deriveKey(byte[] salt, byte[] certDer, String pkgName) {
+    public static byte[] deriveKey(byte[] salt, String pkgName) {
         try {
             MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
-
-            // Compute cert SHA-256 (32 bytes); zeros if no cert provided.
-            byte[] certHash = new byte[32];
-            if (certDer != null && certDer.length > 0) {
-                certHash = sha256.digest(certDer);
-            }
-
-            // Compute package-name hash (SHA-256, first 8 bytes used).
-            sha256.reset();
             byte[] pkgHash = sha256.digest(
                     pkgName == null ? new byte[0] : pkgName.getBytes(StandardCharsets.UTF_8));
-
-            return arx(salt, certHash, pkgHash);
+            return arx(salt, pkgHash);
         } catch (Exception e) {
             throw new RuntimeException("PhantomKey.deriveKey failed", e);
         }
@@ -71,29 +58,18 @@ public final class PhantomKey {
      * ARX (Add-Rotate-XOR) key derivation.
      * Must stay byte-for-byte identical to the C implementation in phantom_key.c.
      *
-     * @param salt     16-byte salt
-     * @param certHash 32-byte cert SHA-256
-     * @param pkgHash  ≥8-byte pkg-name SHA-256
+     * @param salt    16-byte salt
+     * @param pkgHash ≥8-byte pkg-name SHA-256
      * @return 16-byte derived key
      */
-    static byte[] arx(byte[] salt, byte[] certHash, byte[] pkgHash) {
+    static byte[] arx(byte[] salt, byte[] pkgHash) {
         // Initialise 4-word state from salt (little-endian).
         int s0 = le32(salt, 0);
         int s1 = le32(salt, 4);
         int s2 = le32(salt, 8);
         int s3 = le32(salt, 12);
 
-        // Mix cert hash: 8 rounds, consuming 4 bytes per round.
-        for (int i = 0; i < 8; i++) {
-            int cv = le32(certHash, i * 4);
-            s0 ^= cv;
-            s0 = Integer.rotateLeft(s0, 7)  + s1;
-            s1 = Integer.rotateLeft(s1, 13) + s2;
-            s2 = Integer.rotateLeft(s2, 17) + s3;
-            s3 = Integer.rotateLeft(s3, 19) + s0;
-        }
-
-        // Mix package-name hash: 8 additional rounds.
+        // Mix package-name hash: 8 rounds.
         int ph0 = le32(pkgHash, 0);
         int ph1 = le32(pkgHash, 4);
         for (int r = 0; r < 8; r++) {

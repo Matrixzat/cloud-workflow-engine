@@ -2,14 +2,11 @@ package com.ultra.dex2cvmp.utils;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
-import android.content.pm.PackageInfo;
-import android.content.pm.PackageManager;
 import android.os.Build;
 
 import com.ultra.dex2cvmp.data.Const;
 
 import java.io.ByteArrayInputStream;
-import java.security.MessageDigest;
 import java.io.DataInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -96,46 +93,12 @@ public class DexProtector {
             throw new RuntimeException(k('b','a','d',' ','s','a','l','t'));
         }
 
-        // ── Step 4: Cert binding — two-layer check ────────────────────────────
-        //
-        // ph_cert holds the SHA-256 of the signing certificate that DexPacker
-        // used when deriving the encryption key.  All-zeros means the APK was
-        // packed without cert binding (certDer == null at pack time).
-        //
-        // Layer A — KDF consistency: pass ph_cert to nativeGetKey() so both
-        //   packer and stub use the same cert hash as KDF input.
-        //
-        // Layer B — tamper detection: independently compute the SHA-256 of the
-        //   currently-installed APK's signing certificate via PackageManager.
-        //   If ph_cert is non-zero AND it does not match the runtime cert,
-        //   the APK has been re-signed — abort before invoking the native KDF.
-        //   (If ph_cert is all zeros cert binding was not requested, so skip.)
-        byte[] storedCertHash = readAsset(context, Const.DP_LIB + "/" + Const.CERT_ASSET);
-        if (storedCertHash == null || storedCertHash.length != 32) {
-            storedCertHash = new byte[32]; // zeros — treat as no-cert-binding
-        }
-
-        if (!isAllZeros(storedCertHash)) {
-            // Cert binding was requested at pack time — verify we're still on the
-            // same signing cert.  If not, refuse to proceed.
-            byte[] runtimeCertHash = getRuntimeCertHash(context);
-            if (!java.util.Arrays.equals(storedCertHash, runtimeCertHash)) {
-                // Zero both arrays before throwing to limit exposure.
-                Arrays.fill(storedCertHash, (byte) 0);
-                Arrays.fill(runtimeCertHash, (byte) 0);
-                throw new SecurityException(k('c','e','r','t',' ','m','i','s','m','a','t','c','h'));
-            }
-            Arrays.fill(runtimeCertHash, (byte) 0);
-        }
-
-        // ── Step 5: Derive the 16-byte session key via native KDF ─────────────
-        // Pass storedCertHash (= what the packer used) so KDF inputs are
-        // byte-identical on both sides.
+        // ── Step 4: Derive the 16-byte session key via native KDF ─────────────
         // Pre-encode pkg name as standard UTF-8 bytes to avoid Java
         // modified-UTF-8 vs. standard-UTF-8 discrepancy in GetStringUTFChars.
         byte[] pkgNameUtf8 = context.getPackageName()
                 .getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        byte[] key = DexCrypto.nativeGetKey(salt, storedCertHash, pkgNameUtf8);
+        byte[] key = DexCrypto.nativeGetKey(salt, pkgNameUtf8);
 
         try {
             // ── Step 6: Read + parse phantom.vmp bundle ───────────────────────
@@ -283,38 +246,6 @@ public class DexProtector {
             return data;
         } catch (Exception e) {
             return null;
-        }
-    }
-
-    /** Returns true if every byte in {@code b} is zero. */
-    private static boolean isAllZeros(byte[] b) {
-        for (byte v : b) if (v != 0) return false;
-        return true;
-    }
-
-    /**
-     * Compute SHA-256 of the currently-installed APK signing certificate
-     * by querying PackageManager independently (not from any APK asset).
-     * Returns 32 zero bytes on failure — the caller treats that as a mismatch.
-     */
-    @SuppressLint("PackageManagerGetSignatures")
-    private static byte[] getRuntimeCertHash(Context ctx) {
-        try {
-            MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
-            PackageManager pm = ctx.getPackageManager();
-            String pkg = ctx.getPackageName();
-            byte[] certDer;
-            if (Build.VERSION.SDK_INT >= 28) {
-                PackageInfo pi = pm.getPackageInfo(pkg, PackageManager.GET_SIGNING_CERTIFICATES);
-                certDer = pi.signingInfo.getApkContentsSigners()[0].toByteArray();
-            } else {
-                @SuppressWarnings("deprecation")
-                PackageInfo pi = pm.getPackageInfo(pkg, PackageManager.GET_SIGNATURES);
-                certDer = pi.signatures[0].toByteArray();
-            }
-            return sha256.digest(certDer);
-        } catch (Exception e) {
-            return new byte[32]; // zeros → treated as mismatch by caller
         }
     }
 

@@ -31,15 +31,6 @@ public class Const {
     public static final String SALT_ASSET = "ph_salt";
 
     /**
-     * Asset holding the 32-byte SHA-256 of the signing certificate used at
-     * pack time.  Written by DexPacker alongside ph_salt so that the stub can
-     * pass the same cert hash to nativeGetKey(), guaranteeing the KDF input on
-     * both sides is always identical regardless of when/how the APK is signed.
-     * All-zeros when DexPacker was called without a certDer argument.
-     */
-    public static final String CERT_ASSET = "ph_cert";
-
-    /**
      * Asset sub-directory (inside phantom/) where the pre-built, AES-encrypted
      * libphantom native blobs are stored inside the protected APK.
      *

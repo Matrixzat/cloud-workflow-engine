@@ -52,17 +52,12 @@ public class DexCrypto {
      *
      * MUST be called only after {@link #loadPhantomLib(Context)}.
      *
-     * @param salt           16-byte raw salt from assets/phantom/ph_salt.
-     * @param certHash       SHA-256 of the signing cert stored at pack time (32 bytes,
-     *                       from assets/phantom/ph_cert).
-     * @param pkgNameUtf8    Package name pre-encoded as standard UTF-8 bytes by the
-     *                       caller (context.getPackageName().getBytes(UTF_8)).
-     *                       Passing bytes avoids the Java modified-UTF-8 vs.
-     *                       standard-UTF-8 discrepancy in GetStringUTFChars, ensuring
-     *                       bit-identical KDF input on both Java and native sides.
+     * @param salt        16-byte raw salt from assets/phantom/ph_salt.
+     * @param pkgNameUtf8 Package name pre-encoded as standard UTF-8 bytes by the
+     *                    caller (context.getPackageName().getBytes(UTF_8)).
      * @return 16-byte key (caller MUST zero with Arrays.fill after use).
      */
-    public static native byte[] nativeGetKey(byte[] salt, byte[] certHash, byte[] pkgNameUtf8);
+    public static native byte[] nativeGetKey(byte[] salt, byte[] pkgNameUtf8);
 
     // ── Blob bootstrap ────────────────────────────────────────────────────────
 

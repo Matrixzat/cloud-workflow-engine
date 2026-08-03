@@ -11,22 +11,11 @@ package com.secure.dex.data;
  * reads it before realApplication() is called.
  */
 public class Const {
-    /** Asset sub-directory holding the phantom payload. */
-    public static final String DP_LIB = "phantom";
-
-    /** Single-file bundle containing all encrypted DEX shards. */
-    public static final String BUNDLE_FILE = "phantom.vmp";
-
-    /** Asset holding the real Application class name. */
-    public static final String APP_CFG = "app.cfg";
-
-    // Cipher key is embedded in the native library only (guard.cpp §9 SL_PKEY).
-    // Keeping it here as a Java constant would expose it to bytecode analysis.
-
     /**
      * Real Application class name — default is the base Application.
-     * DexProtector.install() overwrites this from assets/phantom/app.cfg
-     * before realApplication() is invoked.
+     * guard.cpp §9 overwrites this via JNI (SetStaticObjectField) after
+     * reading assets/phantom/app.cfg, before realApplication() is invoked.
+     * All other asset paths are handled natively with XOR-encrypted strings.
      */
     public static String REAL_APP = "android.app.Application";
 }

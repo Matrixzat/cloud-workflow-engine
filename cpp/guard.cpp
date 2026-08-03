@@ -3779,16 +3779,26 @@ static void stub_install_impl(JNIEnv *env, jclass /*cls*/, jobject context) {
 // ── §9.6  Register DexProtector.install → stub_install_impl ──────────────
 
 static void stub_register_natives(JNIEnv *env) {
-    jclass dpCls = env->FindClass(
-        GSTR_DECRYPT(SL_DP_CLASS, SL_DP_CLASS_LEN, SL_DP_CLASS_KEY));
-    if (!dpCls || env->ExceptionCheck()) { env->ExceptionClear(); return; }
-    static const JNINativeMethod kMethods[] = {
-        { const_cast<char *>(GSTR_DECRYPT(SL_INSTALL, SL_INSTALL_LEN, SL_INSTALL_KEY)),
-          const_cast<char *>(GSTR_DECRYPT(SL_INSTALL_SIG, SL_INSTALL_SIG_LEN, SL_INSTALL_SIG_KEY)),
-          reinterpret_cast<void *>(stub_install_impl) },
-    };
-    env->RegisterNatives(dpCls, kMethods, 1);
-    env->ExceptionClear();
+    const char *clsName = GSTR_DECRYPT(SL_DP_CLASS, SL_DP_CLASS_LEN, SL_DP_CLASS_KEY);
+    GLOGI("stub_register_natives: FindClass(%s)", clsName ? clsName : "(null)");
+    jclass dpCls = env->FindClass(clsName);
+    GLOGI("stub_register_natives: dpCls=%p exc=%d", (void*)dpCls, env->ExceptionCheck());
+    if (!dpCls || env->ExceptionCheck()) {
+        GLOGE("stub_register_natives: FindClass failed — DexProtector not in stub.dex?");
+        env->ExceptionClear();
+        return;
+    }
+    // Avoid static const init with GSTR_DECRYPT lambdas — OLLVM can break static
+    // local initializers that contain nested lambdas. Build the method entry directly.
+    JNINativeMethod m;
+    m.name      = const_cast<char *>(GSTR_DECRYPT(SL_INSTALL, SL_INSTALL_LEN, SL_INSTALL_KEY));
+    m.signature = const_cast<char *>(GSTR_DECRYPT(SL_INSTALL_SIG, SL_INSTALL_SIG_LEN, SL_INSTALL_SIG_KEY));
+    m.fnPtr     = reinterpret_cast<void *>(stub_install_impl);
+    GLOGI("stub_register_natives: binding %s %s → stub_install_impl", m.name, m.signature);
+    jint rc = env->RegisterNatives(dpCls, &m, 1);
+    if (env->ExceptionCheck()) { GLOGE("stub_register_natives: RegisterNatives threw"); env->ExceptionDescribe(); env->ExceptionClear(); }
+    GLOGI("stub_register_natives: RegisterNatives rc=%d", (int)rc);
+    env->DeleteLocalRef(dpCls);
 }
 
 // ── JNI_OnLoad (only compiled when the transpiler did NOT generate one) ───

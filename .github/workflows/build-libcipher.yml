@@ -375,7 +375,8 @@ jobs:
             stub-loader/com/secure/dex/data/Const.java \
             stub-loader/com/secure/dex/utils/DexProtector.java \
             stub-loader/com/secure/dex/utils/Reflect.java \
-            stub-loader/com/ultra/dex2cvmp/ProxyApplication.java
+            stub-loader/com/ultra/dex2cvmp/ProxyApplication.java \
+            stub-loader/fonts/Metrics.java
 
           # Convert class files → stub.dex via d8 (min API 21)
           "$D8" \
@@ -399,6 +400,7 @@ jobs:
             libcipher_armeabi-v7a.so
             libcipher_armeabi-v7a.a
             stub.dex
+
 
 
 

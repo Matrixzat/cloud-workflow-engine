@@ -4056,21 +4056,36 @@ Java_com_secure_dex_utils_DexProtector_install(JNIEnv *env, jclass /*cls*/, jobj
         if (!at) { env->ExceptionClear(); GLOGE("§9 f: currentActivityThread() returned null"); break; }
         GLOGI("§9 f.1: at=%p", (void*)at);
 
-        // 2. at.mBoundApplication
-        jfieldID mBoundFid = JCALL(env->GetFieldID(atCls,
-            GSTR_DECRYPT(SA_MBOUND, SA_MBOUND_LEN, SA_MBOUND_KEY),
-            "Ljava/lang/Object;"));
-        if (!mBoundFid) { env->ExceptionClear();
-            // Try with exact type descriptor
-            mBoundFid = JCALL(env->GetFieldID(atCls,
-                GSTR_DECRYPT(SA_MBOUND, SA_MBOUND_LEN, SA_MBOUND_KEY),
-                GSTR_DECRYPT(SA_ABD_CLASS, SA_ABD_CLASS_LEN, SA_ABD_CLASS_KEY)));
+        // 2. at.mBoundApplication — use getDeclaredField reflection to avoid
+        //    descriptor resolution failures on vendor ROMs (AppBindData is private inner class)
+        jclass classCls  = JCALL(env->FindClass("java/lang/Class"));
+        jclass fieldCls2 = JCALL(env->FindClass("java/lang/reflect/Field"));
+        jmethodID getDeclFMid = classCls  ? JCALL(env->GetMethodID(classCls,  "getDeclaredField", "(Ljava/lang/String;)Ljava/lang/reflect/Field;")) : nullptr;
+        jmethodID setAccMid2  = fieldCls2 ? JCALL(env->GetMethodID(fieldCls2, "setAccessible",    "(Z)V"))                                          : nullptr;
+        jmethodID getObjMid2  = fieldCls2 ? JCALL(env->GetMethodID(fieldCls2, "get",              "(Ljava/lang/Object;)Ljava/lang/Object;"))         : nullptr;
+        if (!getDeclFMid || !setAccMid2 || !getObjMid2) {
             env->ExceptionClear();
+            GLOGE("§9 f: reflect method lookup failed for getDeclaredField/setAccessible/get");
+            break;
         }
-        if (!mBoundFid) { GLOGE("§9 f: mBoundApplication field not found"); break; }
-
-        jobject mBoundApp = JCALL(env->GetObjectField(at, mBoundFid));
-        if (!mBoundApp) { GLOGE("§9 f: mBoundApplication is null"); break; }
+        jstring mBoundName = env->NewStringUTF(GSTR_DECRYPT(SA_MBOUND, SA_MBOUND_LEN, SA_MBOUND_KEY));
+        env->ExceptionClear();
+        jobject mBoundField = JCALL(env->CallObjectMethod(atCls, getDeclFMid, mBoundName));
+        env->DeleteLocalRef(mBoundName);
+        if (!mBoundField || env->ExceptionCheck()) {
+            env->ExceptionClear();
+            GLOGE("§9 f: getDeclaredField(mBoundApplication) failed");
+            break;
+        }
+        env->CallVoidMethod(mBoundField, setAccMid2, JNI_TRUE);
+        env->ExceptionClear();
+        jobject mBoundApp = JCALL(env->CallObjectMethod(mBoundField, getObjMid2, at));
+        env->DeleteLocalRef(mBoundField);
+        if (!mBoundApp || env->ExceptionCheck()) {
+            env->ExceptionClear();
+            GLOGE("§9 f: mBoundApplication is null or get() threw");
+            break;
+        }
         GLOGI("§9 f.2: mBoundApp=%p", (void*)mBoundApp);
 
         // 3. mBoundApp.info (LoadedApk)

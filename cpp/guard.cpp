@@ -3674,92 +3674,297 @@ Java_com_secure_dex_utils_DexProtector_install(JNIEnv *env, jclass /*cls*/, jobj
     free(szArr);
     free(bundle);
 
-    // ── d. Inject shard DEX files into the app classloader ───────────────
-    GLOGI("§9 d: classloader injection start");
+    // ── d. Inject shard DEX files into the app classloader ───────────────────
+    // Strategy: mirror the old stub's loadDex() + invokeMakeElements() exactly.
+    //   Call makeDexElements (or makePathElements) *directly on appCL's own
+    //   DexPathList* so the resulting DexFile objects are registered under appCL
+    //   from creation — no DexClassLoader intermediary, no "multiple class loaders"
+    //   error on Android 9+.
+    //
+    // Branch by makeDexElements param count (matches old stub's packed-switch):
+    //   2 params — API 14-18: (ArrayList<File>, File)
+    //   3 params — API 19-25: (ArrayList<File>, File, ArrayList<IOException>)
+    //   4 params — API 26+  : (ArrayList<File>, File, ArrayList<IOException>, ClassLoader)
+    GLOGI("§9 d: classloader injection start (makeDexElements path)");
     if (dexPathList[0] == '\0') {
         GLOGE("§9 d: dexPathList empty — no shards decrypted, skipping injection");
     } else {
         do {
+        // ── d.1 Get appCL = context.getClassLoader() ─────────────────────────
         jmethodID getCLMid = JCALL(env->GetMethodID(ctxCls,
             GSTR_DECRYPT(SL_GET_CL,     SL_GET_CL_LEN,     SL_GET_CL_KEY),
             GSTR_DECRYPT(SL_GET_CL_SIG, SL_GET_CL_SIG_LEN, SL_GET_CL_SIG_KEY)));
-        jobject parentCL = JCALL(env->CallObjectMethod(context, getCLMid));
-        GLOGI("§9 d: getCLMid=%p  parentCL=%p", (void*)getCLMid, (void*)parentCL);
-        if (!parentCL) { GLOGE("§9 d: getClassLoader() returned null"); break; }
+        jobject appCL = JCALL(env->CallObjectMethod(context, getCLMid));
+        GLOGI("§9 d.1: getCLMid=%p  appCL=%p", (void*)getCLMid, (void*)appCL);
+        if (!appCL) { GLOGE("§9 d.1: getClassLoader() returned null"); break; }
 
+        // ── d.2 Get appCL.pathList via BaseDexClassLoader field ───────────────
         char optPath[520];
         snprintf(optPath, sizeof(optPath), "%s/opt", dexDirPath);
         mkdir(optPath, 0700);
-        GLOGI("§9 d: optPath = %s", optPath);
+        GLOGI("§9 d.2: optPath = %s", optPath);
 
-        jclass    dclCls  = JCALL(env->FindClass(
-            GSTR_DECRYPT(SL_DCL, SL_DCL_LEN, SL_DCL_KEY)));
-        jmethodID dclInit = dclCls ? JCALL(env->GetMethodID(dclCls,
-            GSTR_DECRYPT(SL_INIT,    SL_INIT_LEN,    SL_INIT_KEY),
-            GSTR_DECRYPT(SL_DCL_SIG, SL_DCL_SIG_LEN, SL_DCL_SIG_KEY))) : nullptr;
-        GLOGI("§9 d: dclCls=%p  dclInit=%p", (void*)dclCls, (void*)dclInit);
-        if (!dclCls || !dclInit) { GLOGE("§9 d: DexClassLoader lookup failed"); break; }
+        jclass bdclCls = JCALL(env->FindClass(
+            GSTR_DECRYPT(SL_BDCL, SL_BDCL_LEN, SL_BDCL_KEY)));
+        GLOGI("§9 d.2: bdclCls=%p", (void*)bdclCls);
+        if (!bdclCls) { env->ExceptionClear(); GLOGE("§9 d.2: BaseDexClassLoader not found"); break; }
 
-        jstring jDexPath = JCALL(env->NewStringUTF(dexPathList));
-        jstring jOptPath = JCALL(env->NewStringUTF(optPath));
-        jobject newDCL   = JCALL(env->NewObject(dclCls, dclInit,
-                                                 jDexPath, jOptPath, (jstring)nullptr, parentCL));
-        JCALLV(env->DeleteLocalRef(jDexPath));
-        JCALLV(env->DeleteLocalRef(jOptPath));
-        GLOGI("§9 d: newDCL=%p  exc=%d", (void*)newDCL, env->ExceptionCheck());
-        if (!newDCL) { GLOGE("§9 d: DexClassLoader constructor returned null"); break; }
+        jfieldID plFid = JCALL(env->GetFieldID(bdclCls,
+            GSTR_DECRYPT(SL_PATHLIST,      SL_PATHLIST_LEN,      SL_PATHLIST_KEY),
+            GSTR_DECRYPT(SL_PATHLIST_DESC, SL_PATHLIST_DESC_LEN, SL_PATHLIST_DESC_KEY)));
+        if (!plFid) { env->ExceptionClear(); GLOGE("§9 d.2: pathList field not found"); break; }
 
-        {
-            jclass bdclCls = JCALL(env->FindClass(
-                GSTR_DECRYPT(SL_BDCL, SL_BDCL_LEN, SL_BDCL_KEY)));
-            GLOGI("§9 d: bdclCls=%p", (void*)bdclCls);
+        jobject appPL = JCALL(env->GetObjectField(appCL, plFid));
+        GLOGI("§9 d.2: plFid=%p  appPL=%p", (void*)plFid, (void*)appPL);
+        if (!appPL) { GLOGE("§9 d.2: appCL.pathList is null"); break; }
 
-            const char *plName = GSTR_DECRYPT(SL_PATHLIST,      SL_PATHLIST_LEN,      SL_PATHLIST_KEY);
-            const char *plDesc = GSTR_DECRYPT(SL_PATHLIST_DESC,  SL_PATHLIST_DESC_LEN, SL_PATHLIST_DESC_KEY);
-            const char *deName = GSTR_DECRYPT(SL_DEXELEMS,      SL_DEXELEMS_LEN,      SL_DEXELEMS_KEY);
-            const char *deDesc = GSTR_DECRYPT(SL_DEXELEMS_DESC,  SL_DEXELEMS_DESC_LEN, SL_DEXELEMS_DESC_KEY);
-            GLOGI("§9 d: field names pathList='%s' dexElements='%s'",
-                  plName ? plName : "(null)", deName ? deName : "(null)");
+        // ── d.3 Build ArrayList<File> of shard paths ──────────────────────────
+        jclass    fileCls  = JCALL(env->FindClass(
+            GSTR_DECRYPT(SL_JFILE, SL_JFILE_LEN, SL_JFILE_KEY)));
+        jmethodID fileInit = fileCls ? JCALL(env->GetMethodID(fileCls,
+            GSTR_DECRYPT(SL_INIT, SL_INIT_LEN, SL_INIT_KEY),
+            GSTR_DECRYPT(SL_FILE_INIT_SIG, SL_FILE_INIT_SIG_LEN, SL_FILE_INIT_SIG_KEY))) : nullptr;
 
-            jfieldID plFid = bdclCls ? JCALL(env->GetFieldID(bdclCls, plName, plDesc)) : nullptr;
-            jobject  newPL = plFid   ? JCALL(env->GetObjectField(newDCL,  plFid))      : nullptr;
-            jobject  oldPL = plFid   ? JCALL(env->GetObjectField(parentCL, plFid))     : nullptr;
-            GLOGI("§9 d: plFid=%p  newPL=%p  oldPL=%p", (void*)plFid, (void*)newPL, (void*)oldPL);
+        jclass    alistCls  = JCALL(env->FindClass(
+            GSTR_DECRYPT(SL_JALIST, SL_JALIST_LEN, SL_JALIST_KEY)));
+        jmethodID alistInit = alistCls ? JCALL(env->GetMethodID(alistCls,
+            GSTR_DECRYPT(SL_INIT, SL_INIT_LEN, SL_INIT_KEY),
+            GSTR_DECRYPT(SL_VOID_SIG, SL_VOID_SIG_LEN, SL_VOID_SIG_KEY))) : nullptr;
+        jmethodID alistAdd  = alistCls ? JCALL(env->GetMethodID(alistCls,
+            GSTR_DECRYPT(SL_ADD, SL_ADD_LEN, SL_ADD_KEY),
+            GSTR_DECRYPT(SL_ADD_SIG, SL_ADD_SIG_LEN, SL_ADD_SIG_KEY))) : nullptr;
 
-            if (!newPL || !oldPL) {
-                GLOGE("§9 d: pathList field null — bdclCls=%p plFid=%p newPL=%p oldPL=%p",
-                      (void*)bdclCls, (void*)plFid, (void*)newPL, (void*)oldPL);
-            } else {
-                jclass   plCls  = JCALL(env->GetObjectClass(newPL));
-                jfieldID deFid  = plCls ? JCALL(env->GetFieldID(plCls, deName, deDesc)) : nullptr;
-                GLOGI("§9 d: plCls=%p  deFid=%p", (void*)plCls, (void*)deFid);
-
-                jobjectArray newElems = deFid ? (jobjectArray)JCALL(env->GetObjectField(newPL, deFid)) : nullptr;
-                jobjectArray oldElems = deFid ? (jobjectArray)JCALL(env->GetObjectField(oldPL, deFid)) : nullptr;
-                jint newLen = newElems ? JCALL(env->GetArrayLength(newElems)) : 0;
-                jint oldLen = oldElems ? JCALL(env->GetArrayLength(oldElems)) : 0;
-                GLOGI("§9 d: newElems=%p(%d)  oldElems=%p(%d)",
-                      (void*)newElems, newLen, (void*)oldElems, oldLen);
-
-                if (newLen > 0 && oldLen >= 0) {
-                    jint total = newLen + oldLen;
-                    jclass elemCls = JCALL(env->GetObjectClass(
-                        env->GetObjectArrayElement(newElems, 0)));
-                    jobjectArray merged = JCALL(env->NewObjectArray(total, elemCls, nullptr));
-                    GLOGI("§9 d: merging elemCls=%p total=%d", (void*)elemCls, total);
-                    for (jint j = 0; j < newLen; j++)
-                        JCALLV(env->SetObjectArrayElement(merged, j,
-                            JCALL(env->GetObjectArrayElement(newElems, j))));
-                    for (jint j = 0; j < oldLen; j++)
-                        JCALLV(env->SetObjectArrayElement(merged, newLen + j,
-                            JCALL(env->GetObjectArrayElement(oldElems, j))));
-                    JCALLV(env->SetObjectField(oldPL, deFid, merged));
-                    GLOGI("§9 d: dexElements merged new=%d old=%d total=%d", newLen, oldLen, total);
-                } else {
-                    GLOGE("§9 d: skip merge — newLen=%d oldLen=%d", newLen, oldLen);
-                }
-            }
+        GLOGI("§9 d.3: fileCls=%p fileInit=%p alistCls=%p alistInit=%p alistAdd=%p",
+              (void*)fileCls, (void*)fileInit, (void*)alistCls, (void*)alistInit, (void*)alistAdd);
+        if (!fileCls || !fileInit || !alistCls || !alistInit || !alistAdd) {
+            env->ExceptionClear();
+            GLOGE("§9 d.3: File/ArrayList JNI lookup failed");
+            break;
         }
+
+        // Build files ArrayList and optDirFile from shard paths
+        jobject filesList = JCALL(env->NewObject(alistCls, alistInit));
+        // parse colon-separated dexPathList
+        {
+            char *buf = strdup(dexPathList);
+            char *tok = strtok(buf, ":");
+            while (tok) {
+                jstring jpath = JCALL(env->NewStringUTF(tok));
+                jobject f     = JCALL(env->NewObject(fileCls, fileInit, jpath));
+                JCALLV(env->CallBooleanMethod(filesList, alistAdd, f));
+                JCALLV(env->DeleteLocalRef(f));
+                JCALLV(env->DeleteLocalRef(jpath));
+                tok = strtok(nullptr, ":");
+            }
+            free(buf);
+        }
+        jstring  jOptStr    = JCALL(env->NewStringUTF(optPath));
+        jobject  optDirFile = JCALL(env->NewObject(fileCls, fileInit, jOptStr));
+        JCALLV(env->DeleteLocalRef(jOptStr));
+
+        // Empty ArrayList for suppressed exceptions (3- and 4-param variants)
+        jobject suppressedList = JCALL(env->NewObject(alistCls, alistInit));
+
+        GLOGI("§9 d.3: filesList=%p optDirFile=%p suppressedList=%p",
+              (void*)filesList, (void*)optDirFile, (void*)suppressedList);
+
+        // ── d.4 Walk appPL's class hierarchy, find makeDexElements ────────────
+        //   Exactly mirrors DexProtector.invokeMakeElements() packed-switch logic.
+        jclass  methodCls      = JCALL(env->FindClass(
+            GSTR_DECRYPT(SL_REFLECT_M, SL_REFLECT_M_LEN, SL_REFLECT_M_KEY)));
+        jmethodID getNameMid   = methodCls ? JCALL(env->GetMethodID(methodCls,
+            GSTR_DECRYPT(SL_GETNAME,     SL_GETNAME_LEN,     SL_GETNAME_KEY),
+            GSTR_DECRYPT(SL_GETNAME_SIG, SL_GETNAME_SIG_LEN, SL_GETNAME_SIG_KEY))) : nullptr;
+        jmethodID getPTypesMid = methodCls ? JCALL(env->GetMethodID(methodCls,
+            GSTR_DECRYPT(SL_GETPTYPES,     SL_GETPTYPES_LEN,     SL_GETPTYPES_KEY),
+            GSTR_DECRYPT(SL_GETPTYPES_SIG, SL_GETPTYPES_SIG_LEN, SL_GETPTYPES_SIG_KEY))) : nullptr;
+        jmethodID setAccMid    = methodCls ? JCALL(env->GetMethodID(methodCls,
+            GSTR_DECRYPT(SL_SETACC,     SL_SETACC_LEN,     SL_SETACC_KEY),
+            GSTR_DECRYPT(SL_SETACC_SIG, SL_SETACC_SIG_LEN, SL_SETACC_SIG_KEY))) : nullptr;
+        jmethodID invokeMid    = methodCls ? JCALL(env->GetMethodID(methodCls,
+            GSTR_DECRYPT(SL_INVOKE,     SL_INVOKE_LEN,     SL_INVOKE_KEY),
+            GSTR_DECRYPT(SL_INVOKE_SIG, SL_INVOKE_SIG_LEN, SL_INVOKE_SIG_KEY))) : nullptr;
+
+        jclass clsCls = JCALL(env->FindClass(
+            GSTR_DECRYPT(SL_JCLASS, SL_JCLASS_LEN, SL_JCLASS_KEY)));
+        // Cache Class.getName(), getDeclaredMethods(), getSuperclass() before the walk loop
+        jmethodID getClsNameMid  = clsCls ? JCALL(env->GetMethodID(clsCls,
+            GSTR_DECRYPT(SL_GETNAME,     SL_GETNAME_LEN,     SL_GETNAME_KEY),
+            GSTR_DECRYPT(SL_GETNAME_SIG, SL_GETNAME_SIG_LEN, SL_GETNAME_SIG_KEY))) : nullptr;
+        jmethodID getDeclaredMid = clsCls ? JCALL(env->GetMethodID(clsCls,
+            GSTR_DECRYPT(SL_GETDECM,     SL_GETDECM_LEN,     SL_GETDECM_KEY),
+            GSTR_DECRYPT(SL_GETDECM_SIG, SL_GETDECM_SIG_LEN, SL_GETDECM_SIG_KEY))) : nullptr;
+        jmethodID getSuperMid    = clsCls ? JCALL(env->GetMethodID(clsCls,
+            GSTR_DECRYPT(SL_GETSUPERCLASS,     SL_GETSUPERCLASS_LEN,     SL_GETSUPERCLASS_KEY),
+            GSTR_DECRYPT(SL_GETSUPERCLASS_SIG, SL_GETSUPERCLASS_SIG_LEN, SL_GETSUPERCLASS_SIG_KEY))) : nullptr;
+
+        GLOGI("§9 d.4: methodCls=%p getName=%p getPTypes=%p setAcc=%p invoke=%p getDeclared=%p getSuper=%p",
+              (void*)methodCls, (void*)getNameMid, (void*)getPTypesMid,
+              (void*)setAccMid, (void*)invokeMid, (void*)getDeclaredMid, (void*)getSuperMid);
+
+        if (!methodCls || !getNameMid || !getPTypesMid || !setAccMid ||
+            !invokeMid || !getDeclaredMid || !getSuperMid || !getClsNameMid) {
+            env->ExceptionClear();
+            GLOGE("§9 d.4: reflect JNI lookup failed");
+            break;
+        }
+
+        const char *mdeName = GSTR_DECRYPT(SL_MDE, SL_MDE_LEN, SL_MDE_KEY);
+        const char *mpeName = GSTR_DECRYPT(SL_MPE, SL_MPE_LEN, SL_MPE_KEY);
+        const char *jobjName = GSTR_DECRYPT(SL_JOBJ, SL_JOBJ_LEN, SL_JOBJ_KEY);
+
+        jobjectArray newElems   = nullptr;
+        jclass       walkCls    = JCALL(env->GetObjectClass(appPL));
+
+        // Walk the hierarchy: appPL's class → superclass → ... → stop at java/lang/Object
+        while (walkCls) {
+            jstring walkName = (jstring)JCALL(env->CallObjectMethod(walkCls, getClsNameMid));
+            const char *walkNameStr = walkName ?
+                JCALL(env->GetStringUTFChars(walkName, nullptr)) : nullptr;
+            GLOGI("§9 d.4: walking class '%s'", walkNameStr ? walkNameStr : "(null)");
+            bool isObject = walkNameStr && strcmp(walkNameStr, "java.lang.Object") == 0;
+            if (walkName && walkNameStr)
+                JCALLV(env->ReleaseStringUTFChars(walkName, walkNameStr));
+            if (walkName) JCALLV(env->DeleteLocalRef(walkName));
+            if (isObject) break;
+
+            jobjectArray methods = (jobjectArray)JCALL(
+                env->CallObjectMethod(walkCls, getDeclaredMid));
+            env->ExceptionClear();
+            if (!methods) {
+                jclass nextCls = (jclass)JCALL(env->CallObjectMethod(walkCls, getSuperMid));
+                env->ExceptionClear();
+                JCALLV(env->DeleteLocalRef(walkCls));
+                walkCls = nextCls;
+                continue;
+            }
+
+            jint mcount = JCALL(env->GetArrayLength(methods));
+            bool found  = false;
+            for (jint mi = 0; mi < mcount && !found; mi++) {
+                jobject   mobj  = JCALL(env->GetObjectArrayElement(methods, mi));
+                jstring   jname = (jstring)JCALL(env->CallObjectMethod(mobj, getNameMid));
+                const char *mname = jname ?
+                    JCALL(env->GetStringUTFChars(jname, nullptr)) : nullptr;
+
+                bool isMDE = mname && (strcmp(mname, mdeName) == 0 ||
+                                       strcmp(mname, mpeName) == 0);
+                if (jname && mname) JCALLV(env->ReleaseStringUTFChars(jname, mname));
+                if (jname) JCALLV(env->DeleteLocalRef(jname));
+
+                if (!isMDE) { JCALLV(env->DeleteLocalRef(mobj)); continue; }
+
+                // Found makeDexElements / makePathElements — setAccessible(true)
+                JCALLV(env->CallVoidMethod(mobj, setAccMid, (jboolean)JNI_TRUE));
+                env->ExceptionClear();
+
+                // Get param count
+                jobjectArray ptypes = (jobjectArray)JCALL(
+                    env->CallObjectMethod(mobj, getPTypesMid));
+                jint nparams = ptypes ? JCALL(env->GetArrayLength(ptypes)) : 0;
+                if (ptypes) JCALLV(env->DeleteLocalRef(ptypes));
+                GLOGI("§9 d.4: found MDE/MPE nparams=%d", nparams);
+
+                jobjectArray args = nullptr;
+                switch (nparams) {
+                case 2: {
+                    // (ArrayList<File>, File)  — API 14-18
+                    args = JCALL(env->NewObjectArray(2, JCALL(env->FindClass(GSTR_DECRYPT(SL_JOBJ, SL_JOBJ_LEN, SL_JOBJ_KEY))), nullptr));
+                    JCALLV(env->SetObjectArrayElement(args, 0, filesList));
+                    JCALLV(env->SetObjectArrayElement(args, 1, optDirFile));
+                    break;
+                }
+                case 3: {
+                    // (ArrayList<File>, File, ArrayList<IOException>)  — API 19-25
+                    args = JCALL(env->NewObjectArray(3, JCALL(env->FindClass(GSTR_DECRYPT(SL_JOBJ, SL_JOBJ_LEN, SL_JOBJ_KEY))), nullptr));
+                    JCALLV(env->SetObjectArrayElement(args, 0, filesList));
+                    JCALLV(env->SetObjectArrayElement(args, 1, optDirFile));
+                    JCALLV(env->SetObjectArrayElement(args, 2, suppressedList));
+                    break;
+                }
+                case 4: {
+                    // (ArrayList<File>, File, ArrayList<IOException>, ClassLoader)  — API 26+
+                    args = JCALL(env->NewObjectArray(4, JCALL(env->FindClass(GSTR_DECRYPT(SL_JOBJ, SL_JOBJ_LEN, SL_JOBJ_KEY))), nullptr));
+                    JCALLV(env->SetObjectArrayElement(args, 0, filesList));
+                    JCALLV(env->SetObjectArrayElement(args, 1, optDirFile));
+                    JCALLV(env->SetObjectArrayElement(args, 2, suppressedList));
+                    JCALLV(env->SetObjectArrayElement(args, 3, appCL));
+                    break;
+                }
+                default:
+                    GLOGE("§9 d.4: unexpected nparams=%d — skipping", nparams);
+                    JCALLV(env->DeleteLocalRef(mobj));
+                    continue;
+                }
+
+                // Invoke: method.invoke(appPL, args)
+                jobject result = JCALL(env->CallObjectMethod(mobj, invokeMid, appPL, args));
+                if (env->ExceptionCheck()) {
+                    env->ExceptionDescribe();
+                    env->ExceptionClear();
+                    GLOGE("§9 d.4: invoke threw exception");
+                } else if (result) {
+                    newElems = (jobjectArray)JCALL(env->NewGlobalRef(result));
+                    JCALLV(env->DeleteLocalRef(result));
+                    GLOGI("§9 d.4: invoke OK newElems=%p len=%d",
+                          (void*)newElems, newElems ? (int)env->GetArrayLength(newElems) : -1);
+                    found = true;
+                } else {
+                    GLOGE("§9 d.4: invoke returned null");
+                }
+                if (args) JCALLV(env->DeleteLocalRef(args));
+                JCALLV(env->DeleteLocalRef(mobj));
+            }
+            JCALLV(env->DeleteLocalRef(methods));
+
+            if (found) {
+                JCALLV(env->DeleteLocalRef(walkCls));
+                walkCls = nullptr;
+                break;
+            }
+
+            jclass nextCls = (jclass)JCALL(env->CallObjectMethod(walkCls, getSuperMid));
+            env->ExceptionClear();
+            JCALLV(env->DeleteLocalRef(walkCls));
+            walkCls = nextCls;
+        }
+
+        // ── d.5 Merge new elements into front of appPL.dexElements ───────────
+        if (newElems) {
+            const char *deName = GSTR_DECRYPT(SL_DEXELEMS,      SL_DEXELEMS_LEN,      SL_DEXELEMS_KEY);
+            const char *deDesc = GSTR_DECRYPT(SL_DEXELEMS_DESC, SL_DEXELEMS_DESC_LEN, SL_DEXELEMS_DESC_KEY);
+            jclass   plCls  = JCALL(env->GetObjectClass(appPL));
+            jfieldID deFid  = plCls ? JCALL(env->GetFieldID(plCls, deName, deDesc)) : nullptr;
+            GLOGI("§9 d.5: plCls=%p  deFid=%p", (void*)plCls, (void*)deFid);
+
+            jobjectArray oldElems = deFid ?
+                (jobjectArray)JCALL(env->GetObjectField(appPL, deFid)) : nullptr;
+            jint newLen = JCALL(env->GetArrayLength(newElems));
+            jint oldLen = oldElems ? JCALL(env->GetArrayLength(oldElems)) : 0;
+            GLOGI("§9 d.5: newLen=%d oldLen=%d", newLen, oldLen);
+
+            if (newLen > 0) {
+                jint     total   = newLen + oldLen;
+                jclass   elemCls = JCALL(env->GetObjectClass(
+                    env->GetObjectArrayElement(newElems, 0)));
+                jobjectArray merged = JCALL(env->NewObjectArray(total, elemCls, nullptr));
+                // new elements first (shard classes take priority)
+                for (jint j = 0; j < newLen; j++)
+                    JCALLV(env->SetObjectArrayElement(merged, j,
+                        JCALL(env->GetObjectArrayElement(newElems, j))));
+                for (jint j = 0; j < oldLen; j++)
+                    JCALLV(env->SetObjectArrayElement(merged, newLen + j,
+                        JCALL(env->GetObjectArrayElement(oldElems, j))));
+                JCALLV(env->SetObjectField(appPL, deFid, merged));
+                GLOGI("§9 d.5: dexElements merged new=%d old=%d total=%d", newLen, oldLen, total);
+            } else {
+                GLOGE("§9 d.5: newLen=0 — nothing to merge");
+            }
+            env->DeleteGlobalRef(newElems);
+        } else {
+            GLOGE("§9 d: makeDexElements not found or returned null — injection failed");
+        }
+
         } while(0); // end injection block
         env->ExceptionClear();
     }

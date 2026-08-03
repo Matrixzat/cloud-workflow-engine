@@ -12,20 +12,20 @@ import java.security.MessageDigest;
  *   key = ARX_KDF(salt[16], sha256(pkg_name)[0..7])
  *
  * The same KDF is implemented in native C (phantom_key.c) and is called at
- * runtime by libphantom.so via DexCrypto.nativeGetKey(salt, pkgNameUtf8).
+ * runtime by libphantom.so via DexCrypto.nativeDecryptShard(salt, pkgNameUtf8, shard).
  * Cert binding has been removed — signature tamper detection is handled
  * separately by the app's own tamper check.
  *
  * ── Usage (packer side) ───────────────────────────────────────────────────────
- *   byte[] salt = PhantomKey.randomSalt();
- *   byte[] key  = PhantomKey.deriveKey(salt, "com.example.app");
+ *   byte[] salt = DexSeed.randomSalt();
+ *   byte[] key  = DexSeed.deriveKey(salt, "com.example.app");
  *   DexCrypto.encrypt(key, in, out);
  *   // store salt as assets/phantom/ph_salt (16 bytes, raw)
  * ─────────────────────────────────────────────────────────────────────────────
  */
-public final class PhantomKey {
+public final class DexSeed {
 
-    private PhantomKey() {}
+    private DexSeed() {}
 
     /** Generate a cryptographically random 16-byte salt. */
     public static byte[] randomSalt() {
@@ -48,7 +48,7 @@ public final class PhantomKey {
                     pkgName == null ? new byte[0] : pkgName.getBytes(StandardCharsets.UTF_8));
             return arx(salt, pkgHash);
         } catch (Exception e) {
-            throw new RuntimeException("PhantomKey.deriveKey failed", e);
+            throw new RuntimeException("DexSeed.deriveKey failed", e);
         }
     }
 

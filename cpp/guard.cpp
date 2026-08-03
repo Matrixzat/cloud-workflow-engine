@@ -1695,7 +1695,7 @@ static __attribute__((noinline)) void watchdog_native_checks(void) {
 // ROOT GUARD — Multi-layer root / hook detection
 //
 // Activated only when font_shade.dat flag byte == 0xCA (user toggled
-// "Locked Environment" ON in Settings).  When disabled the sentinel is 0x00
+// "Rooted Device" ON in Settings).  When disabled the sentinel is 0x00
 // and every check below is skipped — no performance cost, no false positives
 // on unrooted devices where the user did not enable the feature.
 //
@@ -1711,28 +1711,45 @@ static __attribute__((noinline)) void watchdog_native_checks(void) {
 //     /data/adb/magisk, /data/adb/modules, /data/adb/ksud, and
 //     /data/adb/ksu completely intact — these are the installer's own
 //     data dirs, not overlays.  Stat-checking them catches every
-//     Magisk build regardless of whether the Magisk app is renamed
-//     (the dir name under /data/adb/ is fixed by the installer).
+//     Magisk build regardless of whether the Magisk app is renamed.
 //
-//   LAYER C — KernelSU / APatch / "MagiskSU" name-hidden installs
+//   LAYER C — KernelSU / APatch / Magisk temp markers
 //     Additional paths used by KernelSU and APatch that bypass
 //     DenyList entirely since they operate at the kernel level.
 //
 //   LAYER D — /proc/self/maps scan for Xposed / LSPosed / Riru / Zygisk
-//     LSPosed injects a Zygisk-shim .so into every Zygote-forked process.
-//     Even with DenyList the injected library appears in /proc/self/maps
-//     under a name containing "lsposed", "lspd", "zygisk_lsposed",
-//     "EdXposed", "riru", or "xposed".
-//     Also catches Frida lingering in maps before the port 27042 check.
+//     Expanded (2026): "zygisk" base shim is now also checked, not just
+//     "zygisk_lsposed".  Shamiko renames the LSPosed shim but cannot
+//     rename the Zygisk bootstrap itself.
 //
 //   LAYER E — /proc/net/unix domain socket scan
-//     Magisk daemon always listens on a Unix socket whose abstract name
-//     contains "@magisk" or "@MAGISK".  DenyList does not remove this
-//     socket — it's in the kernel's socket namespace, not the filesystem.
+//     Magisk daemon socket "@magisk...".  DenyList cannot remove kernel
+//     namespace entries.
 //
-//   LAYER F — ro.build.tags property (test-keys / unlocked bootloader)
-//     __system_property_get("ro.build.tags") == "test-keys" indicates
-//     a non-production build where root is trivially obtained.
+//   LAYER F — ro.build.tags + ro.debuggable + ro.secure + ro.adb.secure
+//     Expanded (2026): "test-keys" plus three additional props that
+//     Magisk/KSU do not always spoof: ro.debuggable=1 (custom ROMs),
+//     ro.secure=0 (engineering builds), ro.adb.secure=0 (adbd runs as root).
+//
+//   LAYER G — Installed root-management package scan
+//     Reads /data/system/packages.xml (not spoofed by SUSFS in most
+//     configs) looking for package names of Magisk, KernelSU, APatch,
+//     Superuser, and other root managers.  A match means the user
+//     installed a root framework even if all its files are hidden.
+//
+//   LAYER H — Parent-process identity (PPID) check
+//     Our app's parent MUST be zygote or zygote64.  If Magisk Zygisk
+//     wrapped the fork, the PPID may differ or the parent cmdline may
+//     contain non-zygote strings.  Reads /proc/self/status for PPid,
+//     then /proc/<ppid>/cmdline for verification.
+//
+//   LAYER I — Android-in-Android VM detection
+//     VMOS, VPhoneGaGa, F1VM, XDROID, and VirtualApp-based containers
+//     are always rooted by design.  Detected via:
+//       • System properties: ro.vmos.*, ro.f1vm.*, ro.virtual_device,
+//         ro.kernel.qemu, ro.product.model containing VM names.
+//       • /proc/self/maps: libva_core.so (VirtualApp), libxdroid.so,
+//         com.lody.virtual path fragments.
 // ════════════════════════════════════════════════════════════════════════════
 
 static __attribute__((noinline)) void root_guard_checks(void) {
@@ -1794,6 +1811,9 @@ static __attribute__((noinline)) void root_guard_checks(void) {
     }
 
     // ── LAYER D: /proc/self/maps — Xposed / LSPosed / Riru / Zygisk ─────
+    // 2026 addition: "zygisk" (base shim) added alongside "zygisk_lsposed".
+    // Shamiko can rename the LSPosed shim but the Zygisk bootstrap shim
+    // retains "zygisk" in its mapped path.
     {
         FILE *maps = fopen("/proc/self/maps", "r");
         if (maps) {
@@ -1803,7 +1823,7 @@ static __attribute__((noinline)) void root_guard_checks(void) {
                     strstr(line, "lsposed")        ||
                     strstr(line, "lspd")           ||
                     strstr(line, "EdXposed")       ||
-                    strstr(line, "zygisk_lsposed") ||
+                    strstr(line, "zygisk")         ||   // base Zygisk shim (new)
                     strstr(line, "riru")           ||
                     strstr(line, "libxposed")      ||
                     strstr(line, "XposedBridge")) {
@@ -1824,7 +1844,6 @@ static __attribute__((noinline)) void root_guard_checks(void) {
         if (sock) {
             char line[512];
             while (fgets(line, sizeof(line), sock)) {
-                // Abstract socket names appear after a '@' in the last field.
                 char *at = strstr(line, "@magisk");
                 if (!at) at = strstr(line, "@MAGISK");
                 if (at) {
@@ -1837,14 +1856,214 @@ static __attribute__((noinline)) void root_guard_checks(void) {
         }
     }
 
-    // ── LAYER F: ro.build.tags — test-keys / unlocked bootloader ─────────
-    // __system_property_get is available from bionic on all Android versions.
+    // ── LAYER F: system properties — build integrity ──────────────────────
+    // 2026 expansion: three additional props beyond ro.build.tags.
+    //
+    //   ro.build.tags  = "test-keys"   → custom/rooted ROM (original check)
+    //   ro.debuggable  = "1"           → engineering build; root trivially
+    //                                    available via adb shell
+    //   ro.secure      = "0"           → adbd runs as root automatically
+    //   ro.adb.secure  = "0"           → USB debugging bypasses auth
+    //
+    // Magisk DenyList spoofs ro.build.tags for denylisted apps but does NOT
+    // consistently spoof ro.debuggable, ro.secure, or ro.adb.secure —
+    // confirmed by 2025 research (mobilehackingcourse.com, yinkoshield.com).
     {
-        char tags[PROP_VALUE_MAX] = {};
-        if (__system_property_get("ro.build.tags", tags) > 0) {
-            if (strstr(tags, "test-keys")) {
-                GLOGE("root_guard: test-keys build tag detected");
-                crash_sigsegv();
+        struct { const char *prop; const char *bad_val; } PROP_CHECKS[] = {
+            { "ro.build.tags",  "test-keys" },
+            { "ro.debuggable",  "1"         },
+            { "ro.secure",      "0"         },
+            { "ro.adb.secure",  "0"         },
+            { nullptr, nullptr }
+        };
+        char val[PROP_VALUE_MAX] = {};
+        for (int i = 0; PROP_CHECKS[i].prop; i++) {
+            val[0] = '\0';
+            if (__system_property_get(PROP_CHECKS[i].prop, val) > 0) {
+                if (strcmp(val, PROP_CHECKS[i].bad_val) == 0) {
+                    GLOGE("root_guard: bad prop %s=%s", PROP_CHECKS[i].prop, val);
+                    crash_sigsegv();
+                }
+            }
+        }
+    }
+
+    // ── LAYER G: installed root-manager package scan ──────────────────────
+    // /data/system/packages.xml lists every installed APK by package name.
+    // SUSFS does not spoof this file in most configurations — it hides
+    // filesystem paths but not the package database.
+    // We scan for package names used by Magisk, KernelSU, APatch, and
+    // legacy Superuser managers.  A single match → crash.
+    {
+        // Package names are encoded as package="com.topjohnwu.magisk" etc.
+        // We search the raw file for the substring 'package="<name>"'.
+        static const char * const ROOT_PKGS[] = {
+            "com.topjohnwu.magisk",   // Magisk (all variants)
+            "io.github.huskydg.magisk", // Magisk Delta / Kitsune
+            "me.weishu.kernelsu",     // KernelSU manager (legacy)
+            "com.rifsxd.ksunext",     // KernelSU Next
+            "me.bmax.apatch",         // APatch manager
+            "com.noshufou.android.su",// Superuser (ChainsDD)
+            "eu.chainfire.supersu",   // SuperSU (Chainfire)
+            "com.koushikdutta.superuser",
+            "com.yellowes.su",
+            nullptr
+        };
+        // Open packages.xml with raw open() to bypass any libc-level hook.
+        int fd = open("/data/system/packages.xml", O_RDONLY);
+        if (fd >= 0) {
+            // Read in 4 KB chunks; scan each chunk for package substrings.
+            // We keep 64 bytes of overlap between chunks so names spanning
+            // a boundary are not missed.
+            char buf[4096 + 64];
+            ssize_t carry = 0;
+            ssize_t n;
+            while ((n = read(fd, buf + carry, 4096)) > 0) {
+                ssize_t total = carry + n;
+                buf[total] = '\0';
+                for (int i = 0; ROOT_PKGS[i]; i++) {
+                    if (strstr(buf, ROOT_PKGS[i])) {
+                        close(fd);
+                        GLOGE("root_guard: root pkg in packages.xml: %s",
+                              ROOT_PKGS[i]);
+                        crash_sigsegv();
+                    }
+                }
+                // Keep last 64 bytes as overlap for the next chunk.
+                carry = (total > 64) ? 64 : total;
+                if (carry > 0) __builtin_memmove(buf, buf + total - carry, carry);
+            }
+            close(fd);
+        }
+    }
+
+    // ── LAYER H: parent-process identity (PPID) check ────────────────────
+    // Our app's Zygote-forked process must have zygote or zygote64 as its
+    // direct parent.  If Magisk Zygisk wraps the fork, the intermediate
+    // process may appear between us and the real Zygote, or the parent
+    // cmdline may contain unexpected strings.
+    //
+    // Read /proc/self/status for PPid, then /proc/<ppid>/cmdline.
+    // A parent cmdline that is not "zygote" / "zygote64" / "<pre-init>" is
+    // suspicious — crash.
+    {
+        pid_t ppid = 0;
+        {
+            int fd = open("/proc/self/status", O_RDONLY);
+            if (fd >= 0) {
+                char buf[2048] = {};
+                read(fd, buf, sizeof(buf) - 1);
+                close(fd);
+                const char *p = strstr(buf, "PPid:");
+                if (p) {
+                    p += 5;
+                    while (*p == ' ' || *p == '\t') p++;
+                    ppid = (pid_t)atoi(p);
+                }
+            }
+        }
+        if (ppid > 1) {
+            char cmdline_path[64];
+            snprintf(cmdline_path, sizeof(cmdline_path),
+                     "/proc/%d/cmdline", (int)ppid);
+            int fd = open(cmdline_path, O_RDONLY);
+            if (fd >= 0) {
+                char cmdline[128] = {};
+                read(fd, cmdline, sizeof(cmdline) - 1);
+                close(fd);
+                // cmdline uses NUL as arg separator; first token is the name.
+                // Valid parents: "zygote", "zygote64", "" (kernel thread),
+                // or "<pre-initialized>" (seen on some vendor ROMs).
+                if (cmdline[0] != '\0'                       &&
+                    strcmp(cmdline, "zygote")   != 0         &&
+                    strcmp(cmdline, "zygote64") != 0         &&
+                    strncmp(cmdline, "<pre-init", 9) != 0) {
+                    GLOGE("root_guard: unexpected parent cmdline: %s", cmdline);
+                    crash_sigsegv();
+                }
+            }
+        }
+    }
+
+    // ── LAYER I: Android-in-Android VM detection ──────────────────────────
+    // VMOS, VPhoneGaGa, F1VM, XDROID, and VirtualApp containers are always
+    // rooted by design.  They expose themselves through system properties
+    // and/or mapped libraries.
+    //
+    // Property signals:
+    //   ro.vmos.version / ro.vmos.prop  → VMOS
+    //   ro.f1vm.version                 → F1VM
+    //   ro.virtual_device = "1"         → generic Android-in-Android
+    //   ro.kernel.qemu    = "1"         → QEMU/emulator base (many VMs)
+    //   ro.product.model contains VM product names
+    //
+    // Maps signals:
+    //   libva_core.so  → VirtualApp framework (used by VMOS, VPhoneGaGa)
+    //   libxdroid.so   → XDROID container
+    //   com.lody.virtual path fragment → VirtualApp host
+    {
+        // ── Property checks ──────────────────────────────────────────────
+        struct { const char *prop; const char *match; } VM_PROPS[] = {
+            { "ro.vmos.version",   nullptr   },  // any non-empty value = VMOS
+            { "ro.vmos.prop",      nullptr   },
+            { "ro.f1vm.version",   nullptr   },
+            { "ro.virtual_device", "1"       },
+            { "ro.kernel.qemu",    "1"       },
+            { nullptr, nullptr }
+        };
+        char pval[PROP_VALUE_MAX] = {};
+        for (int i = 0; VM_PROPS[i].prop; i++) {
+            pval[0] = '\0';
+            int len = __system_property_get(VM_PROPS[i].prop, pval);
+            if (len > 0) {
+                // If match is nullptr, any non-empty value triggers.
+                if (!VM_PROPS[i].match || strcmp(pval, VM_PROPS[i].match) == 0) {
+                    GLOGE("root_guard: VM prop %s=%s", VM_PROPS[i].prop, pval);
+                    crash_sigsegv();
+                }
+            }
+        }
+        // ro.product.model — check for known VM product names
+        pval[0] = '\0';
+        if (__system_property_get("ro.product.model", pval) > 0) {
+            static const char * const VM_MODELS[] = {
+                "VMOS", "VPhoneGaGa", "F1VM", "XDROID",
+                "vphone", "virtual_device", nullptr
+            };
+            for (int i = 0; VM_MODELS[i]; i++) {
+                // Case-insensitive substring: convert to lower locally.
+                // Avoid pulling in <cctype> — manual tolower loop.
+                char lower[PROP_VALUE_MAX] = {};
+                for (int j = 0; pval[j] && j < PROP_VALUE_MAX - 1; j++)
+                    lower[j] = (pval[j] >= 'A' && pval[j] <= 'Z')
+                                ? (char)(pval[j] + 32) : pval[j];
+                char lmodel[64] = {};
+                for (int j = 0; VM_MODELS[i][j] && j < 63; j++)
+                    lmodel[j] = (VM_MODELS[i][j] >= 'A' && VM_MODELS[i][j] <= 'Z')
+                                ? (char)(VM_MODELS[i][j] + 32) : VM_MODELS[i][j];
+                if (strstr(lower, lmodel)) {
+                    GLOGE("root_guard: VM model detected: %s", pval);
+                    crash_sigsegv();
+                }
+            }
+        }
+        // ── Maps checks for VM runtime libraries ─────────────────────────
+        {
+            FILE *maps = fopen("/proc/self/maps", "r");
+            if (maps) {
+                char line[512];
+                while (fgets(line, sizeof(line), maps)) {
+                    if (strstr(line, "libva_core")      ||  // VirtualApp
+                        strstr(line, "libxdroid")       ||  // XDROID
+                        strstr(line, "com.lody.virtual")||  // VirtualApp host
+                        strstr(line, "libhoudini")      ||  // x86→ARM (VMOS)
+                        strstr(line, "libvmos")) {
+                        fclose(maps);
+                        GLOGE("root_guard: VM library in maps");
+                        crash_sigsegv();
+                    }
+                }
+                fclose(maps);
             }
         }
     }

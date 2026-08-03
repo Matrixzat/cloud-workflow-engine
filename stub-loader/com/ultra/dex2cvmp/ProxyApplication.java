@@ -22,16 +22,17 @@ public class ProxyApplication extends Application {
 
         // Read the native library name written by DexPacker into phantom/lib.cfg,
         // load it (triggers JNI_OnLoad → stub_register_natives), then decrypt+inject.
+        // Read lib name — only catch IO errors; let loadLibrary failures propagate
+        // so UnsatisfiedLinkError surfaces clearly instead of being swallowed.
+        String libName = null;
         try {
             InputStream in = base.getAssets().open("phantom/lib.cfg");
             byte[] buf = new byte[256];
             int n = in.read(buf);
             in.close();
-            if (n > 0) {
-                String libName = new String(buf, 0, n, "UTF-8").trim();
-                System.loadLibrary(libName);
-            }
-        } catch (Throwable ignored) { }
+            if (n > 0) libName = new String(buf, 0, n, "UTF-8").trim();
+        } catch (java.io.IOException ignored) { }
+        if (libName != null) System.loadLibrary(libName);
 
         DexProtector.install(base);
     }

@@ -62,19 +62,6 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # ── Install apktool ──────────────────────────────────────────────────────
-      - name: Install apktool
-        run: |
-          APKTOOL_VER="2.9.3"
-          sudo wget -q \
-            "https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool" \
-            -O /usr/local/bin/apktool
-          sudo wget -q \
-            "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VER}/apktool_${APKTOOL_VER}.jar" \
-            -O /usr/local/bin/apktool.jar
-          sudo chmod +x /usr/local/bin/apktool
-          apktool --version
-
       # ── 2. Download source ───────────────────────────────────────────────────
       - name: Download source code
         env:

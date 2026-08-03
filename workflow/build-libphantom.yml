@@ -295,10 +295,11 @@ jobs:
 
       - name: Strip + harden
         run: |
-          STRIP="$TC/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-          OBJCOPY="$TC/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objcopy"
+          # $TC is already the full toolchain path — bin/ is a direct child
+          STRIP="$TC/bin/llvm-strip"
+          OBJCOPY="$TC/bin/llvm-objcopy"
           for SO in libphantom_arm64.so libphantom_arm.so; do
-            "$STRIP" --strip-all "$SO" 2>/dev/null || llvm-strip --strip-all "$SO"
+            "$STRIP" --strip-all "$SO"
             for SEC in .symtab .strtab .comment .note.android.ident .eh_frame .eh_frame_hdr; do
               "$OBJCOPY" --remove-section="$SEC" "$SO" 2>/dev/null || true
             done

@@ -4019,6 +4019,283 @@ Java_com_secure_dex_utils_DexProtector_install(JNIEnv *env, jclass /*cls*/, jobj
     }
     env->ExceptionClear();
 
+    // ── f. ActivityThread Application swap (mirrors ProxyApplication.realApplication()) ──
+    // Replaces the proxy stub with the real Application so getResources() etc. work.
+    GLOGI("§9 f: starting Application swap");
+    do {
+        // 1. ActivityThread.currentActivityThread()
+        jclass atCls = JCALL(env->FindClass(
+            GSTR_DECRYPT(SA_AT_CLASS, SA_AT_CLASS_LEN, SA_AT_CLASS_KEY)));
+        if (!atCls) { env->ExceptionClear(); GLOGE("§9 f: FindClass ActivityThread failed"); break; }
+
+        jmethodID curAtMid = JCALL(env->GetStaticMethodID(atCls,
+            GSTR_DECRYPT(SA_CUR_AT,     SA_CUR_AT_LEN,     SA_CUR_AT_KEY),
+            GSTR_DECRYPT(SA_CUR_AT_SIG, SA_CUR_AT_SIG_LEN, SA_CUR_AT_SIG_KEY)));
+        if (!curAtMid) { env->ExceptionClear(); GLOGE("§9 f: currentActivityThread method not found"); break; }
+
+        jobject at = JCALL(env->CallStaticObjectMethod(atCls, curAtMid));
+        if (!at) { env->ExceptionClear(); GLOGE("§9 f: currentActivityThread() returned null"); break; }
+        GLOGI("§9 f.1: at=%p", (void*)at);
+
+        // 2. at.mBoundApplication
+        jfieldID mBoundFid = JCALL(env->GetFieldID(atCls,
+            GSTR_DECRYPT(SA_MBOUND, SA_MBOUND_LEN, SA_MBOUND_KEY),
+            "Ljava/lang/Object;"));
+        if (!mBoundFid) { env->ExceptionClear();
+            // Try with exact type descriptor
+            mBoundFid = JCALL(env->GetFieldID(atCls,
+                GSTR_DECRYPT(SA_MBOUND, SA_MBOUND_LEN, SA_MBOUND_KEY),
+                GSTR_DECRYPT(SA_ABD_CLASS, SA_ABD_CLASS_LEN, SA_ABD_CLASS_KEY)));
+            env->ExceptionClear();
+        }
+        if (!mBoundFid) { GLOGE("§9 f: mBoundApplication field not found"); break; }
+
+        jobject mBoundApp = JCALL(env->GetObjectField(at, mBoundFid));
+        if (!mBoundApp) { GLOGE("§9 f: mBoundApplication is null"); break; }
+        GLOGI("§9 f.2: mBoundApp=%p", (void*)mBoundApp);
+
+        // 3. mBoundApp.info (LoadedApk)
+        jclass abdCls = JCALL(env->GetObjectClass(mBoundApp));
+        jfieldID infoFid = JCALL(env->GetFieldID(abdCls,
+            GSTR_DECRYPT(SA_INFO_FLD, SA_INFO_FLD_LEN, SA_INFO_FLD_KEY),
+            "Ljava/lang/Object;"));
+        if (!infoFid) { env->ExceptionClear(); GLOGE("§9 f: info field not found in AppBindData"); break; }
+
+        jobject loadedApk = JCALL(env->GetObjectField(mBoundApp, infoFid));
+        if (!loadedApk) { GLOGE("§9 f: loadedApk (info) is null"); break; }
+        GLOGI("§9 f.3: loadedApk=%p", (void*)loadedApk);
+
+        // 4. loadedApk.mApplication = null  (so makeApplication creates fresh)
+        jclass lakCls = JCALL(env->GetObjectClass(loadedApk));
+        jfieldID mAppFid = JCALL(env->GetFieldID(lakCls,
+            GSTR_DECRYPT(SA_MAPP, SA_MAPP_LEN, SA_MAPP_KEY),
+            "Landroid/app/Application;"));
+        if (!mAppFid) { env->ExceptionClear();
+            mAppFid = JCALL(env->GetFieldID(lakCls,
+                GSTR_DECRYPT(SA_MAPP, SA_MAPP_LEN, SA_MAPP_KEY),
+                "Ljava/lang/Object;"));
+            env->ExceptionClear();
+        }
+        if (mAppFid) {
+            JCALLV(env->SetObjectField(loadedApk, mAppFid, nullptr));
+            GLOGI("§9 f.4: cleared loadedApk.mApplication");
+        } else {
+            GLOGE("§9 f.4: mApplication field not found — proceeding anyway");
+        }
+
+        // 5. oldApp = at.mInitialApplication
+        jfieldID mInitFid = JCALL(env->GetFieldID(atCls,
+            GSTR_DECRYPT(SA_MINIT, SA_MINIT_LEN, SA_MINIT_KEY),
+            "Landroid/app/Application;"));
+        if (!mInitFid) { env->ExceptionClear();
+            mInitFid = JCALL(env->GetFieldID(atCls,
+                GSTR_DECRYPT(SA_MINIT, SA_MINIT_LEN, SA_MINIT_KEY),
+                "Ljava/lang/Object;"));
+            env->ExceptionClear();
+        }
+        jobject oldApp = mInitFid ? JCALL(env->GetObjectField(at, mInitFid)) : nullptr;
+        GLOGI("§9 f.5: oldApp=%p", (void*)oldApp);
+
+        // 6+7. mAllApplications.remove(oldApp)
+        jfieldID mAllFid = JCALL(env->GetFieldID(atCls,
+            GSTR_DECRYPT(SA_MALL, SA_MALL_LEN, SA_MALL_KEY),
+            "Ljava/util/ArrayList;"));
+        if (!mAllFid) { env->ExceptionClear();
+            mAllFid = JCALL(env->GetFieldID(atCls,
+                GSTR_DECRYPT(SA_MALL, SA_MALL_LEN, SA_MALL_KEY),
+                "Ljava/lang/Object;"));
+            env->ExceptionClear();
+        }
+        if (mAllFid && oldApp) {
+            jobject mAllApps = JCALL(env->GetObjectField(at, mAllFid));
+            if (mAllApps) {
+                jclass listCls = JCALL(env->GetObjectClass(mAllApps));
+                jmethodID removeMid = JCALL(env->GetMethodID(listCls,
+                    GSTR_DECRYPT(SA_REMOVE,     SA_REMOVE_LEN,     SA_REMOVE_KEY),
+                    GSTR_DECRYPT(SA_REMOVE_SIG, SA_REMOVE_SIG_LEN, SA_REMOVE_SIG_KEY)));
+                if (removeMid) {
+                    JCALL(env->CallBooleanMethod(mAllApps, removeMid, oldApp));
+                    env->ExceptionClear();
+                    GLOGI("§9 f.7: removed oldApp from mAllApplications");
+                }
+            }
+        }
+
+        // 8+9. Set className on both ApplicationInfo objects → Const.REAL_APP
+        // Read Const.REAL_APP back as a jstring
+        jclass constCls2 = JCALL(env->FindClass(
+            GSTR_DECRYPT(SL_CONST_CLASS, SL_CONST_CLASS_LEN, SL_CONST_CLASS_KEY)));
+        jstring realAppName = nullptr;
+        if (constCls2) {
+            jfieldID realFid = JCALL(env->GetStaticFieldID(constCls2,
+                GSTR_DECRYPT(SL_REAL_APP_FLD, SL_REAL_APP_FLD_LEN, SL_REAL_APP_FLD_KEY),
+                GSTR_DECRYPT(SL_STR_DESC,     SL_STR_DESC_LEN,     SL_STR_DESC_KEY)));
+            if (realFid) realAppName = (jstring)JCALL(env->GetStaticObjectField(constCls2, realFid));
+        }
+        env->ExceptionClear();
+        GLOGI("§9 f.8: realAppName=%p", (void*)realAppName);
+
+        if (realAppName) {
+            jclass aiCls = JCALL(env->FindClass(
+                GSTR_DECRYPT(SA_AI_CLASS, SA_AI_CLASS_LEN, SA_AI_CLASS_KEY)));
+            env->ExceptionClear();
+
+            // loadedApk.mApplicationInfo.className
+            jfieldID apkInfoFid = aiCls ? JCALL(env->GetFieldID(lakCls,
+                GSTR_DECRYPT(SA_APPINFO, SA_APPINFO_LEN, SA_APPINFO_KEY),
+                "Landroid/content/pm/ApplicationInfo;")) : nullptr;
+            if (!apkInfoFid) { env->ExceptionClear();
+                apkInfoFid = lakCls ? JCALL(env->GetFieldID(lakCls,
+                    GSTR_DECRYPT(SA_APPINFO, SA_APPINFO_LEN, SA_APPINFO_KEY),
+                    "Ljava/lang/Object;")) : nullptr;
+                env->ExceptionClear();
+            }
+            if (apkInfoFid) {
+                jobject apkInfo = JCALL(env->GetObjectField(loadedApk, apkInfoFid));
+                if (apkInfo && aiCls) {
+                    jfieldID clsNameFid = JCALL(env->GetFieldID(aiCls,
+                        GSTR_DECRYPT(SA_CLSNAME, SA_CLSNAME_LEN, SA_CLSNAME_KEY),
+                        "Ljava/lang/String;"));
+                    if (clsNameFid) {
+                        JCALLV(env->SetObjectField(apkInfo, clsNameFid, realAppName));
+                        GLOGI("§9 f.8: set loadedApk.mApplicationInfo.className");
+                    }
+                    env->ExceptionClear();
+                }
+            }
+
+            // mBoundApp.appInfo.className
+            jfieldID bindInfoFid = JCALL(env->GetFieldID(abdCls,
+                GSTR_DECRYPT(SA_APPINFO2, SA_APPINFO2_LEN, SA_APPINFO2_KEY),
+                "Landroid/content/pm/ApplicationInfo;"));
+            if (!bindInfoFid) { env->ExceptionClear();
+                bindInfoFid = JCALL(env->GetFieldID(abdCls,
+                    GSTR_DECRYPT(SA_APPINFO2, SA_APPINFO2_LEN, SA_APPINFO2_KEY),
+                    "Ljava/lang/Object;"));
+                env->ExceptionClear();
+            }
+            if (bindInfoFid) {
+                jobject bindInfo = JCALL(env->GetObjectField(mBoundApp, bindInfoFid));
+                if (bindInfo && aiCls) {
+                    jfieldID clsNameFid2 = JCALL(env->GetFieldID(aiCls,
+                        GSTR_DECRYPT(SA_CLSNAME, SA_CLSNAME_LEN, SA_CLSNAME_KEY),
+                        "Ljava/lang/String;"));
+                    if (clsNameFid2) {
+                        JCALLV(env->SetObjectField(bindInfo, clsNameFid2, realAppName));
+                        GLOGI("§9 f.9: set appBindData.appInfo.className");
+                    }
+                    env->ExceptionClear();
+                }
+            }
+        }
+
+        // 12. loadedApk.makeApplication(false, null) → real Application (with attach() called)
+        jmethodID makeAppMid = JCALL(env->GetMethodID(lakCls,
+            GSTR_DECRYPT(SA_MAKEAPP,     SA_MAKEAPP_LEN,     SA_MAKEAPP_KEY),
+            GSTR_DECRYPT(SA_MAKEAPP_SIG, SA_MAKEAPP_SIG_LEN, SA_MAKEAPP_SIG_KEY)));
+        if (!makeAppMid) { env->ExceptionClear(); GLOGE("§9 f: makeApplication method not found"); break; }
+
+        jobject newApp = JCALL(env->CallObjectMethod(loadedApk, makeAppMid,
+            (jboolean)JNI_FALSE, (jobject)nullptr));
+        if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
+        if (!newApp) { GLOGE("§9 f: makeApplication() returned null"); break; }
+        GLOGI("§9 f.12: newApp=%p", (void*)newApp);
+
+        // 13. at.mInitialApplication = newApp
+        if (mInitFid) {
+            JCALLV(env->SetObjectField(at, mInitFid, newApp));
+            GLOGI("§9 f.13: mInitialApplication swapped to newApp");
+        }
+
+        // 14+15. Update each ContentProvider's mContext
+        jfieldID provMapFid = JCALL(env->GetFieldID(atCls,
+            GSTR_DECRYPT(SA_PROVMAP, SA_PROVMAP_LEN, SA_PROVMAP_KEY),
+            "Ljava/lang/Object;"));
+        if (!provMapFid) { env->ExceptionClear(); }
+        if (provMapFid) {
+            jobject provMap = JCALL(env->GetObjectField(at, provMapFid));
+            if (provMap) {
+                jclass mapCls = JCALL(env->GetObjectClass(provMap));
+                jmethodID valuesMid = JCALL(env->GetMethodID(mapCls,
+                    GSTR_DECRYPT(SA_VALUES,     SA_VALUES_LEN,     SA_VALUES_KEY),
+                    GSTR_DECRYPT(SA_VALUES_SIG, SA_VALUES_SIG_LEN, SA_VALUES_SIG_KEY)));
+                if (valuesMid) {
+                    jobject collection = JCALL(env->CallObjectMethod(provMap, valuesMid));
+                    if (collection) {
+                        jclass colCls = JCALL(env->GetObjectClass(collection));
+                        jmethodID iterMid = JCALL(env->GetMethodID(colCls,
+                            GSTR_DECRYPT(SA_ITERATOR,     SA_ITERATOR_LEN,     SA_ITERATOR_KEY),
+                            GSTR_DECRYPT(SA_ITERATOR_SIG, SA_ITERATOR_SIG_LEN, SA_ITERATOR_SIG_KEY)));
+                        if (iterMid) {
+                            jobject iter = JCALL(env->CallObjectMethod(collection, iterMid));
+                            if (iter) {
+                                jclass iterCls = JCALL(env->GetObjectClass(iter));
+                                jmethodID hasNextMid = JCALL(env->GetMethodID(iterCls,
+                                    GSTR_DECRYPT(SA_HASNEXT,     SA_HASNEXT_LEN,     SA_HASNEXT_KEY),
+                                    GSTR_DECRYPT(SA_HASNEXT_SIG, SA_HASNEXT_SIG_LEN, SA_HASNEXT_SIG_KEY)));
+                                jmethodID nextMid = JCALL(env->GetMethodID(iterCls,
+                                    GSTR_DECRYPT(SA_NEXT,     SA_NEXT_LEN,     SA_NEXT_KEY),
+                                    GSTR_DECRYPT(SA_NEXT_SIG, SA_NEXT_SIG_LEN, SA_NEXT_SIG_KEY)));
+                                jclass pcrCls = JCALL(env->FindClass(
+                                    GSTR_DECRYPT(SA_PCR_CLASS, SA_PCR_CLASS_LEN, SA_PCR_CLASS_KEY)));
+                                env->ExceptionClear();
+                                jclass cpCls = JCALL(env->FindClass(
+                                    GSTR_DECRYPT(SA_CP_CLASS, SA_CP_CLASS_LEN, SA_CP_CLASS_KEY)));
+                                env->ExceptionClear();
+
+                                while (hasNextMid && nextMid &&
+                                       JCALL(env->CallBooleanMethod(iter, hasNextMid))) {
+                                    jobject pcr = JCALL(env->CallObjectMethod(iter, nextMid));
+                                    if (!pcr) continue;
+                                    if (pcrCls) {
+                                        jfieldID locProvFid = JCALL(env->GetFieldID(pcrCls,
+                                            GSTR_DECRYPT(SA_LOCPROV, SA_LOCPROV_LEN, SA_LOCPROV_KEY),
+                                            "Ljava/lang/Object;"));
+                                        if (!locProvFid) { env->ExceptionClear(); continue; }
+                                        jobject localProv = JCALL(env->GetObjectField(pcr, locProvFid));
+                                        if (localProv && cpCls) {
+                                            jfieldID mCtxFid = JCALL(env->GetFieldID(cpCls,
+                                                GSTR_DECRYPT(SA_MCTX, SA_MCTX_LEN, SA_MCTX_KEY),
+                                                "Landroid/content/Context;"));
+                                            if (!mCtxFid) { env->ExceptionClear();
+                                                mCtxFid = JCALL(env->GetFieldID(cpCls,
+                                                    GSTR_DECRYPT(SA_MCTX, SA_MCTX_LEN, SA_MCTX_KEY),
+                                                    "Ljava/lang/Object;"));
+                                                env->ExceptionClear();
+                                            }
+                                            if (mCtxFid) {
+                                                JCALLV(env->SetObjectField(localProv, mCtxFid, newApp));
+                                            }
+                                        }
+                                    }
+                                }
+                                GLOGI("§9 f.15: provider mContext update done");
+                            }
+                        }
+                    }
+                }
+                env->ExceptionClear();
+            }
+        }
+
+        // 16. newApp.onCreate()
+        jclass newAppCls = JCALL(env->GetObjectClass(newApp));
+        jmethodID onCreateMid = JCALL(env->GetMethodID(newAppCls,
+            GSTR_DECRYPT(SA_ONCREATE,     SA_ONCREATE_LEN,     SA_ONCREATE_KEY),
+            GSTR_DECRYPT(SA_ONCREATE_SIG, SA_ONCREATE_SIG_LEN, SA_ONCREATE_SIG_KEY)));
+        if (onCreateMid) {
+            JCALLV(env->CallVoidMethod(newApp, onCreateMid));
+            if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
+            GLOGI("§9 f.16: newApp.onCreate() called");
+        } else {
+            env->ExceptionClear();
+            GLOGE("§9 f: onCreate method not found on newApp");
+        }
+
+        GLOGI("§9 f: Application swap complete");
+    } while(0);
+    env->ExceptionClear();
+
     JCALLV(env->ReleaseStringUTFChars(jabsPath, dexDirPath));
     GLOGI("§9 install: complete");
 }

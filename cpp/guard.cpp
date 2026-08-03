@@ -3541,6 +3541,8 @@ static uint8_t *sl_read_asset(JNIEnv *env, jobject context,
 // ── §9.5  stub_install_impl — native DexProtector.install(Context) ────────
 
 static void stub_install_impl(JNIEnv *env, jclass /*cls*/, jobject context) {
+    GLOGI("§9 stub_install_impl: enter");
+
     // ── a. Resolve output directory path via context.getDir("app_dex",0) ──
     jclass ctxCls = env->GetObjectClass(context);
     jmethodID getDirMid = env->GetMethodID(ctxCls,
@@ -3562,12 +3564,15 @@ static void stub_install_impl(JNIEnv *env, jclass /*cls*/, jobject context) {
 
     jstring jabsPath = (jstring)env->CallObjectMethod(dexDirFile, getAbsMid);
     const char *dexDirPath = env->GetStringUTFChars(jabsPath, nullptr);
+    GLOGI("§9 a: dexDir resolved: %s", dexDirPath ? dexDirPath : "(null)");
 
     // ── b. Read phantom.vmp bundle ────────────────────────────────────────
     const char *bundlePath = GSTR_DECRYPT(SL_ASSET_BUNDLE, SL_ASSET_BUNDLE_LEN, SL_ASSET_BUNDLE_KEY);
     size_t bundleLen = 0;
+    GLOGI("§9 b: opening phantom bundle");
     uint8_t *bundle = sl_read_asset(env, context, bundlePath, &bundleLen);
     if (!bundle || bundleLen < 4) {
+        GLOGE("§9 b: bundle read failed — bundle=%p len=%zu", (void*)bundle, bundleLen);
         if (bundle) free(bundle);
         env->ReleaseStringUTFChars(jabsPath, dexDirPath);
         return;
@@ -3576,7 +3581,9 @@ static void stub_install_impl(JNIEnv *env, jclass /*cls*/, jobject context) {
     // Bundle format: [4-byte big-endian shard count][count×4-byte sizes][shard bytes…]
     uint32_t shardCount = ((uint32_t)bundle[0] << 24) | ((uint32_t)bundle[1] << 16)
                         | ((uint32_t)bundle[2] <<  8) |  (uint32_t)bundle[3];
+    GLOGI("§9 b: bundleLen=%zu shardCount=%u", bundleLen, shardCount);
     if (shardCount == 0 || shardCount > 64 || bundleLen < 4 + shardCount * 4) {
+        GLOGE("§9 b: bad shardCount=%u — aborting", shardCount);
         free(bundle); env->ReleaseStringUTFChars(jabsPath, dexDirPath); return;
     }
 
@@ -3597,14 +3604,18 @@ static void stub_install_impl(JNIEnv *env, jclass /*cls*/, jobject context) {
     char *dexPathList = (char *)malloc(shardCount * 600 + 16);
     dexPathList[0] = '\0';
 
+    GLOGI("§9 c: decrypting %u shards", shardCount);
     for (uint32_t i = 0; i < shardCount; i++) {
         uint32_t encLen = szArr[i];
-        if (cursor + encLen > bundleLen) break;
+        if (cursor + encLen > bundleLen) {
+            GLOGE("§9 c: shard %u overflows bundle (cursor=%zu encLen=%u bundleLen=%zu)", i, cursor, encLen, bundleLen);
+            break;
+        }
 
         size_t plainLen = 0;
         uint8_t *plain = sl_decrypt_shard(bundle + cursor, encLen, &plainLen);
         cursor += encLen;
-        if (!plain) continue;
+        if (!plain) { GLOGE("§9 c: shard %u decrypt failed", i); continue; }
 
         char shardPath[512];
         snprintf(shardPath, sizeof(shardPath), "%s/%s%u%s",
@@ -3616,16 +3627,21 @@ static void stub_install_impl(JNIEnv *env, jclass /*cls*/, jobject context) {
         if (f) {
             fwrite(plain, 1, plainLen, f);
             fclose(f);
+            GLOGI("§9 c: shard %u written — %zu bytes → %s", i, plainLen, shardPath);
+        } else {
+            GLOGE("§9 c: shard %u fopen failed errno=%d", i, errno);
         }
-        free(plain);  // DEX is on disk; wipe heap copy
+        free(plain);
 
         if (i > 0) strcat(dexPathList, ":");
         strcat(dexPathList, shardPath);
     }
+    GLOGI("§9 c: dexPathList = %s", dexPathList[0] ? dexPathList : "(empty)");
     free(szArr);
     free(bundle);
 
     // ── d. Inject shard DEX files into the app's existing classloader ──────
+    GLOGI("§9 d: injecting into classloader");
     if (dexPathList[0] != '\0') {
         // Get parent classloader (context.getClassLoader())
         jmethodID getCLMid = env->GetMethodID(ctxCls,
@@ -3650,6 +3666,9 @@ static void stub_install_impl(JNIEnv *env, jclass /*cls*/, jobject context) {
                                           jDexPath, jOptPath, (jstring)nullptr, parentCL);
         env->DeleteLocalRef(jDexPath);
         env->DeleteLocalRef(jOptPath);
+
+        GLOGI("§9 d: DexClassLoader created=%s exc=%d", newDCL ? "ok" : "null", env->ExceptionCheck());
+        if (env->ExceptionCheck()) { GLOGE("§9 d: DCL exception — clearing"); env->ExceptionDescribe(); env->ExceptionClear(); }
 
         if (newDCL && !env->ExceptionCheck()) {
             // Merge pathList.dexElements: [new] + [existing]
@@ -3689,14 +3708,20 @@ static void stub_install_impl(JNIEnv *env, jclass /*cls*/, jobject context) {
                             env->GetObjectArrayElement(oldElems, j));
 
                     env->SetObjectField(oldPL, deFid, merged);
+                    GLOGI("§9 d: dexElements merged — new=%d old=%d total=%d", newLen, oldLen, total);
                 }
+            } else {
+                GLOGE("§9 d: pathList field missing — newPL=%p oldPL=%p exc=%d", (void*)newPL, (void*)oldPL, env->ExceptionCheck());
             }
         }
         env->ExceptionClear();
+    } else {
+        GLOGE("§9 d: dexPathList empty — no shards written, skipping injection");
     }
     free(dexPathList);
 
     // ── d2. Wipe shard files from disk — rooted adb pull is useless now ───
+    GLOGI("§9 d2: wiping shard files from disk");
     for (uint32_t i = 0; i < shardCount; i++) {
         char killPath[512];
         snprintf(killPath, sizeof(killPath), "%s/%s%u%s",
@@ -3705,6 +3730,7 @@ static void stub_install_impl(JNIEnv *env, jclass /*cls*/, jobject context) {
     }
 
     // ── e. Read phantom/app.cfg and set Const.REAL_APP ────────────────────
+    GLOGI("§9 e: reading app.cfg");
     const char *cfgPath = GSTR_DECRYPT(SL_ASSET_CFG, SL_ASSET_CFG_LEN, SL_ASSET_CFG_KEY);
     size_t cfgLen = 0;
     uint8_t *cfgBuf = sl_read_asset(env, context, cfgPath, &cfgLen);
@@ -3712,35 +3738,42 @@ static void stub_install_impl(JNIEnv *env, jclass /*cls*/, jobject context) {
         char *realApp = (char *)malloc(cfgLen + 1);
         memcpy(realApp, cfgBuf, cfgLen);
         realApp[cfgLen] = '\0';
-        // Strip trailing whitespace/newline
         for (int j = (int)cfgLen - 1; j >= 0 && (realApp[j] == '\n' || realApp[j] == '\r'
                                                     || realApp[j] == ' '); j--)
             realApp[j] = '\0';
 
-        // Replace '.' class name separator with '/' for FindClass
+        GLOGI("§9 e: realApp = %s", realApp);
+
         char *slashName = (char *)malloc(cfgLen + 2);
         int si = 0;
         for (int j = 0; realApp[j]; j++)
             slashName[si++] = (realApp[j] == '.') ? '/' : realApp[j];
         slashName[si] = '\0';
 
-        // Set Const.REAL_APP (dot-separated form for LoadedApk.makeApplication)
         jclass constCls = env->FindClass(
             GSTR_DECRYPT(SL_CONST_CLASS, SL_CONST_CLASS_LEN, SL_CONST_CLASS_KEY));
+        GLOGI("§9 e: Const class found=%s exc=%d", constCls ? "yes" : "no", env->ExceptionCheck());
         if (constCls && !env->ExceptionCheck()) {
             jfieldID realAppFid = env->GetStaticFieldID(constCls,
                 GSTR_DECRYPT(SL_REAL_APP_FLD, SL_REAL_APP_FLD_LEN, SL_REAL_APP_FLD_KEY),
                 GSTR_DECRYPT(SL_STR_DESC, SL_STR_DESC_LEN, SL_STR_DESC_KEY));
             env->SetStaticObjectField(constCls, realAppFid,
                                       env->NewStringUTF(realApp));
+            GLOGI("§9 e: Const.REAL_APP set to '%s'", realApp);
+        } else {
+            GLOGE("§9 e: could not find Const class — DEX injection may have failed");
+            env->ExceptionClear();
         }
         env->ExceptionClear();
         free(slashName);
         free(realApp);
         free(cfgBuf);
+    } else {
+        GLOGE("§9 e: app.cfg read failed — cfgBuf=%p cfgLen=%zu", (void*)cfgBuf, cfgLen);
     }
 
     env->ReleaseStringUTFChars(jabsPath, dexDirPath);
+    GLOGI("§9 stub_install_impl: complete");
 }
 
 // ── §9.6  Register DexProtector.install → stub_install_impl ──────────────

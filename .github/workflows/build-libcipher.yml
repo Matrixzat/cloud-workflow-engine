@@ -292,7 +292,7 @@ jobs:
             -fvisibility=hidden
             -ffunction-sections -fdata-sections
             -D__ANDROID__ -DANDROID
-            -DD2C_HAS_JNILOAD
+            # -DD2C_HAS_JNILOAD  ← removed: guard.cpp uses #ifndef so defining this SKIPS JNI_OnLoad
             -DFONTS_DEBUG_LOG
             -I"$SRC"
           )
@@ -399,5 +399,6 @@ jobs:
             libcipher_armeabi-v7a.so
             libcipher_armeabi-v7a.a
             stub.dex
+
 
 

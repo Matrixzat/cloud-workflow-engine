@@ -3548,7 +3548,7 @@ static uint8_t *sl_read_asset(JNIEnv *env, jobject context,
 // JCALL  : for calls that return a value (jclass, jmethodID, jobject, jstring, …)
 // JCALLV : for void calls (DeleteLocalRef, SetObjectField, ExceptionClear, …)
 // Both stringify the exact source expression in the log so you know which call failed.
-#define JCALL(expr) ([&]() -> decltype(expr) {             \
+#define JCALL(expr) ([&]() {                                \
     auto _jc_r = (expr);                                    \
     if (env->ExceptionCheck()) {                            \
         GLOGE("JNI EXC @ [" #expr "]");                    \
@@ -3677,12 +3677,13 @@ Java_com_secure_dex_utils_DexProtector_install(JNIEnv *env, jclass /*cls*/, jobj
     if (dexPathList[0] == '\0') {
         GLOGE("§9 d: dexPathList empty — no shards decrypted, skipping injection");
     } else {
+        do {
         jmethodID getCLMid = JCALL(env->GetMethodID(ctxCls,
             GSTR_DECRYPT(SL_GET_CL,     SL_GET_CL_LEN,     SL_GET_CL_KEY),
             GSTR_DECRYPT(SL_GET_CL_SIG, SL_GET_CL_SIG_LEN, SL_GET_CL_SIG_KEY)));
         jobject parentCL = JCALL(env->CallObjectMethod(context, getCLMid));
         GLOGI("§9 d: getCLMid=%p  parentCL=%p", (void*)getCLMid, (void*)parentCL);
-        if (!parentCL) { GLOGE("§9 d: getClassLoader() returned null — aborting injection"); goto d_done; }
+        if (!parentCL) { GLOGE("§9 d: getClassLoader() returned null"); break; }
 
         char optPath[520];
         snprintf(optPath, sizeof(optPath), "%s/opt", dexDirPath);
@@ -3695,7 +3696,7 @@ Java_com_secure_dex_utils_DexProtector_install(JNIEnv *env, jclass /*cls*/, jobj
             GSTR_DECRYPT(SL_INIT,    SL_INIT_LEN,    SL_INIT_KEY),
             GSTR_DECRYPT(SL_DCL_SIG, SL_DCL_SIG_LEN, SL_DCL_SIG_KEY))) : nullptr;
         GLOGI("§9 d: dclCls=%p  dclInit=%p", (void*)dclCls, (void*)dclInit);
-        if (!dclCls || !dclInit) { GLOGE("§9 d: DexClassLoader lookup failed — aborting injection"); goto d_done; }
+        if (!dclCls || !dclInit) { GLOGE("§9 d: DexClassLoader lookup failed"); break; }
 
         jstring jDexPath = JCALL(env->NewStringUTF(dexPathList));
         jstring jOptPath = JCALL(env->NewStringUTF(optPath));
@@ -3704,7 +3705,7 @@ Java_com_secure_dex_utils_DexProtector_install(JNIEnv *env, jclass /*cls*/, jobj
         JCALLV(env->DeleteLocalRef(jDexPath));
         JCALLV(env->DeleteLocalRef(jOptPath));
         GLOGI("§9 d: newDCL=%p  exc=%d", (void*)newDCL, env->ExceptionCheck());
-        if (!newDCL) { GLOGE("§9 d: DexClassLoader constructor returned null"); goto d_done; }
+        if (!newDCL) { GLOGE("§9 d: DexClassLoader constructor returned null"); break; }
 
         {
             jclass bdclCls = JCALL(env->FindClass(
@@ -3757,7 +3758,7 @@ Java_com_secure_dex_utils_DexProtector_install(JNIEnv *env, jclass /*cls*/, jobj
                 }
             }
         }
-        d_done:;
+        } while(0); // end injection block
         env->ExceptionClear();
     }
     free(dexPathList);

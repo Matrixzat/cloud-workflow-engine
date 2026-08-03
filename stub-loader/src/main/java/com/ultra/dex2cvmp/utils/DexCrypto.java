@@ -2,234 +2,262 @@ package com.ultra.dex2cvmp.utils;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
+import android.os.Build;
 
 import com.ultra.dex2cvmp.data.Const;
 
+import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.lang.reflect.Field;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.zip.DeflaterInputStream;
-import java.util.zip.DeflaterOutputStream;
 import java.util.zip.InflaterInputStream;
 import java.util.zip.InflaterOutputStream;
 
+/**
+ * Runtime DEX decryption + libphantom bootstrap for the stub loader.
+ *
+ * Key changes vs. the old version:
+ *  • Const.getProtectKey() / static PROTECT_KEY are gone.
+ *  • The 16-byte session key is obtained by calling the native method
+ *    nativeGetKey(salt, certHash, pkgName) exported by libphantom.so.
+ *  • libphantom.so is stored inside the APK as an ARX-encrypted blob
+ *    (assets/phantom/libphantom_arm64.blob or libphantom_arm.blob).
+ *    loadPhantomLib(Context) decrypts it, writes it to code_cache/, and
+ *    calls System.load() — all of this MUST complete before nativeGetKey
+ *    is invoked.
+ *  • decrypt / decryptToBytes accept a byte[] key so no key material ever
+ *    lives as a Java String.
+ *
+ * ── Call order ────────────────────────────────────────────────────────────────
+ *   DexCrypto.loadPhantomLib(ctx);                  // extract + load .so
+ *   byte[] key = DexCrypto.nativeGetKey(salt, certHash, pkgName);
+ *   // … pass key to DexProtector for in-memory DEX decryption …
+ *   Arrays.fill(key, (byte) 0);                     // zero after use
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
 public class DexCrypto {
-    @SuppressLint("StaticFieldLeak")
-    public static Context mContext;
-    private static List<File> mDexFiles = new ArrayList<>();
 
-    public DexCrypto(Context context, List<File> dexFiles) {
-        mContext = context;
-        mDexFiles = dexFiles;
+    // ── Native entry-point ────────────────────────────────────────────────────
 
-        try {
-            @SuppressLint("PrivateApi") Class<?> activityThreadClass = Class.forName("android.app.ActivityThread");
+    /**
+     * Derive the 16-byte DEX session key inside libphantom.so.
+     *
+     * The native side runs the same ARX KDF as PhantomKey.deriveKey() on the
+     * host.  If {@code certHash} does not match the cert that was present at
+     * pack time the derived key will be wrong and decryption will silently
+     * produce garbage — no error string is exposed.
+     *
+     * MUST be called only after {@link #loadPhantomLib(Context)}.
+     *
+     * @param salt           16-byte raw salt from assets/phantom/ph_salt.
+     * @param certHash       SHA-256 of the signing cert stored at pack time (32 bytes,
+     *                       from assets/phantom/ph_cert).
+     * @param pkgNameUtf8    Package name pre-encoded as standard UTF-8 bytes by the
+     *                       caller (context.getPackageName().getBytes(UTF_8)).
+     *                       Passing bytes avoids the Java modified-UTF-8 vs.
+     *                       standard-UTF-8 discrepancy in GetStringUTFChars, ensuring
+     *                       bit-identical KDF input on both Java and native sides.
+     * @return 16-byte key (caller MUST zero with Arrays.fill after use).
+     */
+    public static native byte[] nativeGetKey(byte[] salt, byte[] certHash, byte[] pkgNameUtf8);
 
-            @SuppressLint("DiscouragedPrivateApi") Field mPackagesField = activityThreadClass.getDeclaredField("mPackages");
-            mPackagesField.setAccessible(true); //取消默认 Java 语言访问控制检查的能力（暴力反射）
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+    // ── Blob bootstrap ────────────────────────────────────────────────────────
+
+    /**
+     * Hardcoded blob-decryption key — built char-by-char so the value never
+     * appears verbatim in the DEX string pool.
+     * This key is ONLY used to decrypt the libphantom.so blob; it does NOT
+     * protect any user data.  It is separate from, and weaker than, the per-APK
+     * key derived by nativeGetKey().
+     */
+    private static byte[] blobKey() {
+        // "Ph4nt0mBl0bK3y!" (16 bytes) — change when regenerating blobs.
+        char[] c = new char[]{
+            'P','h','4','n','t','0','m','B','l','0','b','K','3','y','!','!'
+        };
+        byte[] k = new byte[c.length];
+        for (int i = 0; i < c.length; i++) k[i] = (byte) c[i];
+        return k;
     }
 
-    public static void op(Context context, String str) throws Exception {
-        // Output MUST use .dex extension.
-        // DexPathList.makeDexElements inspects file names: it only creates DEX
-        // Elements for files ending in ".dex", ".apk", ".jar" or ".zip".
-        // Shards named "classes-v1.lua.mph" would be silently skipped, leaving
-        // dexElements empty — causing ClassNotFoundException at runtime.
-        int dotIdx = str.indexOf('.');
-        String baseName = (dotIdx > 0) ? str.substring(0, dotIdx) : str;
-        File file = new File(context.getDir("app_dex", 0), baseName + ".dex");
+    /**
+     * Extract the ABI-appropriate libphantom blob from assets, decrypt it with
+     * the hardcoded blob key, write it to {@code getCodeCacheDir()/libphantom.so},
+     * and call {@code System.load()}.
+     *
+     * Idempotent — if the file already exists it is reused (the blob only changes
+     * when a new libphantom build is shipped).
+     */
+    @SuppressLint("UnsafeDynamicallyLoadedCode")
+    public static void loadPhantomLib(Context ctx) throws Exception {
+        File soFile = new File(ctx.getCodeCacheDir(), "libphantom.so");
 
-        // Ensure the PARENT directory exists (not the file itself).
-        File parent = file.getParentFile();
-        if (parent != null && !parent.exists()) {
-            parent.mkdirs();
-        }
+        if (!soFile.exists()) {
+            String blobName = pickBlobName();
+            String assetPath = Const.DP_LIB + "/" + blobName;
 
-        decDex(context.getAssets().open(Const.DP_LIB + "/" + str), file);
-        // Android 16 (API 36) rejects loading writable DEX files with SecurityException.
-        // Remove write permissions immediately after writing so makeDexElements accepts it.
-        file.setWritable(false, false);
-        mDexFiles.add(file);
-    }
+            InputStream bis = ctx.getAssets().open(assetPath);
+            byte[] blob = readFully(bis);
+            closeQuiet(bis);
 
-    private static void a(Closeable closeable) {
-        if (closeable == null) return;
-        try {
-            closeable.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
+            byte[] soBytes = decryptBlob(blob);
 
-    public static void decDex(InputStream is, File file) {
-        OutputStream os = null;
-        File file2 = file.getParentFile();
-        if (file2 != null && !file2.exists()) {
-            file2.mkdirs(); // create parent dir if missing (previous check was impossible: !exists&&isDirectory)
-        }
-        if (file.exists()) {
-            file.delete();
-        }
-        try {
-            os = new FileOutputStream(file);
-            decrypt(is, os);
-            a(os);
-            a(is);
-        } catch (Exception e) {
-            e.printStackTrace();
-        } finally {
-            a(is);
-            a(os);
-        }
-    }
+            File parent = soFile.getParentFile();
+            if (parent != null && !parent.exists()) parent.mkdirs();
 
-    public static void decrypt(InputStream input, OutputStream output) throws Exception {
-        InflaterInputStream is = new InflaterInputStream(input);
-        InflaterOutputStream os = new InflaterOutputStream(output);
-
-        exfr(is, os);
-        os.close();
-        is.close();
-    }
-
-    public static void encrypt(InputStream input, OutputStream output) throws Exception {
-        DeflaterInputStream is = new DeflaterInputStream(input);
-        DeflaterOutputStream os = new DeflaterOutputStream(output);
-
-        exfr(is, os);
-        os.close();
-        is.close();
-    }
-
-    private static void exfr(InputStream inputStream, OutputStream outputStream) throws Exception {
-        char[] key = Const.getProtectKey().toCharArray();
-        int[] iArr = new int[4];
-        int i = 1;
-        int i2 = i + 1;
-        iArr[0] = key[0] | (key[i] << 16);
-        i = i2 + 1;
-        char c = key[i2];
-        i2 = i + 1;
-        iArr[1] = c | (key[i] << 16);
-        i = i2 + 1;
-        c = key[i2];
-        i2 = i + 1;
-        iArr[2] = c | (key[i] << 16);
-        i = i2 + 1;
-        c = key[i2];
-        i2 = i + 1;
-        iArr[3] = c | (key[i] << 16);
-        int[] iArr2 = new int[2];
-        i = i2 + 1;
-        c = key[i2];
-        i2 = i + 1;
-        iArr2[0] = c | (key[i] << 16);
-        iArr2[1] = key[i2] | (key[i2 + 1] << 16);
-        iArr = FxIjsF(iArr);
-        byte[] bArr = new byte[8192];
-        int i3 = 0;
-        while (true) {
-            int read = inputStream.read(bArr);
-            if (read >= 0) {
-                int i4 = i3 + read;
-                int i5 = 0;
-                while (i3 < i4) {
-                    int i6 = i3 % 8;
-                    int i7 = i6 / 4;
-                    int i8 = i3 % 4;
-                    if (i6 == 0) {
-                        nDnv(iArr, iArr2);
-                    }
-                    bArr[i5] = (byte) (((byte) (iArr2[i7] >> (i8 * 8))) ^ bArr[i5]);
-                    i3++;
-                    i5++;
-                }
-                outputStream.write(bArr, 0, read);
-            } else {
-                return;
+            FileOutputStream fos = new FileOutputStream(soFile);
+            try {
+                fos.write(soBytes);
+            } finally {
+                closeQuiet(fos);
             }
+
+            // Remove write permission so ART is happy.
+            soFile.setWritable(false, false);
+        }
+
+        System.load(soFile.getAbsolutePath());
+    }
+
+    // ── Decryption helpers called by DexProtector ─────────────────────────────
+
+    /**
+     * Decrypt {@code encrypted} bytes (a single DEX shard) into a fresh byte[].
+     *
+     * @param key       16-byte key from nativeGetKey().
+     * @param encrypted Encrypted shard bytes from the phantom.vmp bundle.
+     * @return Plaintext DEX bytes.
+     */
+    public static byte[] decryptToBytes(byte[] key, byte[] encrypted) throws Exception {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream(encrypted.length);
+        decrypt(key,
+                new java.io.ByteArrayInputStream(encrypted),
+                baos);
+        return baos.toByteArray();
+    }
+
+    /** Streaming decrypt — used when writing a shard to disk (API < 26 fallback). */
+    public static void decrypt(byte[] key, InputStream input, OutputStream output) throws Exception {
+        InflaterInputStream  is = new InflaterInputStream(input);
+        InflaterOutputStream os = new InflaterOutputStream(output);
+        exfr(key, is, os);
+        os.close();
+        is.close();
+    }
+
+    // ── Private implementation ────────────────────────────────────────────────
+
+    /** Decrypt a raw blob byte[] using the hardcoded blob key. */
+    private static byte[] decryptBlob(byte[] blob) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(blob.length);
+        decrypt(blobKey(), new java.io.ByteArrayInputStream(blob), out);
+        return out.toByteArray();
+    }
+
+    /** Pick the right blob asset name for the current device ABI. */
+    private static String pickBlobName() {
+        String[] abis = (Build.VERSION.SDK_INT >= 21)
+                ? Build.SUPPORTED_ABIS
+                : new String[]{ Build.CPU_ABI, Build.CPU_ABI2 };
+        for (String abi : abis) {
+            if (abi != null && abi.startsWith("arm64")) return Const.PHANTOM_BLOB_ARM64;
+        }
+        return Const.PHANTOM_BLOB_ARM;
+    }
+
+    /** ARX stream cipher — key is 16 raw bytes (little-endian → 4 × int). */
+    private static void exfr(byte[] key, InputStream in, OutputStream out) throws Exception {
+        if (key == null || key.length < 16) throw new IllegalArgumentException("key must be 16 bytes");
+
+        int[] iArr = new int[4];
+        for (int i = 0; i < 4; i++) {
+            int b = i * 4;
+            iArr[i] = (key[b]     & 0xFF)
+                    | ((key[b+1] & 0xFF) << 8)
+                    | ((key[b+2] & 0xFF) << 16)
+                    | ((key[b+3] & 0xFF) << 24);
+        }
+        int[] iArr2 = new int[]{ iArr[0] ^ iArr[2], iArr[1] ^ iArr[3] };
+        iArr = FxIjsF(iArr);
+
+        byte[] buf = new byte[8192];
+        int pos = 0;
+        while (true) {
+            int read = in.read(buf);
+            if (read < 0) return;
+            int end = pos + read;
+            int i5 = 0;
+            while (pos < end) {
+                int i6 = pos % 8;
+                if (i6 == 0) nDnv(iArr, iArr2);
+                buf[i5] = (byte) (((byte) (iArr2[i6 / 4] >> ((pos % 4) * 8))) ^ buf[i5]);
+                pos++;
+                i5++;
+            }
+            out.write(buf, 0, read);
         }
     }
 
     private static int[] FxIjsF(int[] iArr) {
-        int[] iArr2 = new int[27];
+        int[] r = new int[27];
         int i = iArr[0];
-        iArr2[0] = i;
-        int[] iArr3 = new int[]{iArr[1], iArr[2], iArr[3]};
+        r[0] = i;
+        int[] t = new int[]{ iArr[1], iArr[2], iArr[3] };
         for (int i2 = 0; i2 < 26; i2++) {
-            iArr3[i2 % 3] = (((iArr3[i2 % 3] >>> 8) | (iArr3[i2 % 3] << 24)) + i) ^ i2;
-            i = ((i << 3) | (i >>> 29)) ^ iArr3[i2 % 3];
-            iArr2[i2 + 1] = i;
+            t[i2 % 3] = (((t[i2 % 3] >>> 8) | (t[i2 % 3] << 24)) + i) ^ i2;
+            i = ((i << 3) | (i >>> 29)) ^ t[i2 % 3];
+            r[i2 + 1] = i;
         }
-        return iArr2;
+        return r;
     }
 
     private static void nDnv(int[] iArr, int[] iArr2) {
-        int i = iArr2[0];
-        int i2 = iArr2[1];
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[0];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[1];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[2];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[3];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[4];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[5];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[6];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[7];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[8];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[9];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[10];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[11];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[12];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[13];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[14];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[15];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[16];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[17];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[18];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[19];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[20];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[21];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[22];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[23];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[24];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[25];
-        i = ((i << 3) | (i >>> 29)) ^ i2;
-        i2 = (((i2 >>> 8) | (i2 << 24)) + i) ^ iArr[26];
-        iArr2[0] = ((i << 3) | (i >>> 29)) ^ i2;
+        int i = iArr2[0], i2 = iArr2[1];
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[0];  i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[1];  i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[2];  i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[3];  i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[4];  i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[5];  i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[6];  i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[7];  i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[8];  i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[9];  i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[10]; i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[11]; i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[12]; i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[13]; i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[14]; i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[15]; i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[16]; i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[17]; i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[18]; i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[19]; i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[20]; i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[21]; i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[22]; i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[23]; i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[24]; i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[25]; i=((i<<3)|(i>>>29))^i2;
+        i2 = (((i2>>>8)|(i2<<24))+i)^iArr[26];
+        iArr2[0] = ((i<<3)|(i>>>29))^i2;
         iArr2[1] = i2;
+    }
+
+    // ── tiny helpers ──────────────────────────────────────────────────────────
+
+    static byte[] readFully(InputStream is) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192]; int n;
+        while ((n = is.read(buf)) > 0) out.write(buf, 0, n);
+        return out.toByteArray();
+    }
+
+    private static void closeQuiet(Closeable c) {
+        if (c == null) return;
+        try { c.close(); } catch (IOException ignored) {}
     }
 }

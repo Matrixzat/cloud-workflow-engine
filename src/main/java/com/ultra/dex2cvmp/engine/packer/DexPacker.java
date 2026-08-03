@@ -5,25 +5,31 @@ import android.content.Context;
 import java.io.*;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 /**
- * DEX Packer — wraps a dex2c/VMP-processed APK with the com.secure.dex stub loader.
+ * DEX Packer — wraps a dex2c/VMP-processed APK with the com.ultra.dex2cvmp stub loader.
+ *
+ * Security model (per-APK random key):
+ *   • A 16-byte cryptographically random salt is generated for every pack operation.
+ *   • The 16-byte session key is derived via PhantomKey.deriveKey(salt, certDer, pkgName).
+ *   • salt is written to assets/phantom/ph_salt (raw, 16 bytes) so the stub can read it
+ *     at runtime and call nativeGetKey() to reproduce the same key inside libphantom.so.
+ *   • The signing certificate DER bytes bind the key to the signer — if the APK is
+ *     re-signed the derived key is different and decryption silently fails.
+ *   • No static PROTECT_KEY string exists anywhere in the project.
  *
  * Flow:
  *  1. Extract classes*.dex + AndroidManifest.xml from input APK.
  *  2. Parse manifest → capture real Application class, patch android:name → ProxyApplication.
- *  3. Encrypt all DEX shards and bundle them into a single phantom.vmp payload.
+ *  3. Generate random salt; derive session key from (salt, certDer, pkgName).
+ *  4. Encrypt all DEX shards and bundle them into a single phantom.vmp payload.
  *     Bundle format: [4-byte shard count][count × 4-byte shard sizes][encrypted bytes…]
- *  4. Write assets/phantom/app.cfg (real app class name, UTF-8).
- *  5. Load pre-built stub.dex from our own app assets.
- *  6. Repack: stub.dex + patched manifest + phantom payload + rest of original APK.
+ *  5. Write assets/phantom/app.cfg  (real app class name, UTF-8).
+ *     Write assets/phantom/ph_salt  (16-byte raw salt).
+ *  6. Load pre-built stub.dex from our own app assets.
+ *  7. Repack: stub.dex + patched manifest + phantom payload + rest of original APK.
  */
 public class DexPacker {
-
-    /** Must match com.secure.dex.data.Const.PROTECT_KEY in the stub loader. */
-    public static final String PROTECT_KEY = "U1tr4D3x2CVMP!!!";
 
     /** Asset sub-dir name in the output APK. Must match Const.DP_LIB. */
     public static final String ASSET_DIR = "phantom";
@@ -32,10 +38,25 @@ public class DexPacker {
     public static final String BUNDLE_FILE = "phantom.vmp";
 
     /** Fully-qualified stub Application class injected into the manifest. */
-    public static final String PROXY_APP  = "com.ultra.dex2cvmp.ProxyApplication";
+    public static final String PROXY_APP = "com.ultra.dex2cvmp.ProxyApplication";
 
     /** Asset name used to pass real app class to stub at runtime. */
     public static final String REAL_APP_ASSET = "app.cfg";
+
+    /** Asset name for the 16-byte per-APK salt. Must match Const.SALT_ASSET. */
+    public static final String SALT_ASSET = "ph_salt";
+
+    /**
+     * Asset name for the 32-byte cert SHA-256 baked at pack time.
+     * The stub reads this value and passes it verbatim to nativeGetKey() so
+     * the KDF input is always consistent regardless of when the APK is signed.
+     * Must match Const.CERT_ASSET.
+     */
+    public static final String CERT_ASSET = "ph_cert";
+
+    /** Asset names for the OLLVM-compiled native KDF library, one per ABI. */
+    public static final String BLOB_ARM64 = "libphantom_arm64.blob";
+    public static final String BLOB_ARM   = "libphantom_arm.blob";
 
     private final Context context;
 
@@ -49,8 +70,11 @@ public class DexPacker {
      * @param inputApk   Dex2c/VMP-processed APK (will not be modified).
      * @param outputApk  Destination for the packed APK (unsigned; sign separately).
      * @param workDir    Scratch directory for extracted + encrypted files.
+     * @param certDer    DER bytes of the signing certificate that will be used to
+     *                   sign {@code outputApk}.  Pass null to disable cert binding
+     *                   (key will be reproducible from salt + pkg name only).
      */
-    public void pack(File inputApk, File outputApk, File workDir) throws Exception {
+    public void pack(File inputApk, File outputApk, File workDir, byte[] certDer) throws Exception {
         // ── 1. Extract manifest + DEX files from input APK ───────────────────
         File extractDir = new File(workDir, "extracted");
         FastZip.extract(inputApk, extractDir);
@@ -58,32 +82,35 @@ public class DexPacker {
         // ── 2. Parse + patch manifest ─────────────────────────────────────────
         File manifestFile = new File(extractDir, "AndroidManifest.xml");
         byte[] manifestBytes = readFile(manifestFile);
-
         byte[] patchedManifest = ManifestPatcher.parseManifest(manifestBytes, PROXY_APP);
-        // ManifestPatcher.customApplicationName now holds the original app class (or "")
 
         String realAppClass = ManifestPatcher.customApplication
                 ? ManifestPatcher.customApplicationName
                 : "android.app.Application";
-
-        // Expand ".<name>" short-form to fully qualified using package name
         if (realAppClass.startsWith(".") && !ManifestPatcher.packageName.isEmpty()) {
             realAppClass = ManifestPatcher.packageName + realAppClass;
         }
+        String pkgName = ManifestPatcher.packageName;
 
-        // ── 3. Encrypt all DEX shards and bundle into one phantom.vmp ────────
+        // ── 3. Generate per-APK salt and derive session key ───────────────────
+        byte[] salt = PhantomKey.randomSalt();
+        byte[] key  = PhantomKey.deriveKey(salt, certDer, pkgName);
+
+        // ── 4. Encrypt all DEX shards and bundle into one phantom.vmp ─────────
         File shardsDir = new File(workDir, "shards");
         shardsDir.mkdirs();
 
-        // Collect encrypted bytes for every shard
         List<byte[]> shards = new ArrayList<>();
         File classesDex = new File(extractDir, "classes.dex");
-        if (classesDex.exists()) shards.add(encryptDexToBytes(classesDex));
+        if (classesDex.exists()) shards.add(encryptDexToBytes(classesDex, key));
         for (int i = 2; ; i++) {
             File dex = new File(extractDir, "classes" + i + ".dex");
             if (!dex.exists()) break;
-            shards.add(encryptDexToBytes(dex));
+            shards.add(encryptDexToBytes(dex, key));
         }
+
+        // Zero the key as soon as all encryption is done.
+        java.util.Arrays.fill(key, (byte) 0);
 
         // Write bundle: [4-byte count][count × 4-byte shard size][shard bytes…]
         File bundleFile = new File(shardsDir, BUNDLE_FILE);
@@ -93,25 +120,54 @@ public class DexPacker {
             for (byte[] shard : shards) dos.write(shard);
         }
 
-        // ── 4. Write app.cfg (real app class name) ────────────────────────────
+        // ── 5. Write app.cfg, ph_salt, and ph_cert ────────────────────────────
         File realAppFile = new File(shardsDir, REAL_APP_ASSET);
         try (FileOutputStream fos = new FileOutputStream(realAppFile)) {
             fos.write(realAppClass.getBytes("UTF-8"));
         }
 
-        // ── 5. Load pre-built stub DEX from our assets ────────────────────────
+        File saltFile = new File(shardsDir, SALT_ASSET);
+        try (FileOutputStream fos = new FileOutputStream(saltFile)) {
+            fos.write(salt);
+        }
+
+        // Compute cert hash (zeros when certDer is null — no cert binding).
+        byte[] certHash = new byte[32];
+        if (certDer != null && certDer.length > 0) {
+            certHash = java.security.MessageDigest.getInstance("SHA-256").digest(certDer);
+        }
+        File certFile = new File(shardsDir, CERT_ASSET);
+        try (FileOutputStream fos = new FileOutputStream(certFile)) {
+            fos.write(certHash);
+        }
+
+        // ── 6. Copy libphantom blobs from our own app assets into shardsDir ───
+        // FastZip.repack() will pack every file in shardsDir into
+        // assets/phantom/ of the output APK, so the stub can extract + load them.
+        copyAssetToDir(ASSET_DIR + "/" + BLOB_ARM64, new File(shardsDir, BLOB_ARM64));
+        copyAssetToDir(ASSET_DIR + "/" + BLOB_ARM,   new File(shardsDir, BLOB_ARM));
+
+        // ── 7. Load pre-built stub DEX from our assets ────────────────────────
         byte[] stubDex = readAsset("stub.dex");
 
-        // ── 6. Repack ─────────────────────────────────────────────────────────
+        // ── 8. Repack ─────────────────────────────────────────────────────────
         FastZip.repack(inputApk, outputApk, stubDex, shardsDir, ASSET_DIR, patchedManifest);
+    }
+
+    /**
+     * Convenience overload — no cert binding.
+     * Equivalent to {@code pack(inputApk, outputApk, workDir, null)}.
+     */
+    public void pack(File inputApk, File outputApk, File workDir) throws Exception {
+        pack(inputApk, outputApk, workDir, null);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    private byte[] encryptDexToBytes(File input) throws Exception {
+    private byte[] encryptDexToBytes(File input, byte[] key) throws Exception {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         try (InputStream in = new FileInputStream(input)) {
-            DexCrypto.encrypt(PROTECT_KEY, in, baos);
+            DexCrypto.encrypt(key, in, baos);
         }
         return baos.toByteArray();
     }
@@ -130,6 +186,30 @@ public class DexPacker {
             byte[] buf = new byte[8192]; int n;
             while ((n = is.read(buf)) > 0) baos.write(buf, 0, n);
             return baos.toByteArray();
+        }
+    }
+
+    /**
+     * Copy an asset from our own app into {@code dest}.
+     *
+     * This is a hard failure: if the libphantom blobs have not been compiled
+     * and placed under assets/phantom/ yet, packing cannot produce a working
+     * protected APK.  We throw immediately so the user gets a clear error
+     * rather than a silently broken output that crashes on first launch.
+     *
+     * See docs/build-phantom.md for the OLLVM + NDK build recipe.
+     */
+    private void copyAssetToDir(String assetPath, File dest) throws IOException {
+        try (InputStream is = context.getAssets().open(assetPath);
+             FileOutputStream fos = new FileOutputStream(dest)) {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = is.read(buf)) > 0) fos.write(buf, 0, n);
+        } catch (java.io.FileNotFoundException e) {
+            throw new IOException(
+                "libphantom blob not found: " + assetPath
+                + "\nBuild the native library with OLLVM + NDK first.\n"
+                + "See docs/build-phantom.md for the full CI recipe.", e);
         }
     }
 }

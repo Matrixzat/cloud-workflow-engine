@@ -2,10 +2,14 @@ package com.ultra.dex2cvmp.utils;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.os.Build;
 
 import com.ultra.dex2cvmp.data.Const;
 
 import java.io.ByteArrayInputStream;
+import java.security.MessageDigest;
 import java.io.DataInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -14,22 +18,42 @@ import java.io.InputStream;
 import java.lang.reflect.Array;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
+/**
+ * Installs the encrypted DEX shards from the phantom.vmp bundle.
+ *
+ * Security improvements over the old version:
+ *
+ *  1. libphantom.so bootstrap — the native library is stored as an
+ *     ARX-encrypted blob inside assets/phantom/.  loadPhantomLib()
+ *     decrypts and System.load()s it before any key material is needed.
+ *
+ *  2. Per-APK key via nativeGetKey() — no hardcoded key in Java.
+ *     The 16-byte key is derived from (salt, cert_sha256, pkg_name) inside
+ *     the native library.  If the APK is re-signed the key changes and
+ *     decryption silently fails — no explicit tamper check is needed.
+ *
+ *  3. InMemoryDexClassLoader (API 27+) — decrypted DEX bytes go into
+ *     ByteBuffer objects and never touch the filesystem.  On API 21-26 the
+ *     code falls back to writing to app_dex/ (existing behaviour).
+ *
+ *  4. Key zeroed immediately — the 16-byte key[] array is cleared with
+ *     Arrays.fill() as soon as all shards are decrypted.
+ */
 public class DexProtector {
     @SuppressLint("StaticFieldLeak")
     public static Context mContext;
     @SuppressLint("StaticFieldLeak")
-    private static List<File> dexFiles = new ArrayList<>();
+    private static final List<File> dexFiles = new ArrayList<>();
     File dexDir;
     File optDir;
 
     // ── Runtime string builder — no sensitive literals in DEX string pool ──────
-    // NOTE: to move to native later, replace k() with a JNI call to guard.cpp.
     private static String k(char... c) { return new String(c); }
-
-    // Sensitive strings built at runtime so they never appear in the string pool:
     private static String strAppDex()          { return k('a','p','p','_','d','e','x'); }
     private static String strOpt()             { return k('o','p','t'); }
     private static String strShard()           { return k('s','h','a','r','d','-'); }
@@ -42,17 +66,19 @@ public class DexProtector {
     @SuppressLint("PrivateApi")
     public DexProtector(Context context) {
         mContext = context;
-        dexFiles = new ArrayList<>();
+        dexFiles.clear();
         dexDir = context.getDir(strAppDex(), Context.MODE_PRIVATE);
         optDir = new File(context.getFilesDir(), strOpt());
-
         FileUtils.deleteFloor(dexDir.getAbsolutePath());
         FileUtils.mkdir(dexDir.getAbsolutePath());
         FileUtils.mkdir(optDir.getAbsolutePath());
     }
 
     public void install(Context context) throws Exception {
-        // ── Read real Application class name from phantom/app.cfg ────────────
+        // ── Step 1: Load libphantom.so from encrypted blob ────────────────────
+        DexCrypto.loadPhantomLib(context);
+
+        // ── Step 2: Read real Application class name ──────────────────────────
         try {
             InputStream ris = mContext.getAssets().open(Const.DP_LIB + "/" + Const.APP_CFG);
             byte[] buf = new byte[512];
@@ -64,103 +90,232 @@ public class DexProtector {
             }
         } catch (Exception ignored) { }
 
-        // ── Read + decrypt phantom.vmp bundle ─────────────────────────────────
-        // Bundle format: [4-byte count N][N × 4-byte shard sizes][shard bytes…]
-        InputStream bundleStream = mContext.getAssets().open(Const.DP_LIB + "/" + Const.BUNDLE_FILE);
-        byte[] bundleBytes = readFully(bundleStream);
-        bundleStream.close();
+        // ── Step 3: Read 16-byte salt from assets ─────────────────────────────
+        byte[] salt = readAsset(context, Const.DP_LIB + "/" + Const.SALT_ASSET);
+        if (salt == null || salt.length != 16) {
+            throw new RuntimeException(k('b','a','d',' ','s','a','l','t'));
+        }
 
-        DataInputStream dis = new DataInputStream(new ByteArrayInputStream(bundleBytes));
-        int shardCount = dis.readInt();
-        int[] sizes    = new int[shardCount];
-        for (int i = 0; i < shardCount; i++) sizes[i] = dis.readInt();
+        // ── Step 4: Cert binding — two-layer check ────────────────────────────
+        //
+        // ph_cert holds the SHA-256 of the signing certificate that DexPacker
+        // used when deriving the encryption key.  All-zeros means the APK was
+        // packed without cert binding (certDer == null at pack time).
+        //
+        // Layer A — KDF consistency: pass ph_cert to nativeGetKey() so both
+        //   packer and stub use the same cert hash as KDF input.
+        //
+        // Layer B — tamper detection: independently compute the SHA-256 of the
+        //   currently-installed APK's signing certificate via PackageManager.
+        //   If ph_cert is non-zero AND it does not match the runtime cert,
+        //   the APK has been re-signed — abort before invoking the native KDF.
+        //   (If ph_cert is all zeros cert binding was not requested, so skip.)
+        byte[] storedCertHash = readAsset(context, Const.DP_LIB + "/" + Const.CERT_ASSET);
+        if (storedCertHash == null || storedCertHash.length != 32) {
+            storedCertHash = new byte[32]; // zeros — treat as no-cert-binding
+        }
 
-        File dexDir = context.getDir(strAppDex(), 0);
-        if (!dexDir.exists()) dexDir.mkdirs();
+        if (!isAllZeros(storedCertHash)) {
+            // Cert binding was requested at pack time — verify we're still on the
+            // same signing cert.  If not, refuse to proceed.
+            byte[] runtimeCertHash = getRuntimeCertHash(context);
+            if (!java.util.Arrays.equals(storedCertHash, runtimeCertHash)) {
+                // Zero both arrays before throwing to limit exposure.
+                Arrays.fill(storedCertHash, (byte) 0);
+                Arrays.fill(runtimeCertHash, (byte) 0);
+                throw new SecurityException(k('c','e','r','t',' ','m','i','s','m','a','t','c','h'));
+            }
+            Arrays.fill(runtimeCertHash, (byte) 0);
+        }
+
+        // ── Step 5: Derive the 16-byte session key via native KDF ─────────────
+        // Pass storedCertHash (= what the packer used) so KDF inputs are
+        // byte-identical on both sides.
+        // Pre-encode pkg name as standard UTF-8 bytes to avoid Java
+        // modified-UTF-8 vs. standard-UTF-8 discrepancy in GetStringUTFChars.
+        byte[] pkgNameUtf8 = context.getPackageName()
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] key = DexCrypto.nativeGetKey(salt, storedCertHash, pkgNameUtf8);
+
+        try {
+            // ── Step 6: Read + parse phantom.vmp bundle ───────────────────────
+            InputStream bundleStream = mContext.getAssets().open(Const.DP_LIB + "/" + Const.BUNDLE_FILE);
+            byte[] bundleBytes = DexCrypto.readFully(bundleStream);
+            bundleStream.close();
+
+            DataInputStream dis = new DataInputStream(new ByteArrayInputStream(bundleBytes));
+            int shardCount = dis.readInt();
+            int[] sizes = new int[shardCount];
+            for (int i = 0; i < shardCount; i++) sizes[i] = dis.readInt();
+
+            if (Build.VERSION.SDK_INT >= 27) {
+                // ── API 27+: InMemoryDexClassLoader — never writes to disk ────
+                loadInMemory(context, dis, shardCount, sizes, key);
+            } else {
+                // ── API < 27 fallback: write shards to app_dex/ ──────────────
+                loadViaFiles(context, dis, shardCount, sizes, key);
+            }
+        } finally {
+            // Zero the key — even if an exception is thrown.
+            Arrays.fill(key, (byte) 0);
+        }
+    }
+
+    // ── In-memory path (API 27+) ──────────────────────────────────────────────
+
+    @SuppressLint({"PrivateApi", "DiscouragedPrivateApi"})
+    private void loadInMemory(Context context, DataInputStream dis,
+                              int shardCount, int[] sizes, byte[] key) throws Exception {
+
+        ByteBuffer[] buffers = new ByteBuffer[shardCount];
+        for (int i = 0; i < shardCount; i++) {
+            byte[] encrypted = new byte[sizes[i]];
+            dis.readFully(encrypted);
+            byte[] dexBytes = DexCrypto.decryptToBytes(key, encrypted);
+            buffers[i] = ByteBuffer.wrap(dexBytes);
+        }
+
+        // Create InMemoryDexClassLoader and inject its dexElements into the
+        // context ClassLoader so classes from the protected DEX are visible.
+        ClassLoader parent = context.getClassLoader();
+        ClassLoader inMemory = new dalvik.system.InMemoryDexClassLoader(buffers, parent);
+
+        // Inject: merge dexElements from inMemory → parent's pathList.
+        injectDexElements(inMemory, parent);
+    }
+
+    // ── File-based path (API 21-26 fallback) ──────────────────────────────────
+
+    private void loadViaFiles(Context context, DataInputStream dis,
+                              int shardCount, int[] sizes, byte[] key) throws Exception {
+        File dir = context.getDir(strAppDex(), 0);
+        if (!dir.exists()) dir.mkdirs();
+        List<File> files = new ArrayList<>();
 
         for (int i = 0; i < shardCount; i++) {
             byte[] encrypted = new byte[sizes[i]];
             dis.readFully(encrypted);
+            byte[] dexBytes = DexCrypto.decryptToBytes(key, encrypted);
 
-            // Decrypt shard → write as shard-N.dex (must end in .dex for ART)
-            File outFile = new File(dexDir, strShard() + (i + 1) + strDotDex());
-            DexCrypto.decDex(new ByteArrayInputStream(encrypted), outFile);
-            // Android 16 (API 36) rejects loading world-writable DEX files with SecurityException.
-            // Remove write permission immediately after writing so ART / makeDexElements accepts it.
+            File outFile = new File(dir, strShard() + (i + 1) + strDotDex());
+            FileOutputStream fos = new FileOutputStream(outFile);
+            try { fos.write(dexBytes); } finally { fos.close(); }
             outFile.setWritable(false, false);
-            dexFiles.add(outFile);
+            files.add(outFile);
         }
 
-        loadDex(context, dexFiles, dexDir);
-        // DEX files intentionally NOT deleted — ART reads them lazily.
+        loadDex(context, files, dexDir);
     }
 
-    private static byte[] readFully(InputStream is) throws IOException {
-        byte[] buf = new byte[8192];
-        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-        int n;
-        while ((n = is.read(buf)) > 0) out.write(buf, 0, n);
-        return out.toByteArray();
-    }
+    // ── ClassLoader injection ─────────────────────────────────────────────────
 
     @SuppressLint({"PrivateApi", "DiscouragedPrivateApi"})
-    private void loadDex(Context context, List<File> dexFiles, File optDir) throws Exception {
-        if (dexFiles.isEmpty()) return;
+    private void injectDexElements(ClassLoader src, ClassLoader dst) throws Exception {
+        Field pathListField = Reflect.findField(src, strPathList());
+        Object srcPathList = pathListField.get(src);
+        Field dexElementsField = Reflect.findField(srcPathList, strDexElements());
+        Object[] added = (Object[]) dexElementsField.get(srcPathList);
 
-        ClassLoader classLoader = context.getClassLoader();
-
-        Field pathListField = Reflect.findField(classLoader, strPathList());
-        Object pathList = pathListField.get(classLoader);
-
-        Field dexElementsField = Reflect.findField(pathList, strDexElements());
-        Object[] existing = (Object[]) dexElementsField.get(pathList);
-
-        Object[] added = invokeMakeElements(pathList, dexFiles, optDir, classLoader);
+        Field dstPathListField = Reflect.findField(dst, strPathList());
+        Object dstPathList = dstPathListField.get(dst);
+        Field dstDexElemField = Reflect.findField(dstPathList, strDexElements());
+        Object[] existing = (Object[]) dstDexElemField.get(dstPathList);
 
         Object[] merged = (Object[]) Array.newInstance(
                 existing.getClass().getComponentType(),
                 existing.length + added.length);
         System.arraycopy(existing, 0, merged, 0, existing.length);
-        System.arraycopy(added,    0, merged, existing.length, added.length);
+        System.arraycopy(added, 0, merged, existing.length, added.length);
+        dstDexElemField.set(dstPathList, merged);
+    }
 
+    @SuppressLint({"PrivateApi", "DiscouragedPrivateApi"})
+    private void loadDex(Context context, List<File> files, File optDir) throws Exception {
+        if (files.isEmpty()) return;
+        ClassLoader classLoader = context.getClassLoader();
+        Field pathListField = Reflect.findField(classLoader, strPathList());
+        Object pathList = pathListField.get(classLoader);
+        Field dexElementsField = Reflect.findField(pathList, strDexElements());
+        Object[] existing = (Object[]) dexElementsField.get(pathList);
+        Object[] added = invokeMakeElements(pathList, files, optDir, classLoader);
+        Object[] merged = (Object[]) Array.newInstance(
+                existing.getClass().getComponentType(),
+                existing.length + added.length);
+        System.arraycopy(existing, 0, merged, 0, existing.length);
+        System.arraycopy(added, 0, merged, existing.length, added.length);
         dexElementsField.set(pathList, merged);
     }
 
     private Object[] invokeMakeElements(Object pathList, List<File> files,
             File optDir, ClassLoader loader) throws Exception {
-
         List<IOException> suppressed = new ArrayList<>();
-        String mde  = strMakeDexElements();
-        String mpe  = strMakePathElements();
-
+        String mde = strMakeDexElements();
+        String mpe = strMakePathElements();
         Class<?> clazz = pathList.getClass();
         while (clazz != null && clazz != Object.class) {
             for (Method m : clazz.getDeclaredMethods()) {
                 String nm = m.getName();
                 if (!nm.equals(mde) && !nm.equals(mpe)) continue;
-
                 Class<?>[] pt = m.getParameterTypes();
                 m.setAccessible(true);
-
                 switch (pt.length) {
-                    case 4:
-                        return (Object[]) m.invoke(pathList, files, optDir, suppressed, loader);
+                    case 4: return (Object[]) m.invoke(pathList, files, optDir, suppressed, loader);
                     case 3:
-                        if (ArrayList.class.equals(pt[0])) {
+                        if (ArrayList.class.equals(pt[0]))
                             return (Object[]) m.invoke(pathList,
                                     new ArrayList<>(files), optDir, new ArrayList<>(suppressed));
-                        }
                         return (Object[]) m.invoke(pathList, files, optDir, suppressed);
-                    case 2:
-                        return (Object[]) m.invoke(pathList, new ArrayList<>(files), optDir);
-                    default:
-                        break;
+                    case 2: return (Object[]) m.invoke(pathList, new ArrayList<>(files), optDir);
                 }
             }
             clazz = clazz.getSuperclass();
         }
-
         throw new RuntimeException(k('n','o',' ','m','a','k','e','E','l','e','m',' ','f','o','u','n','d'));
+    }
+
+    // ── Misc helpers ──────────────────────────────────────────────────────────
+
+    private static byte[] readAsset(Context ctx, String path) {
+        try {
+            InputStream is = ctx.getAssets().open(path);
+            byte[] data = DexCrypto.readFully(is);
+            is.close();
+            return data;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Returns true if every byte in {@code b} is zero. */
+    private static boolean isAllZeros(byte[] b) {
+        for (byte v : b) if (v != 0) return false;
+        return true;
+    }
+
+    /**
+     * Compute SHA-256 of the currently-installed APK signing certificate
+     * by querying PackageManager independently (not from any APK asset).
+     * Returns 32 zero bytes on failure — the caller treats that as a mismatch.
+     */
+    @SuppressLint("PackageManagerGetSignatures")
+    private static byte[] getRuntimeCertHash(Context ctx) {
+        try {
+            MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
+            PackageManager pm = ctx.getPackageManager();
+            String pkg = ctx.getPackageName();
+            byte[] certDer;
+            if (Build.VERSION.SDK_INT >= 28) {
+                PackageInfo pi = pm.getPackageInfo(pkg, PackageManager.GET_SIGNING_CERTIFICATES);
+                certDer = pi.signingInfo.getApkContentsSigners()[0].toByteArray();
+            } else {
+                @SuppressWarnings("deprecation")
+                PackageInfo pi = pm.getPackageInfo(pkg, PackageManager.GET_SIGNATURES);
+                certDer = pi.signatures[0].toByteArray();
+            }
+            return sha256.digest(certDer);
+        } catch (Exception e) {
+            return new byte[32]; // zeros → treated as mismatch by caller
+        }
     }
 
     /** Expose the resolved real Application class name after install(). */

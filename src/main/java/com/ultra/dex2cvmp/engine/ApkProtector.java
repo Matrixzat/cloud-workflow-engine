@@ -374,7 +374,20 @@ public class ApkProtector {
             // Packed APK is always produced unsigned; we re-sign below if needed.
             File packedUnsigned = new File(outputApk.getParent(),
                     outputApk.getName().replace(".apk", "_dexpacked_unsigned.apk"));
-            new DexPacker(context).pack(outputApk, packedUnsigned, packWorkDir);
+
+            // Obtain the signing certificate DER bytes so DexPacker can bind the
+            // DEX encryption key to the cert.  If signing is disabled (signOutput
+            // == false) there is no eventual cert, so we pass null (no binding).
+            // Cert binding is required when signing is enabled: fail closed if
+            // the signing cert cannot be obtained rather than silently producing
+            // an unbound (zeros cert hash) protected APK.
+            byte[] signingCertDer = null;
+            if (signOutput) {
+                signingCertDer = ApkSigner.getSigningCertDer(context);
+                // throws if cert unavailable — intentional hard failure
+            }
+
+            new DexPacker(context).pack(outputApk, packedUnsigned, packWorkDir, signingCertDer);
             report(97, "DEX packer: stub injected — "
                     + (packedUnsigned.length() / 1024) + " KB packed APK");
 

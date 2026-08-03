@@ -3,12 +3,16 @@ package com.ultra.dex2cvmp.data;
 /**
  * Runtime constants for the DEX loader stub.
  *
- * DP_LIB / LUA_MPH / PROTECT_KEY are fixed at compile time and must match
- * the values used by DexPacker on the protection side.
+ * The old static PROTECT_KEY / getProtectKey() have been removed.
+ * Key material is now derived at runtime by libphantom.so via
+ * DexCrypto.nativeGetKey(salt, certHash, pkgName) so that:
+ *   • No key string ever appears in the DEX string pool.
+ *   • Each protected APK has a unique, per-pack random salt.
+ *   • The derived key is bound to the signing certificate; re-signing
+ *     with a different cert produces a wrong key and silent garbage output.
  *
- * REAL_APP is the only value that varies per protected APK; DexPacker writes
- * it to assets/dp-real-app (UTF-8, no trailing newline) and DexProtector.install()
- * reads it before realApplication() is called.
+ * REAL_APP is the only per-protected-APK value; DexProtector.install()
+ * overwrites it from assets/phantom/app.cfg before realApplication() runs.
  */
 public class Const {
     /** Asset sub-directory holding the phantom payload. */
@@ -21,18 +25,34 @@ public class Const {
     public static final String APP_CFG = "app.cfg";
 
     /**
-     * 16-char cipher key built at runtime from individual chars so the complete
-     * key string never appears in the DEX string pool.
-     * Must match DexPacker.PROTECT_KEY = "U1tr4D3x2CVMP!!!".
+     * Asset holding the 16-byte random salt written by DexPacker at protection
+     * time.  Read by DexProtector.install() and passed to nativeGetKey().
      */
-    public static String getProtectKey() {
-        char[] k = new char[16];
-        k[0]  = 'U'; k[1]  = '1'; k[2]  = 't'; k[3]  = 'r';
-        k[4]  = '4'; k[5]  = 'D'; k[6]  = '3'; k[7]  = 'x';
-        k[8]  = '2'; k[9]  = 'C'; k[10] = 'V'; k[11] = 'M';
-        k[12] = 'P'; k[13] = '!'; k[14] = '!'; k[15] = '!';
-        return new String(k);
-    }
+    public static final String SALT_ASSET = "ph_salt";
+
+    /**
+     * Asset holding the 32-byte SHA-256 of the signing certificate used at
+     * pack time.  Written by DexPacker alongside ph_salt so that the stub can
+     * pass the same cert hash to nativeGetKey(), guaranteeing the KDF input on
+     * both sides is always identical regardless of when/how the APK is signed.
+     * All-zeros when DexPacker was called without a certDer argument.
+     */
+    public static final String CERT_ASSET = "ph_cert";
+
+    /**
+     * Asset sub-directory (inside phantom/) where the pre-built, AES-encrypted
+     * libphantom native blobs are stored inside the protected APK.
+     *
+     * Files:
+     *   phantom/libphantom_arm64.blob  — arm64-v8a build
+     *   phantom/libphantom_arm.blob    — armeabi-v7a build
+     *
+     * These blobs are generated offline (OLLVM + NDK CI) and packed by
+     * DexPacker.  The stub decrypts the ABI-appropriate blob at first launch,
+     * writes it to getCodeCacheDir()/libphantom.so, and System.load()s it.
+     */
+    public static final String PHANTOM_BLOB_ARM64 = "libphantom_arm64.blob";
+    public static final String PHANTOM_BLOB_ARM   = "libphantom_arm.blob";
 
     /**
      * Real Application class name — default is the base Application.

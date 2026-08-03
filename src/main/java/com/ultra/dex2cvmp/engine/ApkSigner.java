@@ -199,4 +199,39 @@ public class ApkSigner {
             return readAllBytes(in);
         }
     }
+
+    /**
+     * Return the DER-encoded bytes of the signing certificate that will be used
+     * when this app calls {@link #sign(Context, File, File)}.
+     *
+     * Used by DexPacker to bind the DEX encryption key to the signing cert so
+     * that re-signing the protected APK with a different cert causes the runtime
+     * KDF to derive a different (wrong) key and decryption silently fails.
+     *
+     * @return DER bytes of the X.509 signing cert, never null.
+     * @throws Exception if the built-in keystore cannot be loaded.
+     */
+    public static byte[] getSigningCertDer(Context context) throws Exception {
+        File keystoreFile = extractBuiltinKeystore(context);
+        char[] storePass = Vault.g().toCharArray();
+
+        KeyStore ks;
+        try {
+            ks = KeyStore.getInstance("PKCS12");
+            byte[] bytes;
+            try (FileInputStream fis = new FileInputStream(keystoreFile)) {
+                bytes = readAllBytes(fis);
+            }
+            ks.load(new java.io.ByteArrayInputStream(bytes), storePass);
+        } catch (Exception e) {
+            ks = loadKeyStore(keystoreFile, storePass);
+        }
+
+        X509Certificate cert = (X509Certificate) ks.getCertificate(Vault.f());
+        if (cert == null) {
+            throw new Exception("Signing cert not found in built-in keystore "
+                    + "(alias=\"" + Vault.f() + "\")");
+        }
+        return cert.getEncoded();
+    }
 }

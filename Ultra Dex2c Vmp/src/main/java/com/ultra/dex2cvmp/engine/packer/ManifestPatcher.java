@@ -41,8 +41,11 @@ public class ManifestPatcher {
                 }
             } else if (parser.getName().equals("application")) {
                 int size = parser.getAttributeCount();
+                int appCFAttrIdx = -1; // index of android:appComponentFactory to strip
                 for (int i = 0; i < size; ++i) {
-                    if (parser.getAttributeNameResource(i) == 0x01010003) {
+                    int resId = parser.getAttributeNameResource(i);
+                    if (resId == 0x01010003) {
+                        // android:name — replace value with ProxyApplication
                         customApplication = true;
                         customApplicationName = parser.getAttributeValue(i);
                         int index = axml.mTableStrings.getSize();
@@ -52,8 +55,32 @@ public class ManifestPatcher {
                         writeInt(data, off, index);
                         off += 8;
                         writeInt(data, off, index);
+                    } else if (resId == 0x0101021b) {
+                        // android:appComponentFactory — mark for removal.
+                        // Stripping it prevents CoreComponentFactory (PairIP, AndroidX)
+                        // from firing and triggering "register dex with multiple class
+                        // loaders" when InMemoryDexClassLoader is in use.
+                        appCFAttrIdx = i;
                     }
                 }
+
+                // Strip android:appComponentFactory if present
+                if (appCFAttrIdx != -1) {
+                    byte[] data = axml.getData();
+                    int attrStart = parser.currentAttributeStart;
+                    int removePos = attrStart + 20 * appCFAttrIdx;
+                    byte[] stripped = new byte[data.length - 20];
+                    System.arraycopy(data, 0, stripped, 0, removePos);
+                    System.arraycopy(data, removePos + 20, stripped, removePos,
+                            data.length - removePos - 20);
+                    // chunkSize − 20
+                    writeInt(stripped, attrStart - 32, readInt(stripped, attrStart - 32) - 20);
+                    // attributeCount − 1
+                    writeInt(stripped, attrStart - 8, size - 1);
+                    size--;
+                    axml.setData(stripped);
+                }
+
                 if (!customApplication) {
                     int off = parser.currentAttributeStart;
                     byte[] data = axml.getData();

@@ -34,9 +34,11 @@ import java.util.List;
  *     the native library.  If the APK is re-signed the key changes and
  *     decryption silently fails — no explicit tamper check is needed.
  *
- *  3. InMemoryDexClassLoader (API 27+) — decrypted DEX bytes go into
- *     ByteBuffer objects and never touch the filesystem.  On API 21-26 the
- *     code falls back to writing to app_dex/ (existing behaviour).
+ *  3. InMemoryDexClassLoader (API 27+) — decrypted DEX bytes stay in
+ *     ByteBuffers, never on disk.  PathClassLoader is re-parented to delegate
+ *     through InMemoryDexClassLoader so only ONE loader owns the DexFile.
+ *     This prevents the "register dex with multiple class loaders" crash on
+ *     apps using android:appComponentFactory (PairIP, CoreComponentFactory).
  *
  *  4. Key zeroed immediately — the 16-byte key[] array is cleared with
  *     Arrays.fill() as soon as all shards are decrypted.

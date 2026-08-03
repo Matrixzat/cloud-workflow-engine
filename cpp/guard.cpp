@@ -2205,6 +2205,25 @@ static __attribute__((noinline)) void root_guard_checks(void) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Forward definitions needed by detect_root_guard() — full versions live in
+// the LAYER 2 ZIP-parsing block below; duplicated here so detect_root_guard()
+// compiles in its current position (before the LAYER 2 section).
+// ─────────────────────────────────────────────────────────────────────────────
+#ifndef STAMP_BUF_SZ
+#define STAMP_BUF_SZ 32
+#endif
+
+#ifndef ZIPENTRYINFO_DEFINED
+#define ZIPENTRYINFO_DEFINED
+struct ZipEntryInfo {
+    uint16_t method;
+    uint32_t comp_size;
+    uint32_t uncomp_size;
+    uint32_t local_offset;
+    int      found;
+};
+#endif
+// ─────────────────────────────────────────────────────────────────────────────
 // detect_root_guard() — reads font_shade.dat from the installed APK assets,
 // decrypts with the same build_key256/build_iv pair as every other stamp, and
 // returns:
@@ -2350,6 +2369,8 @@ static __attribute__((noinline)) void spawn_background_watch(void) {
 // of a hardcoded literal-name list.
 // ════════════════════════════════════════════════════════════════════════════
 
+#ifndef ZIPENTRYINFO_DEFINED
+#define ZIPENTRYINFO_DEFINED
 struct ZipEntryInfo {
     uint16_t method;
     uint32_t comp_size;
@@ -2357,6 +2378,7 @@ struct ZipEntryInfo {
     uint32_t local_offset;
     int      found;
 };
+#endif
 
 static uint32_t g_rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
 static uint16_t g_rd16(const uint8_t *p) { uint16_t v; memcpy(&v, p, 2); return v; }
@@ -2499,7 +2521,9 @@ static uint64_t fnv1a64(const uint8_t *data, uint32_t len) {
 }
 
 #define MANIFEST_BUF_SZ  (2 * 1024 * 1024)
+#ifndef STAMP_BUF_SZ
 #define STAMP_BUF_SZ      32
+#endif
 
 // Returns 1 if tamper detected, 0 if clean. Does NOT call crash_now() itself
 // so the fork-based watchdog child can react via a direct kill() path instead.

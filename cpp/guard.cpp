@@ -3979,7 +3979,19 @@ Java_com_secure_dex_utils_DexProtector_install(JNIEnv *env, jclass /*cls*/, jobj
         GLOGI("§9 d2: unlink shard[%u] = %d", i, r);
     }
 
+    // ── d3. Late-init VMP: register classesInit0 now that shards are loaded ─
+    // vmp_lateInit is generated into jni_init.cpp; declared weak so guard.cpp
+    // links cleanly in non-VMP builds where that symbol does not exist.
+    // Must run AFTER §9 d merges the shards — NativeUtil lives inside them.
+    {
+        extern void vmp_lateInit(JNIEnv *) __attribute__((weak));
+        if (vmp_lateInit) { vmp_lateInit(env); GLOGI("§9 d3: vmp_lateInit OK"); }
+        else               { GLOGI("§9 d3: vmp_lateInit absent (non-VMP build)"); }
+    }
+    env->ExceptionClear();
+
     // ── e. Read phantom/app.cfg → set Const.REAL_APP ─────────────────────
+    bool skip_f_swap = false;
     const char *cfgPath = GSTR_DECRYPT(SL_ASSET_CFG, SL_ASSET_CFG_LEN, SL_ASSET_CFG_KEY);
     GLOGI("§9 e: reading app.cfg '%s'", cfgPath ? cfgPath : "(null)");
     size_t cfgLen = 0;
@@ -4012,6 +4024,8 @@ Java_com_secure_dex_utils_DexProtector_install(JNIEnv *env, jclass /*cls*/, jobj
         } else {
             GLOGE("§9 e: FindClass(Const) returned null — DEX injection likely failed");
         }
+        // skip §9 f if the real app is android.app.Application — Java stub handles it
+        if (realApp) skip_f_swap = (strcmp(realApp, "android.app.Application") == 0);
         free(cfgBuf);
         free(realApp);
     } else {
@@ -4021,8 +4035,13 @@ Java_com_secure_dex_utils_DexProtector_install(JNIEnv *env, jclass /*cls*/, jobj
 
     // ── f. ActivityThread Application swap (mirrors ProxyApplication.realApplication()) ──
     // Replaces the proxy stub with the real Application so getResources() etc. work.
+    // Skipped when realApp=android.app.Application (Java stub's realApplication() handles it).
     GLOGI("§9 f: starting Application swap");
     do {
+        if (skip_f_swap) {
+            GLOGI("§9 f: skipped — realApp=android.app.Application, Java stub handles swap");
+            break;
+        }
         // 1. ActivityThread.currentActivityThread()
         jclass atCls = JCALL(env->FindClass(
             GSTR_DECRYPT(SA_AT_CLASS, SA_AT_CLASS_LEN, SA_AT_CLASS_KEY)));

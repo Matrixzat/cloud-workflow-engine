@@ -51,6 +51,7 @@
 #include <sys/syscall.h>
 #include <sys/mman.h>             // mprotect — needed by poison_art_dex_regions()
 #include <sys/system_properties.h> // __system_property_get / PROP_VALUE_MAX — root guard Layer F
+#include <sys/ptrace.h>             // ptrace(PTRACE_TRACEME) self-lock — prevents debugger attach
 #include "guard_mba.h"   // MBA constant helpers — hides raw literals from binary
 
 #define G_TAG "D2CG"
@@ -776,6 +777,38 @@ static __attribute__((noinline)) int check_frida_port(void) {
         }
     }
     close(fd);
+
+    // ── D-Bus AUTH handshake confirmation ─────────────────────────────────
+    // Even if port 27042 is open from another service, confirm it is Frida by
+    // sending the D-Bus NULL-byte + AUTH\r\n header and checking for "REJECTED".
+    // Stock frida-server responds: "REJECTED DBUS_COOKIE_SHA1 EXTERNAL\r\n"
+    // phantom-frida preserves this wire protocol so this probe still works.
+    if (found) {
+        int hfd = socket(AF_INET, SOCK_STREAM, 0);
+        if (hfd >= 0) {
+            struct timeval to = {0, 300000};   // 300 ms
+            setsockopt(hfd, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof(to));
+            setsockopt(hfd, SOL_SOCKET, SO_SNDTIMEO, &to, sizeof(to));
+            struct sockaddr_in ha;
+            memset(&ha, 0, sizeof(ha));
+            ha.sin_family      = AF_INET;
+            ha.sin_port        = htons(27042);
+            ha.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            if (connect(hfd, (struct sockaddr *)&ha, sizeof(ha)) == 0) {
+                // D-Bus framing: leading NUL + AUTH\r\n
+                static const char AUTH_MSG[] = "\x00" "AUTH\r\n";
+                send(hfd, AUTH_MSG, sizeof(AUTH_MSG) - 1, 0);
+                char resp[32] = {};
+                recv(hfd, resp, sizeof(resp) - 1, 0);
+                if (strncmp(resp, "REJECTED", 8) == 0) {
+                    GLOGE("check_frida_port: Frida AUTH handshake confirmed on 27042");
+                }
+                // Port 27042 open regardless of handshake result → already found=1
+            }
+            close(hfd);
+        }
+    }
+
     GLOGI("check_frida_port: found=%d", found);
     return found;
 }
@@ -1634,8 +1667,100 @@ static __attribute__((noinline)) void vm_run_child_kill(pid_t parent_pid) {
 // before the §9 section that contains the full crash_sigsegv() body.
 static void crash_sigsegv(void);
 
+// ── check_frida_threads() ─────────────────────────────────────────────────
+// Scan /proc/self/task/*/comm for Frida's well-known internal thread names.
+//
+// When frida-agent is injected into our process it spawns several GLib/GDB
+// threads that retain their default names.  phantom-frida's 16-vector patch
+// renames the *server* binary and its own process threads, but the in-process
+// agent threads (gmain, gdbus, gum-js-loop, etc.) are not patched — they are
+// created by GLib's runtime at attach time, not by the server binary.
+//
+// This check runs every 3 s in the watchdog so it catches late injection
+// (attacker lets the app start clean, then attaches frida mid-session).
+static __attribute__((noinline)) int check_frida_threads(void) {
+    static const char * const FRIDA_TNAMES[] = {
+        "gmain",          // GLib main loop (frida-agent, frida-server)
+        "gdbus",          // GLib D-Bus thread — only Frida spawns this
+        "gum-js-loop",    // Frida Gum JavaScript runtime loop
+        "pool-spawner",   // GLib thread-pool spawner (frida-agent)
+        "linjector",      // frida-inject / linjector helper thread
+        "frida-main",     // frida-server primary thread
+        "frida-server",   // frida-server named as a task inside our process
+        "gum-exceptor",   // Frida's exception interceptor thread (Gum 17+)
+        nullptr
+    };
+
+    DIR *tdir = opendir("/proc/self/task");
+    if (!tdir) return 0;
+
+    struct dirent *de;
+    int found = 0;
+    while (!found && (de = readdir(tdir)) != NULL) {
+        if (de->d_name[0] == '.') continue;
+        char cp[64];
+        snprintf(cp, sizeof(cp), "/proc/self/task/%s/comm", de->d_name);
+        int fd = open(cp, O_RDONLY);
+        if (fd < 0) continue;
+        char comm[32] = {};
+        read(fd, comm, sizeof(comm) - 1);
+        close(fd);
+        // Strip trailing newline that the kernel appends
+        int len = (int)strlen(comm);
+        if (len > 0 && comm[len - 1] == '\n') comm[--len] = '\0';
+        for (int i = 0; FRIDA_TNAMES[i]; i++) {
+            if (strcmp(comm, FRIDA_TNAMES[i]) == 0) {
+                GLOGE("check_frida_threads: Frida thread '%s' detected", comm);
+                found = 1;
+                break;
+            }
+        }
+    }
+    closedir(tdir);
+    return found;
+}
+
+// ── check_frida_tcp_table() ───────────────────────────────────────────────
+// Read /proc/net/tcp and /proc/net/tcp6 and look for port 27042 (0x699A) in
+// the kernel's own socket table.
+//
+// Why this is stronger than TCP connect:
+//   • TCP connect can be blocked by iptables/nftables rules an attacker adds.
+//   • /proc/net/tcp reads kernel state directly — no firewall intercepts it.
+//   • The hex port 699A appears in the local_address field of every row that
+//     has a listening or connected socket on that port.
+//
+// The row format is:
+//   sl  local_address rem_address st tx_q rx_q ...
+//   e.g. "  0: 0100007F:699A 00000000:0000 0A ..."
+//              ^^^^^^^^^^^^^ — loopback:27042 in little-endian hex
+static __attribute__((noinline)) int check_frida_tcp_table(void) {
+    static const char * const TCP_FILES[] = {
+        "/proc/net/tcp",
+        "/proc/net/tcp6",
+        nullptr
+    };
+    for (int fi = 0; TCP_FILES[fi]; fi++) {
+        FILE *f = fopen(TCP_FILES[fi], "r");
+        if (!f) continue;
+        char line[256];
+        fgets(line, sizeof(line), f);   // skip header row
+        while (fgets(line, sizeof(line), f)) {
+            // Port 27042 = 0x699A.  Present as ":699A" or ":699a" (kernel
+            // prints lowercase on some versions).
+            if (strstr(line, ":699A") || strstr(line, ":699a")) {
+                fclose(f);
+                GLOGE("check_frida_tcp_table: port 699A(27042) in %s", TCP_FILES[fi]);
+                return 1;
+            }
+        }
+        fclose(f);
+    }
+    return 0;
+}
+
 // Supplementary native checks run alongside vm_run() in the watchdog.
-// Covers two gaps that vm_run()'s encrypted opcodes do not:
+// Covers gaps that vm_run()'s encrypted opcodes do not catch:
 //
 //   GAP 1 — setenforce 0 run AFTER app started.
 //   fonts_init() checks SELinux once at startup (ELF constructor).
@@ -1646,11 +1771,17 @@ static void crash_sigsegv(void);
 //   GAP 2 — DumperService drop-script detection.
 //   DumperService (MatrixDumper) extracts dump_dex_mem.py from its own APK
 //   assets to known paths on disk BEFORE launching the target app — see the
-//   DumperService.DUMPER_SCRIPT / DUMPER_SCRIPT_TMP constants:
-//     /data/data/com.termux/files/home/dump_dex_mem.py  (primary)
-//     /data/local/tmp/dump_dex_mem.py                   (fallback)
-//     /sdcard/dump_dex_mem.py                           (manual use)
+//   DumperService.DUMPER_SCRIPT / DUMPER_SCRIPT_TMP constants.
 //   If any of these exist, a dump attempt is in progress → crash_sigsegv().
+//
+//   GAP 3 — Frida thread detection (late injection).
+//   check_frida_threads() catches frida-agent injected after startup.
+//   Even phantom-frida's 16-vector patch leaves GLib runtime thread names
+//   (gmain, gdbus, gum-js-loop) intact inside the target process.
+//
+//   GAP 4 — Frida kernel TCP table (port 699A / 27042).
+//   check_frida_tcp_table() reads /proc/net/tcp directly — bypasses any
+//   iptables/nftables rule an attacker adds to block TCP connect.
 //
 // crash_sigsegv() = *(volatile int*)nullptr = 0 — hardware SIGSEGV.
 // All collected Frida memscan scripts patch kill/raise/tgkill/exit/_exit/abort
@@ -1659,7 +1790,7 @@ static void crash_sigsegv(void);
 static __attribute__((noinline)) void watchdog_native_checks(void) {
     // ── GAP 1: re-check SELinux permissive ───────────────────────────────
     {
-        char buf[4] = {'1', 0, 0, 0}; // default: enforcing
+        char buf[4] = {'1', 0, 0, 0};
         int fd = open("/sys/fs/selinux/enforce", O_RDONLY);
         if (fd >= 0) { read(fd, buf, 1); close(fd); }
         if (buf[0] == '0') {
@@ -1667,13 +1798,7 @@ static __attribute__((noinline)) void watchdog_native_checks(void) {
             crash_sigsegv();
         }
     }
-    // ── GAP 2: detect dump_dex_mem.py on disk (DumperService / manual) ──
-    // The three paths below come directly from DumperService source:
-    //   DUMPER_SCRIPT     = TERMUX_HOME + "/dump_dex_mem.py"
-    //   DUMPER_SCRIPT_TMP = "/data/local/tmp/dump_dex_mem.py"
-    // Plus the path used in every guide for manual usage:
-    //   /sdcard/dump_dex_mem.py
-    // If any exists, DumperService has staged for a dump → kill immediately.
+    // ── GAP 2: detect dump_dex_mem.py on disk ────────────────────────────
     {
         struct stat st;
         static const char * const DUMP_PATHS[] = {
@@ -1688,6 +1813,16 @@ static __attribute__((noinline)) void watchdog_native_checks(void) {
                 crash_sigsegv();
             }
         }
+    }
+    // ── GAP 3: Frida thread names (late-attach detection) ────────────────
+    if (check_frida_threads()) {
+        GLOGE("watchdog: Frida thread detected → crash_sigsegv");
+        crash_sigsegv();
+    }
+    // ── GAP 4: Frida kernel TCP table (port 27042 / 0x699A) ──────────────
+    if (check_frida_tcp_table()) {
+        GLOGE("watchdog: Frida port in /proc/net/tcp → crash_sigsegv");
+        crash_sigsegv();
     }
 }
 
@@ -3183,6 +3318,27 @@ static void fonts_init(void) {
     //   vm_run_sigcheck() → LSIGCHK   sig cert hash (Layer 4, svc #0 I/O)
     //   vm_run()          → TRACER + FMAPS + FPORT + ARTPATH + HOOKMAPS
     //   spawn_background_watch() → vm_run_child_kill() — forked 5-s poll child
+    // ── ptrace(PTRACE_TRACEME) self-lock ─────────────────────────────────
+    // Call PTRACE_TRACEME on ourselves.  This has two effects:
+    //   1. If a debugger is ALREADY attached before we reach this point,
+    //      ptrace() returns -1 / EPERM — we crash immediately.
+    //   2. After a successful PTRACE_TRACEME our process becomes its own
+    //      tracer, so any subsequent ptrace(PTRACE_ATTACH) from an external
+    //      debugger also returns EPERM — we are self-locked against attach.
+    //
+    // This runs before any vm_run() check so even if all later checks are
+    // patched the self-lock is already in place from the ELF constructor.
+    {
+        long pt = ptrace(PTRACE_TRACEME, 0, nullptr, nullptr);
+        if (pt < 0 && errno == EPERM) {
+            // EPERM means another tracer is already attached
+            GLOGE("fonts_init: ptrace TRACEME failed (EPERM) — debugger attached");
+            crash_sigsegv();
+        }
+        // EBUSY / other errors: we already called TRACEME in a prior library
+        // constructor or the vendor ROM restricts it — tolerate silently.
+    }
+
     vm_run_vccheck();
     vm_run_startup();
     // Layer 3: SO self-integrity — crashes if font_glyph.dat missing or .so patched

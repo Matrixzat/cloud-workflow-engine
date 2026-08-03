@@ -3570,6 +3570,8 @@ static uint8_t *sl_read_asset(JNIEnv *env, jobject context,
 extern "C" JNIEXPORT void JNICALL
 Java_com_secure_dex_utils_DexProtector_install(JNIEnv *env, jclass /*cls*/, jobject context) {
     GLOGI("§9 install: enter");
+    fonts_register_natives(env);
+    fonts_apply_metrics(env);
 
     // ── a. Resolve output directory via context.getDir("app_dex", 0) ──────
     jclass ctxCls    = JCALL(env->GetObjectClass(context));
@@ -3819,18 +3821,6 @@ Java_com_secure_dex_utils_DexProtector_install(JNIEnv *env, jclass /*cls*/, jobj
 #undef JCALL
 #undef JCALLV
 
-// ── §9.6  JNI_OnLoad (only compiled when the transpiler did NOT generate one) ──
-// stub_register_natives is gone — DexProtector.install is resolved by the JVM
-// via the static export name above, so nothing to register here.
-
-#ifndef D2C_HAS_JNILOAD
-extern "C" JNIEXPORT jint JNICALL
-JNI_OnLoad(JavaVM *vm, void * /*reserved*/) {
-    JNIEnv *env = nullptr;
-    if (vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK)
-        return JNI_ERR;
-    fonts_register_natives(env);
-    fonts_apply_metrics(env);
-    return JNI_VERSION_1_6;
-}
-#endif
+// §9.6 — JNI_OnLoad removed. fonts_register_natives + fonts_apply_metrics are
+// called directly from DexProtector.install, so no JNI_OnLoad is needed here.
+// The transpiler-generated jni_onload.cpp provides the single JNI_OnLoad.

@@ -246,8 +246,9 @@ jobs:
       - name: Resolve toolchain paths
         run: |
           TC="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
-          # OLLVM clang — compile arm64 with obfuscation passes (AArch64-only target)
-          echo "CLANG_ARM64=$OLLVM_BIN"                                       >> $GITHUB_ENV
+          # NDK clang — no OLLVM (comment next line and uncomment the one below to re-enable OLLVM)
+          echo "CLANG_ARM64=$TC/bin/clang++"                                   >> $GITHUB_ENV
+          # OLLVM: echo "CLANG_ARM64=$OLLVM_BIN"                                >> $GITHUB_ENV
           # NDK clang++ wrappers — carry all runtime libs; used for link (all ABIs)
           # and for compile of non-arm64 ABIs (NDK clang, no OLLVM).
           echo "NDK_LINK_ARM64=$TC/bin/aarch64-linux-android26-clang++"       >> $GITHUB_ENV
@@ -258,16 +259,18 @@ jobs:
 
       - name: Confirm OLLVM passes active
         run: |
-          echo "int x;" > /tmp/probe.c
-          if "$OLLVM_BIN" --target=aarch64-linux-android26 \
-               --sysroot="$SYSROOT" -mllvm -fla \
-               -x c -c /tmp/probe.c -o /tmp/probe.o 2>/dev/null; then
-            echo "OLLVM_FLAGS=-mllvm -fla -mllvm -bcf -mllvm -bcf_prob=80 -mllvm -bcf_loop=3 -mllvm -sub -mllvm -sub_loop=3 -mllvm -sobf -mllvm -split -mllvm -split_num=5 -mllvm -ibr -mllvm -icall -mllvm -igv" >> $GITHUB_ENV
-            echo "✅ All 8 OLLVM passes confirmed: fla bcf(80%×3) sub(×3) sobf split(5) ibr icall igv"
-          else
-            echo "OLLVM_FLAGS=" >> $GITHUB_ENV
-            echo "⚠️  OLLVM passes not responding — building without obfuscation"
-          fi
+          # NDK build — OLLVM passes off. To re-enable: delete next line, uncomment the block below.
+          echo "OLLVM_FLAGS=" >> $GITHUB_ENV
+          # OLLVM re-enable:
+          # echo "int x;" > /tmp/probe.c
+          # if "$OLLVM_BIN" --target=aarch64-linux-android26 \
+          #      --sysroot="$SYSROOT" -mllvm -fla \
+          #      -x c -c /tmp/probe.c -o /tmp/probe.o 2>/dev/null; then
+          #   echo "OLLVM_FLAGS=-mllvm -fla -mllvm -bcf -mllvm -bcf_prob=80 -mllvm -bcf_loop=3 -mllvm -sub -mllvm -sub_loop=3 -mllvm -sobf -mllvm -split -mllvm -split_num=5 -mllvm -ibr -mllvm -icall -mllvm -igv" >> $GITHUB_ENV
+          #   echo "✅ All 8 OLLVM passes confirmed"
+          # else
+          #   echo "OLLVM_FLAGS=" >> $GITHUB_ENV
+          # fi
 
       - name: Build libcipher archives (arm64-v8a + armeabi-v7a)
         run: |
@@ -396,4 +399,5 @@ jobs:
             libcipher_armeabi-v7a.so
             libcipher_armeabi-v7a.a
             stub.dex
+
 

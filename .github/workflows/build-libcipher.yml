@@ -351,43 +351,26 @@ jobs:
             readelf -S "$SO" 2>/dev/null | grep '^\s*\[' | awk '{print "   ", $2}' | grep -v '^\s*\[Nr\]'
           done
 
-      - name: Build stub.dex
-        run: |
-          set -e
-          SDK="$ANDROID_SDK_ROOT"
-
-          # Find the highest build-tools version that has d8
-          D8=$(find "$SDK/build-tools" -name "d8" | sort -V | tail -1)
-          # Find android.jar for compileSdk 34
-          ANDROID_JAR=$(find "$SDK/platforms" -name "android.jar" | grep "android-34" | head -1)
-          if [ -z "$ANDROID_JAR" ]; then
-            yes | sdkmanager "platforms;android-34" 2>/dev/null || true
-            ANDROID_JAR=$(find "$SDK/platforms" -name "android.jar" | grep "android-34" | head -1)
-          fi
-          echo "d8:          $D8"
-          echo "android.jar: $ANDROID_JAR"
-
-          # Compile all four stub-loader Java sources
-          mkdir -p stub_classes
-          javac -source 8 -target 8 \
-            -cp "$ANDROID_JAR" \
-            -d stub_classes \
-            stub-loader/com/secure/dex/data/Const.java \
-            stub-loader/com/secure/dex/utils/DexProtector.java \
-            stub-loader/com/secure/dex/utils/Reflect.java \
-            stub-loader/com/ultra/dex2cvmp/ProxyApplication.java \
-            stub-loader/fonts/Metrics.java
-
-          # Convert class files → stub.dex via d8 (min API 21)
-          "$D8" \
-            --output . \
-            --min-api 21 \
-            --lib "$ANDROID_JAR" \
-            $(find stub_classes -name "*.class")
-
-          # d8 outputs classes.dex — rename to stub.dex
-          mv classes.dex stub.dex
-          echo "✅ stub.dex — $(wc -c < stub.dex) bytes"
+      # - name: Build stub.dex   # DISABLED — using pre-built stub.dex from workspace
+      #   run: |
+      #     set -e
+      #     SDK="$ANDROID_SDK_ROOT"
+      #     D8=$(find "$SDK/build-tools" -name "d8" | sort -V | tail -1)
+      #     ANDROID_JAR=$(find "$SDK/platforms" -name "android.jar" | grep "android-34" | head -1)
+      #     if [ -z "$ANDROID_JAR" ]; then
+      #       yes | sdkmanager "platforms;android-34" 2>/dev/null || true
+      #       ANDROID_JAR=$(find "$SDK/platforms" -name "android.jar" | grep "android-34" | head -1)
+      #     fi
+      #     mkdir -p stub_classes
+      #     javac -source 8 -target 8 -cp "$ANDROID_JAR" -d stub_classes \
+      #       stub-loader/com/secure/dex/data/Const.java \
+      #       stub-loader/com/secure/dex/utils/DexProtector.java \
+      #       stub-loader/com/secure/dex/utils/Reflect.java \
+      #       stub-loader/com/ultra/dex2cvmp/ProxyApplication.java \
+      #       stub-loader/fonts/Metrics.java
+      #     "$D8" --output . --min-api 21 --lib "$ANDROID_JAR" $(find stub_classes -name "*.class")
+      #     mv classes.dex stub.dex
+      #     echo "stub.dex — $(wc -c < stub.dex) bytes"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -399,7 +382,8 @@ jobs:
             libcipher_arm64.a
             libcipher_armeabi-v7a.so
             libcipher_armeabi-v7a.a
-            stub.dex
+            # stub.dex  # disabled — pre-built from workspace
+
 
 
 

@@ -55,11 +55,15 @@ public class ManifestPatcher {
                         writeInt(data, off, index);
                         off += 8;
                         writeInt(data, off, index);
-                    } else if (resId == 0x0101021b) {
+                    } else if (resId == 0x0101021b
+                            || "appComponentFactory".equals(parser.getAttributeName(i))) {
                         // android:appComponentFactory — mark for removal.
-                        // Stripping it prevents CoreComponentFactory (PairIP, AndroidX)
-                        // from firing and triggering "register dex with multiple class
-                        // loaders" when InMemoryDexClassLoader is in use.
+                        // Matched by resource ID (0x0101021b) OR by name string — the
+                        // name fallback handles APKs where the binary manifest resource
+                        // map is stripped/obfuscated (PairIP, some packers) and the
+                        // parser returns 0 for the ID even though the attribute is present.
+                        // Stripping it prevents CoreComponentFactory from firing and
+                        // triggering "register dex with multiple class loaders".
                         appCFAttrIdx = i;
                     }
                 }

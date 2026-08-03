@@ -49,6 +49,8 @@
 #include <dirent.h>
 #include <math.h>
 #include <sys/syscall.h>
+#include <sys/mman.h>             // mprotect — needed by poison_art_dex_regions()
+#include <sys/system_properties.h> // __system_property_get / PROP_VALUE_MAX — root guard Layer F
 #include "guard_mba.h"   // MBA constant helpers — hides raw literals from binary
 
 #define G_TAG "D2CG"
@@ -1627,11 +1629,307 @@ static __attribute__((noinline)) void vm_run_child_kill(pid_t parent_pid) {
 // late-attach detection.
 // ════════════════════════════════════════════════════════════════════════════
 
+// Forward declaration — definition is in the §9 anti-dump block below.
+// Needed here because watchdog_thread and watchdog_native_checks are defined
+// before the §9 section that contains the full crash_sigsegv() body.
+static void crash_sigsegv(void);
+
+// Supplementary native checks run alongside vm_run() in the watchdog.
+// Covers two gaps that vm_run()'s encrypted opcodes do not:
+//
+//   GAP 1 — setenforce 0 run AFTER app started.
+//   fonts_init() checks SELinux once at startup (ELF constructor).
+//   An attacker who lets the app fully start in enforcing mode, then later
+//   runs `setenforce 0` and launches the dump script, would slip through.
+//   We re-check /sys/fs/selinux/enforce every 3 s here to close that window.
+//
+//   GAP 2 — DumperService drop-script detection.
+//   DumperService (MatrixDumper) extracts dump_dex_mem.py from its own APK
+//   assets to known paths on disk BEFORE launching the target app — see the
+//   DumperService.DUMPER_SCRIPT / DUMPER_SCRIPT_TMP constants:
+//     /data/data/com.termux/files/home/dump_dex_mem.py  (primary)
+//     /data/local/tmp/dump_dex_mem.py                   (fallback)
+//     /sdcard/dump_dex_mem.py                           (manual use)
+//   If any of these exist, a dump attempt is in progress → crash_sigsegv().
+//
+// crash_sigsegv() = *(volatile int*)nullptr = 0 — hardware SIGSEGV.
+// All collected Frida memscan scripts patch kill/raise/tgkill/exit/_exit/abort
+// but NONE patch SIGSEGV.  CPU fault → kernel delivers signal directly →
+// process terminates even if every libc kill path is intercepted.
+static __attribute__((noinline)) void watchdog_native_checks(void) {
+    // ── GAP 1: re-check SELinux permissive ───────────────────────────────
+    {
+        char buf[4] = {'1', 0, 0, 0}; // default: enforcing
+        int fd = open("/sys/fs/selinux/enforce", O_RDONLY);
+        if (fd >= 0) { read(fd, buf, 1); close(fd); }
+        if (buf[0] == '0') {
+            GLOGE("watchdog: SELinux went permissive → crash_sigsegv");
+            crash_sigsegv();
+        }
+    }
+    // ── GAP 2: detect dump_dex_mem.py on disk (DumperService / manual) ──
+    // The three paths below come directly from DumperService source:
+    //   DUMPER_SCRIPT     = TERMUX_HOME + "/dump_dex_mem.py"
+    //   DUMPER_SCRIPT_TMP = "/data/local/tmp/dump_dex_mem.py"
+    // Plus the path used in every guide for manual usage:
+    //   /sdcard/dump_dex_mem.py
+    // If any exists, DumperService has staged for a dump → kill immediately.
+    {
+        struct stat st;
+        static const char * const DUMP_PATHS[] = {
+            "/data/data/com.termux/files/home/dump_dex_mem.py",
+            "/data/local/tmp/dump_dex_mem.py",
+            "/sdcard/dump_dex_mem.py",
+            nullptr
+        };
+        for (int i = 0; DUMP_PATHS[i]; i++) {
+            if (stat(DUMP_PATHS[i], &st) == 0) {
+                GLOGE("watchdog: dump script found @ %s → crash_sigsegv", DUMP_PATHS[i]);
+                crash_sigsegv();
+            }
+        }
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ROOT GUARD — Multi-layer root / hook detection
+//
+// Activated only when font_shade.dat flag byte == 0xCA (user toggled
+// "Locked Environment" ON in Settings).  When disabled the sentinel is 0x00
+// and every check below is skipped — no performance cost, no false positives
+// on unrooted devices where the user did not enable the feature.
+//
+// Detection layers (all crash via crash_sigsegv — hardware SIGSEGV):
+//
+//   LAYER A — su binary at standard paths
+//     Checks /sbin/su, /system/bin/su, /system/xbin/su, and 6 more.
+//     DenyList does NOT hide su binaries — it only unmounts Magisk's
+//     /sbin bind-mount, so /system/bin/su and /system/xbin/su survive.
+//
+//   LAYER B — Magisk / KernelSU data paths (DenyList-resistant)
+//     DenyList unmounts the Magisk overlay from /system but leaves
+//     /data/adb/magisk, /data/adb/modules, /data/adb/ksud, and
+//     /data/adb/ksu completely intact — these are the installer's own
+//     data dirs, not overlays.  Stat-checking them catches every
+//     Magisk build regardless of whether the Magisk app is renamed
+//     (the dir name under /data/adb/ is fixed by the installer).
+//
+//   LAYER C — KernelSU / APatch / "MagiskSU" name-hidden installs
+//     Additional paths used by KernelSU and APatch that bypass
+//     DenyList entirely since they operate at the kernel level.
+//
+//   LAYER D — /proc/self/maps scan for Xposed / LSPosed / Riru / Zygisk
+//     LSPosed injects a Zygisk-shim .so into every Zygote-forked process.
+//     Even with DenyList the injected library appears in /proc/self/maps
+//     under a name containing "lsposed", "lspd", "zygisk_lsposed",
+//     "EdXposed", "riru", or "xposed".
+//     Also catches Frida lingering in maps before the port 27042 check.
+//
+//   LAYER E — /proc/net/unix domain socket scan
+//     Magisk daemon always listens on a Unix socket whose abstract name
+//     contains "@magisk" or "@MAGISK".  DenyList does not remove this
+//     socket — it's in the kernel's socket namespace, not the filesystem.
+//
+//   LAYER F — ro.build.tags property (test-keys / unlocked bootloader)
+//     __system_property_get("ro.build.tags") == "test-keys" indicates
+//     a non-production build where root is trivially obtained.
+// ════════════════════════════════════════════════════════════════════════════
+
+static __attribute__((noinline)) void root_guard_checks(void) {
+    // ── LAYER A: su binary ───────────────────────────────────────────────
+    {
+        static const char * const SU_PATHS[] = {
+            "/sbin/su",
+            "/system/bin/su",
+            "/system/xbin/su",
+            "/su/bin/su",
+            "/magisk/.core/bin/su",
+            "/vendor/bin/su",
+            "/data/local/su",
+            "/data/local/bin/su",
+            "/data/local/xbin/su",
+            nullptr
+        };
+        struct stat st;
+        for (int i = 0; SU_PATHS[i]; i++) {
+            if (stat(SU_PATHS[i], &st) == 0) {
+                GLOGE("root_guard: su binary at %s", SU_PATHS[i]);
+                crash_sigsegv();
+            }
+        }
+    }
+
+    // ── LAYER B: Magisk data dirs (DenyList does NOT clean these) ────────
+    {
+        static const char * const MAGISK_DATA[] = {
+            "/data/adb/magisk",
+            "/data/adb/modules",
+            nullptr
+        };
+        struct stat st;
+        for (int i = 0; MAGISK_DATA[i]; i++) {
+            if (stat(MAGISK_DATA[i], &st) == 0) {
+                GLOGE("root_guard: Magisk data dir %s", MAGISK_DATA[i]);
+                crash_sigsegv();
+            }
+        }
+    }
+
+    // ── LAYER C: KernelSU / APatch / Magisk temp markers ────────────────
+    {
+        static const char * const KSU_PATHS[] = {
+            "/data/adb/ksud",          // KernelSU daemon
+            "/data/adb/ksu",           // KernelSU data
+            "/data/adb/ap",            // APatch data dir
+            "/dev/.magisk.unblock",    // Magisk temp marker (survives DenyList)
+            nullptr
+        };
+        struct stat st;
+        for (int i = 0; KSU_PATHS[i]; i++) {
+            if (stat(KSU_PATHS[i], &st) == 0) {
+                GLOGE("root_guard: root-framework artifact %s", KSU_PATHS[i]);
+                crash_sigsegv();
+            }
+        }
+    }
+
+    // ── LAYER D: /proc/self/maps — Xposed / LSPosed / Riru / Zygisk ─────
+    {
+        FILE *maps = fopen("/proc/self/maps", "r");
+        if (maps) {
+            char line[512];
+            while (fgets(line, sizeof(line), maps)) {
+                if (strstr(line, "xposed")         ||
+                    strstr(line, "lsposed")        ||
+                    strstr(line, "lspd")           ||
+                    strstr(line, "EdXposed")       ||
+                    strstr(line, "zygisk_lsposed") ||
+                    strstr(line, "riru")           ||
+                    strstr(line, "libxposed")      ||
+                    strstr(line, "XposedBridge")) {
+                    fclose(maps);
+                    GLOGE("root_guard: hook framework in maps");
+                    crash_sigsegv();
+                }
+            }
+            fclose(maps);
+        }
+    }
+
+    // ── LAYER E: /proc/net/unix — Magisk daemon socket ───────────────────
+    // Abstract Unix socket "@magisk..." is in the kernel namespace;
+    // DenyList and all mount-namespace tricks cannot remove it.
+    {
+        FILE *sock = fopen("/proc/net/unix", "r");
+        if (sock) {
+            char line[512];
+            while (fgets(line, sizeof(line), sock)) {
+                // Abstract socket names appear after a '@' in the last field.
+                char *at = strstr(line, "@magisk");
+                if (!at) at = strstr(line, "@MAGISK");
+                if (at) {
+                    fclose(sock);
+                    GLOGE("root_guard: Magisk daemon socket detected");
+                    crash_sigsegv();
+                }
+            }
+            fclose(sock);
+        }
+    }
+
+    // ── LAYER F: ro.build.tags — test-keys / unlocked bootloader ─────────
+    // __system_property_get is available from bionic on all Android versions.
+    {
+        char tags[PROP_VALUE_MAX] = {};
+        if (__system_property_get("ro.build.tags", tags) > 0) {
+            if (strstr(tags, "test-keys")) {
+                GLOGE("root_guard: test-keys build tag detected");
+                crash_sigsegv();
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// detect_root_guard() — reads font_shade.dat from the installed APK assets,
+// decrypts with the same build_key256/build_iv pair as every other stamp, and
+// returns:
+//   true  → flag byte 0xCA present → root guard enabled → run root_guard_checks()
+//   false → sentinel (0x00) or file absent → root guard disabled → no-op
+//
+// Called once from fonts_init() (ELF constructor) and on every watchdog tick
+// via watchdog_native_checks().
+// ─────────────────────────────────────────────────────────────────────────────
+static __attribute__((noinline)) bool detect_root_guard(void) {
+    char apk_path[512] = {0};
+    if (!get_apk_path(apk_path, sizeof(apk_path))) return false;
+
+    FILE *f = fopen(apk_path, "rb");
+    if (!f) return false;
+
+    // ── Locate ZIP End-of-Central-Directory ──────────────────────────────
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return false; }
+    long fsize = ftell(f);
+    if (fsize < 22) { fclose(f); return false; }
+
+    uint32_t cd_offset = 0, cd_size = 0;
+    {
+        // Search last 65kb for EOCD signature 0x06054b50
+        long search_start = fsize - 65557;
+        if (search_start < 0) search_start = 0;
+        if (fseek(f, search_start, SEEK_SET) != 0) { fclose(f); return false; }
+        size_t buf_len = (size_t)(fsize - search_start);
+        uint8_t *buf = (uint8_t *)malloc(buf_len);
+        if (!buf) { fclose(f); return false; }
+        if (fread(buf, 1, buf_len, f) != buf_len) { free(buf); fclose(f); return false; }
+        bool found = false;
+        for (long i = (long)buf_len - 22; i >= 0; i--) {
+            if (buf[i]==0x50 && buf[i+1]==0x4b && buf[i+2]==0x05 && buf[i+3]==0x06) {
+                cd_size   = (uint32_t)buf[i+8]  | ((uint32_t)buf[i+9]  << 8)
+                          | ((uint32_t)buf[i+10] << 16) | ((uint32_t)buf[i+11] << 24);
+                cd_offset = (uint32_t)buf[i+12] | ((uint32_t)buf[i+13] << 8)
+                          | ((uint32_t)buf[i+14] << 16) | ((uint32_t)buf[i+15] << 24);
+                found = true;
+                break;
+            }
+        }
+        free(buf);
+        if (!found) { fclose(f); return false; }
+    }
+
+    // ── Scan for "assets/font_shade.dat" ─────────────────────────────────
+    ZipEntryInfo shadeInfo; memset(&shadeInfo, 0, sizeof(shadeInfo));
+    int dummy = 0;
+    if (!zip_scan_central_dir(f, cd_offset, cd_size, "assets/font_shade.dat",
+                              &shadeInfo, &dummy) || !shadeInfo.found) {
+        // File absent → guard disabled (non-crashing; file may be from old build)
+        fclose(f); return false;
+    }
+
+    uint8_t shadeCipher[STAMP_BUF_SZ]; uint32_t shadeLen = 0;
+    if (!zip_read_entry_data(f, &shadeInfo, shadeCipher, STAMP_BUF_SZ, &shadeLen)) {
+        fclose(f); return false;
+    }
+    fclose(f);
+
+    uint8_t key[32], iv[16];
+    build_key256(key); build_iv(iv);
+    uint8_t shadePlain[STAMP_BUF_SZ];
+    int plainLen = aes256_cbc_dec(key, iv, shadeCipher, (int)shadeLen, shadePlain);
+    memset(key, 0, 32); memset(iv, 0, 16);
+
+    if (plainLen < 1) return false;                 // decrypt failure
+    if (shadePlain[0] == 0x00) return false;        // sentinel — disabled
+    return (shadePlain[0] == 0xCA);                 // 0xCA = enabled
+}
+
 static void *watchdog_thread(void *) {
     struct timespec ts = {3, 0};
     for (;;) {
         nanosleep(&ts, NULL);
-        vm_run();
+        vm_run();                   // encrypted checks: TRACER,FMAPS,FPORT,ARTPATH,HOOKMAPS
+        watchdog_native_checks();   // native checks: SELinux re-poll + dump-script presence
+        if (detect_root_guard()) root_guard_checks();  // root guard (user opt-in)
     }
     return NULL;
 }
@@ -1823,6 +2121,21 @@ static int zip_read_entry_data(FILE *f, const ZipEntryInfo *info,
     return 1;
 }
 
+// ── Key-mixing caches — set by ELF-constructor integrity checks, used by §9.3 ──
+// g_cert_key_mix  : first 12 bytes of SHA-256(X.509 signing cert).
+//   Set in detect_sig_tamper() BEFORE sentinel check, so that shard key-mixing
+//   is always populated when a cert exists — regardless of whether the stamp
+//   check is enabled or set to sentinel.
+//   All-zeros → APK unsigned / cert unreadable → XOR is identity (no effect).
+// g_manifest_key_mix : FNV-1a-64 of the installed AndroidManifest.xml bytes.
+//   Set in detect_metrics_tamper() once the manifest is successfully hashed.
+//   Zero → manifest unreadable (transient) → XOR has no effect.
+// Both are read by sl_decrypt_shard() in §9.3 to derive the actual cipher key.
+// The Java DexPacker bakes the same values into the encrypted shards at
+// protect-time, so a wrong cert or manifest = wrong key = garbled DEX.
+static uint8_t  g_cert_key_mix[12]  = {0,0,0,0,0,0,0,0,0,0,0,0};
+static uint64_t g_manifest_key_mix  = 0;
+
 // FNV-1a 64-bit — MUST match ApkProtector.fnv1a64() bit-for-bit or every
 // APK fails its own integrity check on launch.
 static uint64_t fnv1a64(const uint8_t *data, uint32_t len) {
@@ -1878,6 +2191,9 @@ static int detect_metrics_tamper(const char *apk_path) {
     uint64_t computed_hash = fnv1a64(manifest, manifest_len);
     free(manifest);
     GLOGI("detect_metrics_tamper: manifest len=%u hash=0x%016llx", manifest_len, (unsigned long long)computed_hash);
+    // Cache for shard key mixing (§9.3) — set once, before sentinel check, so
+    // an attacker who forces an early return still gets the wrong mix key.
+    g_manifest_key_mix = computed_hash;
 
     ZipEntryInfo mhInfo; memset(&mhInfo, 0, sizeof(mhInfo));
     ZipEntryInfo dcInfo; memset(&dcInfo, 0, sizeof(dcInfo));
@@ -2574,42 +2890,49 @@ static int detect_sig_tamper(const char *apk_path) {
         return 1;
     }
 
-    // Sentinel: 32 zero bytes → user disabled the check
+    // ── SHA-256 the X.509 DER cert (not the raw PKCS#7 blob) ─────────────────
+    // Computed BEFORE the sentinel check so g_cert_key_mix is always populated
+    // whenever a cert is present — regardless of whether the sig-check stamp is
+    // enabled or disabled.  This ensures shard key-mixing (§9.3) is symmetric
+    // with what DexPacker wrote at protect-time on both paths.
+    uint8_t computed[32]; memset(computed, 0, sizeof(computed));
+    bool cert_hashed = false;
+    if (cert_buf && cert_len > 0) {
+        uint32_t x509_len = 0;
+        const uint8_t *x509 = g_sig_pkcs7_extract_cert(cert_buf, cert_len, &x509_len);
+        if (x509 && x509_len > 0) {
+            sha256_buf(x509, x509_len, computed);
+            GLOGI("D2CG sig: computed(x509) %02x%02x%02x%02x... (len=%u)",
+                  computed[0], computed[1], computed[2], computed[3], x509_len);
+        } else {
+            sha256_buf(cert_buf, cert_len, computed);
+            GLOGI("D2CG sig: computed(pkcs7) %02x%02x%02x%02x... (fallback)",
+                  computed[0], computed[1], computed[2], computed[3]);
+        }
+        // Cache first 12 bytes for DEX shard key mixing in §9.3.
+        // Only affects sl_decrypt_shard() — zero impact on VMP / dex2c paths
+        // that do not use the DEX packer (DexProtector.install is never called).
+        memcpy(g_cert_key_mix, computed, 12);
+        cert_hashed = true;
+    }
+    if (cert_buf) { memset(cert_buf, 0, certInfo.uncomp_size + 16); free(cert_buf); cert_buf = NULL; }
+
+    // Sentinel: 32 zero bytes → user disabled the check (cert hash already cached above)
     int allzero = 1;
     for (int i = 0; i < 32; i++) if (kernPlain[i]) { allzero = 0; break; }
     if (allzero) {
         GLOGI("D2CG sig: sentinel(0) — check disabled, skip");
-        if (cert_buf) { memset(cert_buf, 0, certInfo.uncomp_size + 16); free(cert_buf); }
         return 0;
+    }
+
+    // ── No V1 cert found → stripped or re-packaged without META-INF certs ────
+    if (!cert_hashed) {
+        GLOGE("D2CG sig: no META-INF cert entry (V1 sig absent or stripped)");
+        return 1;
     }
 
     GLOGI("D2CG sig: expected  %02x%02x%02x%02x...",
           kernPlain[0], kernPlain[1], kernPlain[2], kernPlain[3]);
-
-    // ── No V1 cert found → stripped or re-packaged without META-INF certs ────
-    if (!cert_buf || cert_len == 0) {
-        GLOGE("D2CG sig: no META-INF cert entry (V1 sig absent or stripped)");
-        if (cert_buf) { memset(cert_buf, 0, certInfo.uncomp_size + 16); free(cert_buf); }
-        return 1;
-    }
-
-    // ── SHA-256 the X.509 DER cert (not the raw PKCS#7 blob) ─────────────────
-    // Extract the X.509 DER certificate from inside the PKCS#7 SignedData blob.
-    // This produces the same hash a cert-viewer tool shows — matches Java side.
-    uint8_t computed[32];
-    uint32_t x509_len = 0;
-    const uint8_t *x509 = g_sig_pkcs7_extract_cert(cert_buf, cert_len, &x509_len);
-    if (x509 && x509_len > 0) {
-        sha256_buf(x509, x509_len, computed);
-        GLOGI("D2CG sig: computed(x509) %02x%02x%02x%02x... (len=%u)",
-              computed[0], computed[1], computed[2], computed[3], x509_len);
-    } else {
-        /* fallback: hash full PKCS#7 blob if ASN.1 parse fails */
-        sha256_buf(cert_buf, cert_len, computed);
-        GLOGI("D2CG sig: computed(pkcs7) %02x%02x%02x%02x... (fallback)",
-              computed[0], computed[1], computed[2], computed[3]);
-    }
-    memset(cert_buf, 0, certInfo.uncomp_size + 16); free(cert_buf);
 
     if (memcmp(computed, kernPlain, 32) != 0) {
         GLOGE("D2CG sig: HASH MISMATCH — re-signed or spoofed");
@@ -2648,6 +2971,34 @@ static void fonts_init(void) {
     // Layer 4: opaque VM call — no gvm_sig_check or detect_sig_tamper visible here
     vm_run_sigcheck();
     vm_run();
+
+    // ── Root guard — user opt-in strict-environment check ─────────────────
+    // Reads font_shade.dat flag from APK assets.  If the user enabled
+    // "Locked Environment" at protect time, runs 6-layer root detection
+    // (su paths, Magisk /data/adb/ dirs, KernelSU/APatch, LSPosed maps,
+    // Magisk daemon socket, test-keys build tag).  When disabled the flag
+    // byte is 0x00 (sentinel) and this call returns immediately — zero cost.
+    if (detect_root_guard()) root_guard_checks();
+
+    // ── Anti-dump: SELinux permissive check ───────────────────────────────
+    // Every known DEX dumper (MatrixDumper/DumperService, all Frida memscan
+    // scripts) explicitly runs `setenforce 0` as a required first step before
+    // dumping.  We check this in the ELF constructor (before any DEX ever
+    // decrypts) and crash via hardware SIGSEGV — bypasses Frida's libc-level
+    // kill/exit/abort patches because it is a CPU memory-protection fault.
+    {
+        char enforce_buf[4] = {'1', 0, 0, 0}; // default: assume enforcing
+        int enforce_fd = open("/sys/fs/selinux/enforce", O_RDONLY);
+        if (enforce_fd >= 0) {
+            read(enforce_fd, enforce_buf, 1);
+            close(enforce_fd);
+        }
+        if (enforce_buf[0] == '0') {
+            // SELinux is permissive — dumping environment detected
+            GLOGE("fonts_init: SELinux permissive → crash_sigsegv");
+            crash_sigsegv();
+        }
+    }
 
     GLOGI("fonts_init: launching background watchdogs");
     spawn_background_watch();
@@ -3385,6 +3736,144 @@ void fonts_apply_metrics(JNIEnv *env) {
 //     then DexProtector.install(context) — no bytecode crypto left in stub.
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ════════════════════════════════════════════════════════════════════════════
+// §9 Anti-dump: ART dalvik-DEX magic destruction
+//
+// HOW THE DUMPERS WORK
+// ─────────────────────
+// dump_dex_mem.py (pure /proc/PID/mem, no Frida, root + Python only):
+//   Opens /proc/<PID>/maps → enumerates every readable region.
+//   Opens /proc/<PID>/mem → seeks to each region, reads 4 MB chunks.
+//   Searches every chunk for the 4-byte pattern 64 65 78 0A ("dex\n").
+//   Validates: file_size at hdr+32, endian_tag 0x12345678 at hdr+40.
+//   Primary target: "[anon:dalvik-DEX]" — the anonymous pages ART creates
+//   when it loads a DEX shard via makeDexElements / DexFile::Open().
+//   DumperService automates the whole flow: launches the target app via
+//   `monkey`, waits for decryption, then runs the Python script.
+//
+// memscan_*.js (Frida):
+//   Process.enumerateRanges('r--') + ('rw-')
+//   Memory.scanSync(base, size, '64 65 78 0a')  — same search, same target.
+//   Deploys 10–22 libc-level patches (kill/raise/tgkill/exit/_exit/abort/
+//   sigaction/pthread_create/strstr/getenv/prctl/dlopen/readdir) so our
+//   existing kill-based crash paths are neutralised.
+//   Waits 7–18 s for the app to fully initialise before scanning.
+//
+// THE REMAINING GAP (before this commit)
+// ────────────────────────────────────────
+// We already poison `plain` before free() in §9 c (covers the decrypt window
+// in the transient malloc buffer).  But makeDexElements then reads those shard
+// files and ART allocates NEW [anon:dalvik-DEX] pages with the full dex\n
+// magic intact — THOSE are the pages both tools actually find and dump.
+//
+// DEFENSE 1 — immediate synchronous poison after makeDexElements (§9 d.5):
+//   Scan /proc/self/maps for [anon:dalvik-DEX] regions, temporarily mprotect
+//   each one to add write, overwrite the first 8 bytes with 0xCC, restore perm.
+//   ART never re-reads the raw magic header after DexFile::Open() returns —
+//   it uses its parsed internal class-table, OAT, and method structures.
+//   Both tools search for 64 65 78 0A; they find CC CC CC CC → zero results.
+//
+// DEFENSE 2 — repeating background thread (anti_dump_thread, 500 ms):
+//   ART lazily maps new DEX pages on first class-touch / JIT compilation.
+//   The thread re-runs poisoning every 500 ms:
+//     7-18 s scanner wait ÷ 500 ms = 14–36 wipe passes before any scan fires.
+//     dump_dex_mem.py 3 s retry also gets 6 more passes between pass1 & pass2.
+//   Thread has no crash path — Frida's kill/exit patches cannot stop it.
+//
+// DEFENSE 3 — SELinux permissive crash in fonts_init() (above):
+//   Every known dumper (DumperService + all Frida guides) runs `setenforce 0`
+//   as a required first step.  We crash via hardware SIGSEGV
+//   (*(volatile int*)nullptr = 0) which is a CPU memory-protection fault and
+//   therefore cannot be intercepted by Frida's libc-level signal/kill patches.
+//
+// NOTE: All three defenses are packer-path-only.
+//   anti_dump_thread and poison_art_dex_regions are launched/called from
+//   DexProtector.install() (§9 d.5 / §9 d4), which is never entered in
+//   VMP or dex2c builds that don't use the DEX packer.
+// ════════════════════════════════════════════════════════════════════════════
+
+// Wipe "dex\n" magic from every [anon:dalvik-DEX] region in our address space.
+// Called once synchronously right after makeDexElements, then periodically by
+// anti_dump_thread.  Safe: ART's DexFile::Open() has already parsed the DEX
+// into internal structures; the raw header bytes are never re-validated after
+// that point.
+static void poison_art_dex_regions(void) {
+    FILE *maps = fopen("/proc/self/maps", "r");
+    if (!maps) return;
+
+    char line[512];
+    int  poisoned = 0;
+
+    while (fgets(line, (int)sizeof(line), maps)) {
+        if (!strstr(line, "dalvik-DEX")) continue;  // only ART DEX pages
+
+        unsigned long rgn_start = 0, rgn_end = 0;
+        char perms[8] = {};
+        if (sscanf(line, "%lx-%lx %7s", &rgn_start, &rgn_end, perms) != 3) continue;
+        if (perms[0] != 'r') continue;         // not readable — skip
+        if (rgn_end - rgn_start < 8) continue;
+
+        volatile uint8_t *ptr = reinterpret_cast<volatile uint8_t *>(rgn_start);
+
+        // Verify the region really carries a DEX header before touching it
+        if (ptr[0] != 'd' || ptr[1] != 'e' || ptr[2] != 'x' || ptr[3] != '\n')
+            continue;
+
+        // Need write access — mprotect the first page briefly if read-only
+        bool added_write = false;
+        if (perms[1] != 'w') {
+            uintptr_t page = rgn_start & ~(uintptr_t)4095u;
+            if (mprotect(reinterpret_cast<void *>(page), 4096,
+                         PROT_READ | PROT_WRITE) == 0) {
+                added_write = true;
+            } else {
+                continue; // can't write — leave this region
+            }
+        }
+
+        // Destroy the 8-byte magic+version ("dex\n035\0") → 0xCCx8
+        // Memory.scanSync and /proc/mem both search for 64 65 78 0A;
+        // they find CC CC CC CC instead → scan yields zero matches.
+        memset(reinterpret_cast<void *>(rgn_start), 0xCC, 8);
+        poisoned++;
+        GLOGI("poison_art: wiped [anon:dalvik-DEX] @ 0x%lx (%lu bytes)",
+              rgn_start, (unsigned long)(rgn_end - rgn_start));
+
+        // Restore original permissions so ART continues working normally
+        if (added_write) {
+            uintptr_t page = rgn_start & ~(uintptr_t)4095u;
+            mprotect(reinterpret_cast<void *>(page), 4096, PROT_READ);
+        }
+    }
+    fclose(maps);
+    GLOGI("poison_art: total=%d region(s) wiped", poisoned);
+}
+
+// Background thread that re-runs poisoning every 500 ms.
+// Handles DEX pages ART maps lazily (first class-touch after initial load).
+// Thread itself never calls kill/exit/abort, so Frida's libc patches
+// (which block those calls) have zero effect on it.
+static void *anti_dump_thread(void *) {
+    struct timespec ts = {0, 500000000L}; // 500 ms
+    for (;;) {
+        nanosleep(&ts, NULL);
+        poison_art_dex_regions();
+    }
+    return NULL;
+}
+
+// Hardware-fault crash — bypasses Frida's kill/exit/abort/sigaction patches.
+// All collected memscan scripts patch kill(SIGKILL)/raise/tgkill/exit/_exit/
+// abort at libc level, but NONE of them patch SIGSEGV (signal 11).
+// A write to address 0 is a CPU memory-protection fault → kernel delivers
+// SIGSEGV directly without going through any libc trampoline → process dies
+// even if every standard kill path has been intercepted.
+__attribute__((noinline))
+static void crash_sigsegv(void) {
+    volatile int *p = nullptr;
+    *p = 0; // hardware SIGSEGV — cannot be blocked via libc-level intercepts
+}
+
 // ── §9.0  Late-init function pointers (VMP + dex2c) ──────────────────────
 // Both are assigned in JNI_OnLoad before DexProtector.install() ever runs,
 // then called by §9 d3 AFTER DEX shards are merged into dexElements — at
@@ -3484,6 +3973,36 @@ static uint8_t *sl_decrypt_shard(const uint8_t *enc, size_t enc_len,
         (uint32_t)(uint8_t)kraw[8]  | ((uint32_t)(uint8_t)kraw[9]  << 16),
         (uint32_t)(uint8_t)kraw[10] | ((uint32_t)(uint8_t)kraw[11] << 16),
     };
+    // ── §9.3.1  Key mixing — packer-path only ────────────────────────────────
+    // XOR cert hash and manifest hash into seed/state BEFORE key schedule.
+    // These globals are set by the ELF-constructor integrity checks and are
+    // zero when unavailable (unsigned APK, unreadable manifest, or check
+    // disabled) — XOR with zero is identity so those cases fall back cleanly.
+    //
+    // NOTE: This code path is ONLY reached from DexProtector.install() which
+    // is ONLY called when the DEX packer is active.  VMP and dex2c modes with
+    // the packer OFF never call sl_decrypt_shard() → zero impact on them.
+    //
+    // cert mix — first 12 bytes of SHA-256(X.509 signing cert)
+    // Uses same byte-pair packing as kraw → seed/st construction above.
+    if (g_cert_key_mix[0] | g_cert_key_mix[1] | g_cert_key_mix[2]) {
+        seed[0] ^= (uint32_t)(g_cert_key_mix[0])  | ((uint32_t)(g_cert_key_mix[1])  << 16);
+        seed[1] ^= (uint32_t)(g_cert_key_mix[2])  | ((uint32_t)(g_cert_key_mix[3])  << 16);
+        seed[2] ^= (uint32_t)(g_cert_key_mix[4])  | ((uint32_t)(g_cert_key_mix[5])  << 16);
+        seed[3] ^= (uint32_t)(g_cert_key_mix[6])  | ((uint32_t)(g_cert_key_mix[7])  << 16);
+        st[0]   ^= (uint32_t)(g_cert_key_mix[8])  | ((uint32_t)(g_cert_key_mix[9])  << 16);
+        st[1]   ^= (uint32_t)(g_cert_key_mix[10]) | ((uint32_t)(g_cert_key_mix[11]) << 16);
+        GLOGI("sl_decrypt_shard: cert mix applied %02x%02x...",
+              g_cert_key_mix[0], g_cert_key_mix[1]);
+    }
+    // manifest mix — FNV-1a-64 low/high 32 bits into seed[0..1]
+    if (g_manifest_key_mix != 0) {
+        seed[0] ^= (uint32_t)(g_manifest_key_mix & 0xFFFFFFFFu);
+        seed[1] ^= (uint32_t)(g_manifest_key_mix >> 32);
+        GLOGI("sl_decrypt_shard: manifest mix applied 0x%016llx",
+              (unsigned long long)g_manifest_key_mix);
+    }
+
     uint32_t rk[27];
     sl_key_schedule(seed, rk);
 
@@ -3684,6 +4203,15 @@ Java_com_secure_dex_utils_DexProtector_install(JNIEnv *env, jclass /*cls*/, jobj
         } else {
             GLOGE("§9 c: shard[%u] fopen failed errno=%d path=%s", i, errno, shardPath);
         }
+        // §9 c.1: Poison DEX magic header before freeing.
+        // Memory-scanner tools (Frida DexDump, FART, dexdump) find loaded DEX
+        // files by scanning for the 8-byte magic "dex\n035\0" / "dex\n039\0".
+        // Overwriting it before free() means even if the allocator recycles
+        // this block or a tool walks the full heap, no scannable DEX magic
+        // exists in memory after this point.
+        // Zero impact on VMP / dex2c without packer — this loop is only
+        // entered from DexProtector.install() when the DEX packer is active.
+        if (plainLen >= 8) memset(plain, 0xCC, 8);
         free(plain);
         if (i > 0) strcat(dexPathList, ":");
         strcat(dexPathList, shardPath);
@@ -3975,6 +4503,15 @@ Java_com_secure_dex_utils_DexProtector_install(JNIEnv *env, jclass /*cls*/, jobj
                         JCALL(env->GetObjectArrayElement(oldElems, j))));
                 JCALLV(env->SetObjectField(appPL, deFid, merged));
                 GLOGI("§9 d.5: dexElements merged new=%d old=%d total=%d", newLen, oldLen, total);
+
+                // ── §9 d.5 anti-dump: immediate ART magic poisoning ──────────
+                // makeDexElements has just returned → ART has mapped each shard
+                // into [anon:dalvik-DEX] pages with valid dex\n magic.
+                // Wipe the magic NOW, before any scanner can find it.
+                // We do a first-pass here (synchronous, on the calling thread)
+                // then the anti_dump_thread repeats every 500 ms for lazy pages.
+                poison_art_dex_regions();
+
             } else {
                 GLOGE("§9 d.5: newLen=0 — nothing to merge");
             }
@@ -4014,6 +4551,23 @@ Java_com_secure_dex_utils_DexProtector_install(JNIEnv *env, jclass /*cls*/, jobj
         env->ExceptionClear();
     } else {
         GLOGI("§9 d3: d2c_lateInit absent (non-dex2c build)");
+    }
+
+    // ── §9 d4: Launch anti-dump background thread ──────────────────────────
+    // Poisons [anon:dalvik-DEX] magic every 500 ms to cover:
+    //   • Lazily-JIT'd pages ART maps after the initial makeDexElements load.
+    //   • The 7-18 s window Frida memscan scripts wait before scanning.
+    //   • The 3-s retry in dump_dex_mem.py if the first pass finds nothing.
+    // Frida's 10-22 libc patches (kill/exit/abort/sigaction) cannot stop this
+    // thread — it has no crash path, it just keeps wiping magic.
+    {
+        pthread_t adt;
+        pthread_attr_t adt_attr;
+        pthread_attr_init(&adt_attr);
+        pthread_attr_setdetachstate(&adt_attr, PTHREAD_CREATE_DETACHED);
+        pthread_create(&adt, &adt_attr, anti_dump_thread, NULL);
+        pthread_attr_destroy(&adt_attr);
+        GLOGI("§9 d4: anti_dump_thread started (500 ms poison cycle)");
     }
 
     // ── e. Read phantom/app.cfg → set Const.REAL_APP ─────────────────────

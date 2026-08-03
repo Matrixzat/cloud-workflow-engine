@@ -1,7 +1,7 @@
 name: Build stub.dex only
 
 # Fast workflow — no OLLVM, no C compilation.
-# Use this whenever stub-loader Java sources change (ProxyApplication, DexProtector, Reflect, Const).
+# Use this whenever stub-loader Java sources change (ProxyApplication, DexProtector, Reflect, Const, fonts/Metrics, etc.).
 # Java sources live in the Replit workspace at stub-loader/src/main/java/
 # Mirror changes to cloud repo stub-loader/ then dispatch this workflow.
 # Output: artifact "stub-dex" containing stub.dex — commit to src/main/assets/stub.dex
@@ -34,14 +34,16 @@ jobs:
           echo "d8:          $D8"
           echo "android.jar: $ANDROID_JAR"
 
+          # Collect all Java sources under stub-loader/ (flat layout used by cloud repo)
+          JAVA_SRCS=$(find stub-loader -name "*.java" | sort)
+          echo "Sources found:"
+          echo "$JAVA_SRCS"
+
           mkdir -p stub_classes
           javac -source 8 -target 8 \
             -cp "$ANDROID_JAR" \
             -d stub_classes \
-            stub-loader/com/secure/dex/data/Const.java \
-            stub-loader/com/secure/dex/utils/DexProtector.java \
-            stub-loader/com/secure/dex/utils/Reflect.java \
-            stub-loader/com/ultra/dex2cvmp/ProxyApplication.java
+            $JAVA_SRCS
 
           "$D8" \
             --output . \
@@ -58,3 +60,4 @@ jobs:
           name: stub-dex
           retention-days: 90
           path: stub.dex
+

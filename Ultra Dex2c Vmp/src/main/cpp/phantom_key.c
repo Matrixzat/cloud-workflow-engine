@@ -38,6 +38,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#include <sys/mman.h>
 #include <zlib.h>
 
 /* ── SHA-256 (minimal, self-contained) ──────────────────────────────────────
@@ -436,19 +438,96 @@ cleanup:
     return result;
 }
 
-/* ── nativePoisonDex — corrupt DEX header in Java-heap byte[] ───────────────
+/* ── scrub_proc_maps_dex ─────────────────────────────────────────────────────
+ *
+ * Scans /proc/self/maps for ART's internal anonymous DEX mappings
+ * (shown as "Anonymous-DexFile@xxx.jar" or unnamed private mappings that
+ * start with DEX magic).  For each one found:
+ *
+ *   1. mprotect → PROT_READ|PROT_WRITE  (ART makes them r--p after parsing)
+ *   2. Overwrite the three header sentinel fields that every DEX validator
+ *      checks before accepting a memory region as a valid DEX file:
+ *        offset  0-3  : magic       "dex\n" → 0xFFFFFFFF
+ *        offset 32-35 : file_size          → 0x00000000
+ *        offset 40-43 : endian_tag         → 0x00000000
+ *   3. Restore permissions to r--p.
+ *
+ * We corrupt only the header — NOT the entire mapping — so ART's already-
+ * parsed class/method metadata (which lives in separate OAT structures) keeps
+ * working normally.  Dump tools (dump_dex_mem.py, Matrix Dumper, memscan.js)
+ * all gate on valid magic + file_size before saving a region; this makes every
+ * one of ART's internal DEX pages invisible to them.
+ */
+static void scrub_proc_maps_dex(void) {
+    FILE *f = fopen("/proc/self/maps", "r");
+    if (!f) return;
+
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        uintptr_t lo, hi;
+        char perm[5] = {0};
+        /* rest holds the optional path/name field */
+        char rest[256] = {0};
+        int  fields = sscanf(line,
+                             "%lx-%lx %4s %*s %*s %*s %255[^\n]",
+                             (unsigned long *)&lo,
+                             (unsigned long *)&hi,
+                             perm, rest);
+        if (fields < 3) continue;
+        if (perm[0] != 'r') continue;           /* must be readable    */
+        if (perm[3] != 'p') continue;           /* private mapping only */
+
+        /* Accept: Anonymous-DexFile entries, or fully anonymous (no name). */
+        int named_dex = (fields >= 4 && strstr(rest, "Anonymous-DexFile") != NULL);
+        int anon      = (fields < 4 || rest[0] == '\0' || rest[0] == ' ');
+        if (!named_dex && !anon) continue;
+
+        size_t   sz  = (size_t)(hi - lo);
+        uint8_t *p   = (uint8_t *)(uintptr_t)lo;
+        if (sz < 44) continue;
+
+        /* Confirm DEX magic at start of this region before touching it. */
+        if (p[0] != 'd' || p[1] != 'e' || p[2] != 'x' || p[3] != '\n') continue;
+
+        /* Make the first page writable so we can patch the header. */
+        size_t page_sz = (size_t)sysconf(_SC_PAGESIZE);
+        if (page_sz == 0) page_sz = 4096;
+        /* Round up to cover at least the first 44 bytes. */
+        size_t patch_len = page_sz;
+        if (patch_len > sz) patch_len = sz;
+
+        int need_restore = (perm[1] != 'w');
+        if (need_restore)
+            mprotect(p, patch_len, PROT_READ | PROT_WRITE);
+
+        /* Overwrite the three sentinel header fields. */
+        p[0]  = 0xFF; p[1]  = 0xFF; p[2]  = 0xFF; p[3]  = 0xFF; /* magic     */
+        p[32] = 0x00; p[33] = 0x00; p[34] = 0x00; p[35] = 0x00; /* file_size */
+        p[40] = 0x00; p[41] = 0x00; p[42] = 0x00; p[43] = 0x00; /* endian_tag */
+
+        if (need_restore)
+            mprotect(p, patch_len, PROT_READ);
+    }
+    fclose(f);
+}
+
+/* ── nativePoisonDex — corrupt DEX header in Java-heap byte[] AND in ART ────
  *
  * Called from DexProtector after DexClassLoader / InMemoryDexClassLoader has
- * finished parsing the shard.  ART holds its own internal copy; the Java byte[]
- * is no longer needed for execution.  We overwrite three header fields that both
- * dump_dex_mem.py and memscan.js validate before saving a memory region:
+ * finished parsing the shard.
  *
+ * Two-stage poison:
+ *   Stage 1 — Java heap byte[]:  the plaintext DEX byte[] passed from Java.
+ *   Stage 2 — ART-internal map:  scrub_proc_maps_dex() locates ART's own
+ *             anonymous DEX mapping in /proc/self/maps and patches its header
+ *             in-place.  This is the copy that /proc/PID/mem dumpers actually
+ *             read.  After this call, both copies have invalid headers and no
+ *             dump tool can validate or reconstruct the DEX.
+ *
+ * Header fields poisoned (same in both copies):
  *   offset  0-3  : magic      "dex\n035\0" → 0xFFFFFFFF
  *   offset 32-35 : file_size               → 0x00000000
  *   offset 40-43 : endian_tag 0x12345678   → 0x00000000
- *
- * Result: every scanner that looks for DEX magic in readable memory regions
- * finds nothing — the byte[] on the Java heap is unrecognisable as a DEX.
  */
 JNIEXPORT void JNICALL
 Java_com_ultra_dex2cvmp_utils_DexCrypto_nativePoisonDex(
@@ -457,20 +536,23 @@ Java_com_ultra_dex2cvmp_utils_DexCrypto_nativePoisonDex(
         jbyteArray j_dex)
 {
     (void)clazz;
-    if (!j_dex) return;
-    jint len = (*env)->GetArrayLength(env, j_dex);
-    if (len < 44) return;
 
-    /* Read first 44 bytes, patch the three sentinel fields, write back. */
-    jbyte patch[44];
-    (*env)->GetByteArrayRegion(env, j_dex, 0, 44, patch);
+    /* Stage 1: corrupt the Java-heap byte[] */
+    if (j_dex) {
+        jint len = (*env)->GetArrayLength(env, j_dex);
+        if (len >= 44) {
+            jbyte patch[44];
+            (*env)->GetByteArrayRegion(env, j_dex, 0, 44, patch);
+            patch[0]  = (jbyte)0xFF; patch[1]  = (jbyte)0xFF;
+            patch[2]  = (jbyte)0xFF; patch[3]  = (jbyte)0xFF;  /* kill magic     */
+            patch[32] = 0;           patch[33] = 0;
+            patch[34] = 0;           patch[35] = 0;             /* kill file_size */
+            patch[40] = 0;           patch[41] = 0;
+            patch[42] = 0;           patch[43] = 0;             /* kill endian_tag */
+            (*env)->SetByteArrayRegion(env, j_dex, 0, 44, patch);
+        }
+    }
 
-    patch[0]  = (jbyte)0xFF; patch[1]  = (jbyte)0xFF;
-    patch[2]  = (jbyte)0xFF; patch[3]  = (jbyte)0xFF;  /* kill magic     */
-    patch[32] = 0;            patch[33] = 0;
-    patch[34] = 0;            patch[35] = 0;             /* kill file_size */
-    patch[40] = 0;            patch[41] = 0;
-    patch[42] = 0;            patch[43] = 0;             /* kill endian_tag */
-
-    (*env)->SetByteArrayRegion(env, j_dex, 0, 44, patch);
+    /* Stage 2: scrub ART's internal anonymous DEX mapping */
+    scrub_proc_maps_dex();
 }

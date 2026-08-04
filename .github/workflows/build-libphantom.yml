@@ -312,8 +312,8 @@ jobs:
           # phantom/encrypt_blob.py matches DexCrypto.encrypt() pipeline exactly:
           #   Java: DeflaterInputStream → exfr XOR → DeflaterOutputStream
           #   = compress(XOR(compress(plaintext)))
-          python3 phantom/encrypt_blob.py libphantom_arm64.so libphantom_arm64.blob
-          python3 phantom/encrypt_blob.py libphantom_arm.so   libphantom_arm.blob
+          python3 "Ultra Dex2c Vmp/phantom/encrypt_blob.py" libphantom_arm64.so libphantom_arm64.blob
+          python3 "Ultra Dex2c Vmp/phantom/encrypt_blob.py" libphantom_arm.so   libphantom_arm.blob
           echo "Blobs:"
           ls -lh libphantom_arm64.blob libphantom_arm.blob
 

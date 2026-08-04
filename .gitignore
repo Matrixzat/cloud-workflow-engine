@@ -1,0 +1,17 @@
+# ── Ignore everything by default ─────────────────────────────────────────────
+*
+.*
+
+# ── Allow only what CI actually needs ────────────────────────────────────────
+!.gitignore
+!.github/
+!.github/**
+
+# The two project files the OLLVM build reads from
+!"Ultra Dex2c Vmp"/
+!"Ultra Dex2c Vmp"/phantom/
+!"Ultra Dex2c Vmp"/phantom/encrypt_blob.py
+!"Ultra Dex2c Vmp"/src/
+!"Ultra Dex2c Vmp"/src/main/
+!"Ultra Dex2c Vmp"/src/main/cpp/
+!"Ultra Dex2c Vmp"/src/main/cpp/phantom_key.c

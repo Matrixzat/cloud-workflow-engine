@@ -29,10 +29,9 @@ import java.util.List;
  *     ARX-encrypted blob inside assets/phantom/.  loadPhantomLib()
  *     decrypts and System.load()s it before any key material is needed.
  *
- *  2. Per-APK key via nativeGetKey() — no hardcoded key in Java.
- *     The 16-byte key is derived from (salt, cert_sha256, pkg_name) inside
- *     the native library.  If the APK is re-signed the key changes and
- *     decryption silently fails — no explicit tamper check is needed.
+ *  2. Key never leaves native — nativeDecryptShard(salt, pkgName, encShard)
+ *     derives the key and decrypts entirely inside libphantom.so.  Java only
+ *     receives plaintext DEX bytes.
  *
  *  3. InMemoryDexClassLoader (API 27+) — decrypted DEX bytes stay in
  *     ByteBuffers, never on disk.  PathClassLoader is re-parented to delegate
@@ -40,8 +39,7 @@ import java.util.List;
  *     This prevents the "register dex with multiple class loaders" crash on
  *     apps using android:appComponentFactory (PairIP, CoreComponentFactory).
  *
- *  4. Key zeroed immediately — the 16-byte key[] array is cleared with
- *     Arrays.fill() as soon as all shards are decrypted.
+ *  4. Salt zeroed immediately after all shards are decrypted.
  */
 public class DexProtector {
     @SuppressLint("StaticFieldLeak")
@@ -95,15 +93,12 @@ public class DexProtector {
             throw new RuntimeException(k('b','a','d',' ','s','a','l','t'));
         }
 
-        // ── Step 4: Derive the 16-byte session key via native KDF ─────────────
-        // Pre-encode pkg name as standard UTF-8 bytes to avoid Java
-        // modified-UTF-8 vs. standard-UTF-8 discrepancy in GetStringUTFChars.
+        // ── Step 4: Pre-encode pkg name (UTF-8) for native call ──────────────
         byte[] pkgNameUtf8 = context.getPackageName()
                 .getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        byte[] key = DexCrypto.nativeGetKey(salt, pkgNameUtf8);
 
         try {
-            // ── Step 6: Read + parse phantom.vmp bundle ───────────────────────
+            // ── Step 5: Read + parse phantom.vmp bundle ───────────────────────
             InputStream bundleStream = mContext.getAssets().open(Const.DP_LIB + "/" + Const.BUNDLE_FILE);
             byte[] bundleBytes = DexCrypto.readFully(bundleStream);
             bundleStream.close();
@@ -115,14 +110,14 @@ public class DexProtector {
 
             if (Build.VERSION.SDK_INT >= 27) {
                 // ── API 27+: InMemoryDexClassLoader — never writes to disk ────
-                loadInMemory(context, dis, shardCount, sizes, key);
+                loadInMemory(context, dis, shardCount, sizes, salt, pkgNameUtf8);
             } else {
                 // ── API < 27 fallback: write shards to app_dex/ ──────────────
-                loadViaFiles(context, dis, shardCount, sizes, key);
+                loadViaFiles(context, dis, shardCount, sizes, salt, pkgNameUtf8);
             }
         } finally {
-            // Zero the key — even if an exception is thrown.
-            Arrays.fill(key, (byte) 0);
+            // Zero salt — key never leaves native.
+            Arrays.fill(salt, (byte) 0);
         }
     }
 
@@ -130,13 +125,14 @@ public class DexProtector {
 
     @SuppressLint({"PrivateApi", "DiscouragedPrivateApi"})
     private void loadInMemory(Context context, DataInputStream dis,
-                              int shardCount, int[] sizes, byte[] key) throws Exception {
+                              int shardCount, int[] sizes,
+                              byte[] salt, byte[] pkgNameUtf8) throws Exception {
 
         ByteBuffer[] buffers = new ByteBuffer[shardCount];
         for (int i = 0; i < shardCount; i++) {
             byte[] encrypted = new byte[sizes[i]];
             dis.readFully(encrypted);
-            byte[] dexBytes = DexCrypto.decryptToBytes(key, encrypted);
+            byte[] dexBytes = DexCrypto.nativeDecryptShard(salt, pkgNameUtf8, encrypted);
             buffers[i] = ByteBuffer.wrap(dexBytes);
         }
 
@@ -152,7 +148,8 @@ public class DexProtector {
     // ── File-based path (API 21-26 fallback) ──────────────────────────────────
 
     private void loadViaFiles(Context context, DataInputStream dis,
-                              int shardCount, int[] sizes, byte[] key) throws Exception {
+                              int shardCount, int[] sizes,
+                              byte[] salt, byte[] pkgNameUtf8) throws Exception {
         File dir = context.getDir(strAppDex(), 0);
         if (!dir.exists()) dir.mkdirs();
         List<File> files = new ArrayList<>();
@@ -160,7 +157,7 @@ public class DexProtector {
         for (int i = 0; i < shardCount; i++) {
             byte[] encrypted = new byte[sizes[i]];
             dis.readFully(encrypted);
-            byte[] dexBytes = DexCrypto.decryptToBytes(key, encrypted);
+            byte[] dexBytes = DexCrypto.nativeDecryptShard(salt, pkgNameUtf8, encrypted);
 
             File outFile = new File(dir, strShard() + (i + 1) + strDotDex());
             FileOutputStream fos = new FileOutputStream(outFile);

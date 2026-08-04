@@ -19,23 +19,16 @@ import java.util.zip.InflaterOutputStream;
 /**
  * Runtime DEX decryption + libphantom bootstrap for the stub loader.
  *
- * Key changes vs. the old version:
- *  • Const.getProtectKey() / static PROTECT_KEY are gone.
- *  • The 16-byte session key is obtained by calling the native method
- *    nativeGetKey(salt, certHash, pkgName) exported by libphantom.so.
- *  • libphantom.so is stored inside the APK as an ARX-encrypted blob
- *    (assets/phantom/libphantom_arm64.blob or libphantom_arm.blob).
- *    loadPhantomLib(Context) decrypts it, writes it to code_cache/, and
- *    calls System.load() — all of this MUST complete before nativeGetKey
- *    is invoked.
- *  • decrypt / decryptToBytes accept a byte[] key so no key material ever
- *    lives as a Java String.
+ * Key design:
+ *  • Key derivation + shard decryption happen entirely inside libphantom.so
+ *    via nativeDecryptShard() — the 16-byte key never crosses the JNI boundary.
+ *  • libphantom.so is stored as an ARX-encrypted blob in assets/phantom/.
+ *    loadPhantomLib(Context) decrypts it with the hardcoded blob key, writes
+ *    it to code_cache/, and calls System.load().
  *
  * ── Call order ────────────────────────────────────────────────────────────────
- *   DexCrypto.loadPhantomLib(ctx);                  // extract + load .so
- *   byte[] key = DexCrypto.nativeGetKey(salt, certHash, pkgName);
- *   // … pass key to DexProtector for in-memory DEX decryption …
- *   Arrays.fill(key, (byte) 0);                     // zero after use
+ *   DexCrypto.loadPhantomLib(ctx);
+ *   byte[] dex = DexCrypto.nativeDecryptShard(salt, pkgNameUtf8, encShard);
  * ─────────────────────────────────────────────────────────────────────────────
  */
 public class DexCrypto {
@@ -43,21 +36,19 @@ public class DexCrypto {
     // ── Native entry-point ────────────────────────────────────────────────────
 
     /**
-     * Derive the 16-byte DEX session key inside libphantom.so.
+     * Derive key + decrypt one DEX shard entirely inside libphantom.so.
      *
-     * The native side runs the same ARX KDF as PhantomKey.deriveKey() on the
-     * host.  If {@code certHash} does not match the cert that was present at
-     * pack time the derived key will be wrong and decryption will silently
-     * produce garbage — no error string is exposed.
+     * The key is derived from (salt, pkgName) and consumed in-place — it is
+     * never returned to Java.  Java receives only the plaintext DEX bytes.
      *
      * MUST be called only after {@link #loadPhantomLib(Context)}.
      *
      * @param salt        16-byte raw salt from assets/phantom/ph_salt.
-     * @param pkgNameUtf8 Package name pre-encoded as standard UTF-8 bytes by the
-     *                    caller (context.getPackageName().getBytes(UTF_8)).
-     * @return 16-byte key (caller MUST zero with Arrays.fill after use).
+     * @param pkgNameUtf8 Package name pre-encoded as standard UTF-8 bytes.
+     * @param encShard    Encrypted shard bytes from the phantom.vmp bundle.
+     * @return Plaintext DEX bytes.
      */
-    public static native byte[] nativeGetKey(byte[] salt, byte[] pkgNameUtf8);
+    public static native byte[] nativeDecryptShard(byte[] salt, byte[] pkgNameUtf8, byte[] encShard);
 
     // ── Blob bootstrap ────────────────────────────────────────────────────────
 
@@ -66,7 +57,7 @@ public class DexCrypto {
      * appears verbatim in the DEX string pool.
      * This key is ONLY used to decrypt the libphantom.so blob; it does NOT
      * protect any user data.  It is separate from, and weaker than, the per-APK
-     * key derived by nativeGetKey().
+     * key stays inside libphantom.so (nativeDecryptShard).
      */
     private static byte[] blobKey() {
         // "Ph4nt0mBl0bK3y!" (16 bytes) — change when regenerating blobs.
@@ -117,24 +108,9 @@ public class DexCrypto {
         System.load(soFile.getAbsolutePath());
     }
 
-    // ── Decryption helpers called by DexProtector ─────────────────────────────
+    // ── Blob-only decrypt helpers (DexProtector must NOT use these for shards) ──
 
-    /**
-     * Decrypt {@code encrypted} bytes (a single DEX shard) into a fresh byte[].
-     *
-     * @param key       16-byte key from nativeGetKey().
-     * @param encrypted Encrypted shard bytes from the phantom.vmp bundle.
-     * @return Plaintext DEX bytes.
-     */
-    public static byte[] decryptToBytes(byte[] key, byte[] encrypted) throws Exception {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream(encrypted.length);
-        decrypt(key,
-                new java.io.ByteArrayInputStream(encrypted),
-                baos);
-        return baos.toByteArray();
-    }
-
-    /** Streaming decrypt — used when writing a shard to disk (API < 26 fallback). */
+    /** Streaming decrypt — used only for the libphantom blob bootstrap. */
     public static void decrypt(byte[] key, InputStream input, OutputStream output) throws Exception {
         InflaterInputStream  is = new InflaterInputStream(input);
         InflaterOutputStream os = new InflaterOutputStream(output);

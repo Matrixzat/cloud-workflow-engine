@@ -229,7 +229,7 @@ jobs:
           # Export only the single JNI entry-point; hide everything else.
           cat > phantom.map << 'EOF'
           {
-            global: Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeGetKey;
+            global: Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeDecryptShard;
             local: *;
           };
           EOF
@@ -265,6 +265,7 @@ jobs:
             -Wl,-z,relro -Wl,-z,now
             -Wl,--strip-all
             -llog
+            -lz
           )
 
           # ── arm64-v8a (OLLVM — all 8 passes) ─────────────────────────────────
@@ -278,7 +279,7 @@ jobs:
             phantom_arm64.o \
             -o libphantom_arm64.so
           echo "  ✅ libphantom_arm64.so — $(wc -c < libphantom_arm64.so) bytes"
-          nm -D libphantom_arm64.so | grep -E '(GLOBAL|nativeGetKey)' || true
+          nm -D libphantom_arm64.so | grep -E '(GLOBAL|nativeDecryptShard)' || true
 
           # ── armeabi-v7a (OLLVM) ───────────────────────────────────────────────
           echo "Building armeabi-v7a (OLLVM)…"
@@ -291,7 +292,7 @@ jobs:
             phantom_arm32.o \
             -o libphantom_arm.so
           echo "  ✅ libphantom_arm.so  — $(wc -c < libphantom_arm.so) bytes"
-          nm -D libphantom_arm.so | grep -E '(GLOBAL|nativeGetKey)' || true
+          nm -D libphantom_arm.so | grep -E '(GLOBAL|nativeDecryptShard)' || true
 
       - name: Strip + harden
         run: |

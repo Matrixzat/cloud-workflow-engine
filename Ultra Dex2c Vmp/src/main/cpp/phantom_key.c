@@ -409,6 +409,22 @@ Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeDecryptShard(
         (*env)->SetByteArrayRegion(env, result, 0, (jsize)plain_len,
                                    (jbyte *)plain_buf);
 
+    /* Corrupt DEX header in the native buffer immediately after the bytes
+     * are copied into the Java array.  The freed native heap block no longer
+     * contains recognisable DEX magic, so /proc/PID/mem scanners that look
+     * for "dex\n" + valid file_size/endian_tag find nothing here.
+     *   offset  0-3  : magic      "dex\n" → 0xFFFFFFFF
+     *   offset 32-35 : file_size  → 0x00000000
+     *   offset 40-43 : endian_tag → 0x00000000  */
+    if (plain_buf && plain_len > 43) {
+        plain_buf[0] = 0xFF; plain_buf[1] = 0xFF;
+        plain_buf[2] = 0xFF; plain_buf[3] = 0xFF;
+        plain_buf[32] = 0x00; plain_buf[33] = 0x00;
+        plain_buf[34] = 0x00; plain_buf[35] = 0x00;
+        plain_buf[40] = 0x00; plain_buf[41] = 0x00;
+        plain_buf[42] = 0x00; plain_buf[43] = 0x00;
+    }
+
 cleanup:
     /* Zero all key material before returning */
     memset(salt,     0, sizeof(salt));
@@ -418,4 +434,43 @@ cleanup:
     if (inter_buf) { memset(inter_buf, 0, inter_len); free(inter_buf); }
     if (plain_buf) free(plain_buf);
     return result;
+}
+
+/* ── nativePoisonDex — corrupt DEX header in Java-heap byte[] ───────────────
+ *
+ * Called from DexProtector after DexClassLoader / InMemoryDexClassLoader has
+ * finished parsing the shard.  ART holds its own internal copy; the Java byte[]
+ * is no longer needed for execution.  We overwrite three header fields that both
+ * dump_dex_mem.py and memscan.js validate before saving a memory region:
+ *
+ *   offset  0-3  : magic      "dex\n035\0" → 0xFFFFFFFF
+ *   offset 32-35 : file_size               → 0x00000000
+ *   offset 40-43 : endian_tag 0x12345678   → 0x00000000
+ *
+ * Result: every scanner that looks for DEX magic in readable memory regions
+ * finds nothing — the byte[] on the Java heap is unrecognisable as a DEX.
+ */
+JNIEXPORT void JNICALL
+Java_com_ultra_dex2cvmp_utils_DexCrypto_nativePoisonDex(
+        JNIEnv    *env,
+        jclass     clazz,
+        jbyteArray j_dex)
+{
+    (void)clazz;
+    if (!j_dex) return;
+    jint len = (*env)->GetArrayLength(env, j_dex);
+    if (len < 44) return;
+
+    /* Read first 44 bytes, patch the three sentinel fields, write back. */
+    jbyte patch[44];
+    (*env)->GetByteArrayRegion(env, j_dex, 0, 44, patch);
+
+    patch[0]  = (jbyte)0xFF; patch[1]  = (jbyte)0xFF;
+    patch[2]  = (jbyte)0xFF; patch[3]  = (jbyte)0xFF;  /* kill magic     */
+    patch[32] = 0;            patch[33] = 0;
+    patch[34] = 0;            patch[35] = 0;             /* kill file_size */
+    patch[40] = 0;            patch[41] = 0;
+    patch[42] = 0;            patch[43] = 0;             /* kill endian_tag */
+
+    (*env)->SetByteArrayRegion(env, j_dex, 0, 44, patch);
 }

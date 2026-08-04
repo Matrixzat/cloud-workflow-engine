@@ -50,6 +50,20 @@ public class DexCrypto {
      */
     public static native byte[] nativeDecryptShard(byte[] salt, byte[] pkgNameUtf8, byte[] encShard);
 
+    /**
+     * Corrupt the DEX header fields inside a decrypted DEX byte[] after ART has
+     * already loaded the bytecode.  Overwrites magic (offset 0), file_size
+     * (offset 32), and endian_tag (offset 40) so that memory scanners
+     * (dump_dex_mem.py, memscan.js) cannot find or validate the DEX in heap.
+     *
+     * MUST be called only after the DexClassLoader / InMemoryDexClassLoader
+     * constructor has returned — ART has already parsed the DEX from its own
+     * internal copy by that point.
+     *
+     * @param dexBytes The plaintext DEX byte[] returned by nativeDecryptShard.
+     */
+    public static native void nativePoisonDex(byte[] dexBytes);
+
     // ── Blob bootstrap ────────────────────────────────────────────────────────
 
     /**

@@ -138,10 +138,13 @@ public class DexProtector {
                               byte[] salt, byte[] pkgNameUtf8) throws Exception {
 
         ByteBuffer[] buffers = new ByteBuffer[shardCount];
+        // Keep refs to the raw byte arrays so we can poison them after ART loads.
+        byte[][] dexArrays = new byte[shardCount][];
         for (int i = 0; i < shardCount; i++) {
             byte[] encrypted = new byte[sizes[i]];
             dis.readFully(encrypted);
             byte[] dexBytes = DexCrypto.nativeDecryptShard(salt, pkgNameUtf8, encrypted);
+            dexArrays[i] = dexBytes;
             buffers[i] = ByteBuffer.wrap(dexBytes);
         }
 
@@ -152,6 +155,12 @@ public class DexProtector {
 
         // Inject: merge dexElements from inMemory → parent's pathList.
         injectDexElements(inMemory, parent);
+
+        // ART has parsed the DEX from its own internal copy — poison the Java-heap
+        // byte[] so that memory scanners find no valid DEX header in our heap.
+        for (byte[] db : dexArrays) {
+            if (db != null) DexCrypto.nativePoisonDex(db);
+        }
     }
 
     // ── File-based path (API 21-26 fallback) ──────────────────────────────────
@@ -173,6 +182,10 @@ public class DexProtector {
             try { fos.write(dexBytes); } finally { fos.close(); }
             outFile.setWritable(false, false);
             files.add(outFile);
+
+            // DEX is now on disk — poison the in-memory byte[] so the Java heap
+            // has no valid DEX header for memory scanners to find.
+            DexCrypto.nativePoisonDex(dexBytes);
         }
 
         loadDex(context, files, dexDir);

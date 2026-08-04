@@ -11,7 +11,7 @@ import java.util.List;
  *
  * Security model (per-APK random key):
  *   • A 16-byte cryptographically random salt is generated for every pack operation.
- *   • The 16-byte session key is derived via PhantomKey.deriveKey(salt, pkgName).
+ *   • The 16-byte session key is derived via DexSeed.deriveKey(salt, pkgName).
  *   • salt is written to assets/phantom/ph_salt (raw, 16 bytes) so the stub can read it
  *     at runtime and call nativeGetKey() to reproduce the same key inside libphantom.so.
  *   • No static PROTECT_KEY string exists anywhere in the project.
@@ -81,8 +81,8 @@ public class DexPacker {
         String pkgName = ManifestPatcher.packageName;
 
         // ── 3. Generate per-APK salt and derive session key ───────────────────
-        byte[] salt = PhantomKey.randomSalt();
-        byte[] key  = PhantomKey.deriveKey(salt, pkgName);
+        byte[] salt = DexSeed.randomSalt();
+        byte[] key  = DexSeed.deriveKey(salt, pkgName);
 
         // ── 4. Encrypt all DEX shards and bundle into one phantom.vmp ─────────
         File shardsDir = new File(workDir, "shards");

@@ -226,10 +226,12 @@ jobs:
 
       - name: Write linker version script
         run: |
-          # Export only the single JNI entry-point; hide everything else.
+          # Export both JNI entry-points; hide everything else.
           cat > phantom.map << 'EOF'
           {
-            global: Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeDecryptShard;
+            global:
+              Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeDecryptShard;
+              Java_com_ultra_dex2cvmp_utils_DexCrypto_nativePoisonDex;
             local: *;
           };
           EOF
@@ -279,7 +281,7 @@ jobs:
             phantom_arm64.o \
             -o libphantom_arm64.so
           echo "  ✅ libphantom_arm64.so — $(wc -c < libphantom_arm64.so) bytes"
-          nm -D libphantom_arm64.so | grep -E '(GLOBAL|nativeDecryptShard)' || true
+          nm -D libphantom_arm64.so | grep -E '(GLOBAL|nativeDecryptShard|nativePoisonDex)' || true
 
           # ── armeabi-v7a (OLLVM) ───────────────────────────────────────────────
           echo "Building armeabi-v7a (OLLVM)…"
@@ -292,7 +294,7 @@ jobs:
             phantom_arm32.o \
             -o libphantom_arm.so
           echo "  ✅ libphantom_arm.so  — $(wc -c < libphantom_arm.so) bytes"
-          nm -D libphantom_arm.so | grep -E '(GLOBAL|nativeDecryptShard)' || true
+          nm -D libphantom_arm.so | grep -E '(GLOBAL|nativeDecryptShard|nativePoisonDex)' || true
 
       - name: Strip + harden
         run: |

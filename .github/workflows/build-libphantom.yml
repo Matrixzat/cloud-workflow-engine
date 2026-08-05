@@ -1,30 +1,30 @@
 name: Build libphantom.so + encrypt blobs
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Produces the two blob files needed by DexProtector.loadPhantomLib():
 #
-#   libphantom_arm64.blob    ← arm64-v8a  libphantom.so, ARX-encrypted
-#   libphantom_arm.blob      ← armeabi-v7a libphantom.so, ARX-encrypted
+#   libphantom_arm64.blob    <- arm64-v8a  libphantom.so, ARX-encrypted
+#   libphantom_arm.blob      <- armeabi-v7a libphantom.so, ARX-encrypted
 #
-# Job 1 — build-ollvm   (identical to build-libcipher.yml job 1)
+# Job 1 -- build-ollvm   (identical to build-libcipher.yml job 1)
 #   Checks if the OLLVM clang-19 release asset already exists.
-#   If yes → done in ~10 s.  If no → builds from TIMER-err/ollvm-19 (~40-90 min).
+#   If yes -> done in ~10 s.  If no -> builds from TIMER-err/ollvm-19 (~40-90 min).
 #
-# Job 2 — build-phantom
-#   Downloads OLLVM, compiles phantom/phantom_key.c into libphantom.so for
+# Job 2 -- build-phantom
+#   Downloads OLLVM, compiles phantom_key.c into libphantom.so for
 #   arm64-v8a (all 8 OLLVM passes) and armeabi-v7a, strips both binaries,
-#   then runs phantom/encrypt_blob.py to produce the final .blob files.
+#   then runs encrypt_blob.py to produce the final .blob files.
 #
 # After the workflow succeeds, download the artifact zip and copy both .blob
 # files to src/main/assets/phantom/ in the Dex2c Mega project, then rebuild.
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 on:
   workflow_dispatch:
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB 1 — Build / reuse OLLVM clang (shared with build-libcipher.yml)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# JOB 1 -- Build / reuse OLLVM clang (shared with build-libcipher.yml)
+# -----------------------------------------------------------------------------
 jobs:
   build-ollvm:
     runs-on: ubuntu-latest
@@ -46,9 +46,9 @@ jobs:
             | head -1)
           echo "asset_id=${ASSET_ID}" >> $GITHUB_OUTPUT
           if [ -n "$ASSET_ID" ]; then
-            echo "✅ OLLVM asset exists (ID: $ASSET_ID) — skipping rebuild"
+            echo "OK OLLVM asset exists (ID: $ASSET_ID) -- skipping rebuild"
           else
-            echo "⚠️  No OLLVM asset found — will build from source"
+            echo "No OLLVM asset found -- will build from source"
           fi
 
       - name: Install build dependencies
@@ -114,7 +114,7 @@ jobs:
             --target=aarch64-linux-android26 \
             -mllvm -fla -mllvm -bcf -mllvm -sub \
             -fPIC -O2 -c /tmp/test.c -o /tmp/test_arm64.o
-          echo "✅ OLLVM arm64 passes OK"
+          echo "OK OLLVM arm64 passes OK"
 
       - name: Package
         if: steps.check.outputs.asset_id == ''
@@ -163,9 +163,9 @@ jobs:
           echo "asset_id=${ASSET_ID}" >> $GITHUB_OUTPUT
           echo "OLLVM asset ID: $ASSET_ID"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB 2 — Compile phantom_key.c + encrypt blobs
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# JOB 2 -- Compile phantom_key.c + encrypt blobs
+# -----------------------------------------------------------------------------
   build-phantom:
     runs-on: ubuntu-latest
     needs: build-ollvm
@@ -199,7 +199,7 @@ jobs:
           echo "Downloaded: $(du -sh ollvm-clang-linux-x86_64.tar.xz | cut -f1)"
           tar -xJf ollvm-clang-linux-x86_64.tar.xz
           chmod +x ollvm-install/bin/clang
-          echo "✅ OLLVM: $(ollvm-install/bin/clang --version | head -1)"
+          echo "OK OLLVM: $(ollvm-install/bin/clang --version | head -1)"
           echo "OLLVM_BIN=$PWD/ollvm-install/bin/clang" >> $GITHUB_ENV
 
       - name: Resolve toolchain paths
@@ -218,17 +218,15 @@ jobs:
                --sysroot="$SYSROOT" -mllvm -fla \
                -x c -c /tmp/probe.c -o /tmp/probe.o 2>/dev/null; then
             echo "OLLVM_FLAGS=-mllvm -fla -mllvm -bcf -mllvm -bcf_prob=100 -mllvm -bcf_loop=4 -mllvm -sub -mllvm -sub_loop=3 -mllvm -sobf -mllvm -split -mllvm -split_num=5 -mllvm -ibr -mllvm -icall -mllvm -igv" >> $GITHUB_ENV
-            echo "✅ All 8 OLLVM passes confirmed: fla bcf(100%×4) sub(×3) sobf split(5) ibr icall igv — PHANTOM ELITE"
+            echo "OK All 8 OLLVM passes confirmed: fla bcf(100%x4) sub(x3) sobf split(5) ibr icall igv -- PHANTOM ELITE"
           else
             echo "OLLVM_FLAGS=" >> $GITHUB_ENV
-            echo "⚠️  OLLVM passes not responding — building without obfuscation"
+            echo "WARN OLLVM passes not responding -- building without obfuscation"
           fi
 
       - name: Write linker version script
         run: |
-          # Export only the two JNI entry-points; hide everything else.
-          # nativeDecryptShard : key derivation + DEX shard decryption
-          # nativeWipeShard    : Layer-2a anti-dump — zeroes DEX magic in Java byte[]
+          # Export both JNI entry-points; hide everything else.
           cat > phantom.map << 'EOF'
           {
             global:
@@ -271,13 +269,9 @@ jobs:
             -llog
           )
 
-          # ── arm64-v8a (OLLVM — all 8 passes) ─────────────────────────────────
-          # -isystem must come BEFORE COMMON_OLLVM so NDK headers shadow
-          # OLLVM's own bundled stdarg.h / stddef.h from its resource dir.
-          echo "Building arm64-v8a (OLLVM)…"
+          # -- arm64-v8a (OLLVM -- all 8 passes) --------------------------------
+          echo "Building arm64-v8a (OLLVM)..."
           "$CLANG_ARM64" --target=aarch64-linux-android26 \
-            -isystem "$SYSROOT/usr/include/aarch64-linux-android" \
-            -isystem "$SYSROOT/usr/include" \
             "${COMMON_OLLVM[@]}" \
             -c "$SRC" -o phantom_arm64.o
           "$NDK_LINK_ARM64" \
@@ -285,14 +279,12 @@ jobs:
             -Wl,-soname,libphantom.so \
             phantom_arm64.o \
             -o libphantom_arm64.so
-          echo "  ✅ libphantom_arm64.so — $(wc -c < libphantom_arm64.so) bytes"
-          nm -D libphantom_arm64.so | grep GLOBAL || true
+          echo "  OK libphantom_arm64.so -- $(wc -c < libphantom_arm64.so) bytes"
+          nm -D libphantom_arm64.so | grep -E '(GLOBAL|nativeDecryptShard|nativeWipeShard)' || true
 
-          # ── armeabi-v7a (OLLVM) ───────────────────────────────────────────────
-          echo "Building armeabi-v7a (OLLVM)…"
+          # -- armeabi-v7a (OLLVM) ----------------------------------------------
+          echo "Building armeabi-v7a (OLLVM)..."
           "$CLANG_ARM64" --target=armv7a-linux-androideabi21 \
-            -isystem "$SYSROOT/usr/include/arm-linux-androideabi" \
-            -isystem "$SYSROOT/usr/include" \
             "${COMMON_OLLVM[@]}" \
             -c "$SRC" -o phantom_arm32.o
           "$NDK_LINK_ARM32" \
@@ -300,12 +292,11 @@ jobs:
             -Wl,-soname,libphantom.so \
             phantom_arm32.o \
             -o libphantom_arm.so
-          echo "  ✅ libphantom_arm.so  — $(wc -c < libphantom_arm.so) bytes"
-          nm -D libphantom_arm.so | grep GLOBAL || true
+          echo "  OK libphantom_arm.so  -- $(wc -c < libphantom_arm.so) bytes"
+          nm -D libphantom_arm.so | grep -E '(GLOBAL|nativeDecryptShard|nativeWipeShard)' || true
 
       - name: Strip + harden
         run: |
-          # $TC is already the full toolchain path — bin/ is a direct child
           STRIP="$TC/bin/llvm-strip"
           OBJCOPY="$TC/bin/llvm-objcopy"
           for SO in libphantom_arm64.so libphantom_arm.so; do
@@ -313,14 +304,11 @@ jobs:
             for SEC in .symtab .strtab .comment .note.android.ident .eh_frame .eh_frame_hdr; do
               "$OBJCOPY" --remove-section="$SEC" "$SO" 2>/dev/null || true
             done
-            echo "  $SO → $(wc -c < $SO) bytes"
+            echo "  $SO -> $(wc -c < $SO) bytes"
           done
 
-      - name: Encrypt blobs (compress → XOR → compress)
+      - name: Encrypt blobs (compress -> XOR -> compress)
         run: |
-          # phantom/encrypt_blob.py matches DexCrypto.encrypt() pipeline exactly:
-          #   Java: DeflaterInputStream → exfr XOR → DeflaterOutputStream
-          #   = compress(XOR(compress(plaintext)))
           python3 "Ultra Dex2c Vmp/phantom/encrypt_blob.py" libphantom_arm64.so libphantom_arm64.blob
           python3 "Ultra Dex2c Vmp/phantom/encrypt_blob.py" libphantom_arm.so   libphantom_arm.blob
           echo "Blobs:"
@@ -328,9 +316,7 @@ jobs:
 
       - name: Verify blob round-trip
         run: |
-          # encrypt_blob.py verify_roundtrip() simulates DexCrypto.decrypt():
-          #   InflaterInputStream → exfr XOR → InflaterOutputStream
-          echo "✅ Round-trip verified during encrypt step (encrypt_blob.py auto-verifies)"
+          echo "OK Round-trip verified during encrypt step (encrypt_blob.py auto-verifies)"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

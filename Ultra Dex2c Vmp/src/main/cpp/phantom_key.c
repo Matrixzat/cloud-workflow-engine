@@ -1,15 +1,15 @@
 /*
- * phantom_key.c — JNI entry-point for libphantom.so
+ * phantom_key.c -- JNI entry-point for libphantom.so
  *
  * Exports:
  *   Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeDecryptShard
  *   Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeWipeShard
  *
  * Security model:
- *   • Per-APK key derived from (salt, sha256(pkg_name)) via ARX KDF.
- *   • Key NEVER crosses the JNI boundary — lives only on the C stack, zeroed on return.
+ *   * Per-APK key derived from (salt, sha256(pkg_name)) via ARX KDF.
+ *   * Key NEVER crosses the JNI boundary -- lives only on the C stack, zeroed on return.
  *
- * Anti-dump / Anti-Frida — three independent layers:
+ * Anti-dump / Anti-Frida -- three independent layers:
  *
  *   LAYER 1  detect_mem_reader()
  *     Iterates /proc/*/fd/* for every running process.  If any external
@@ -17,7 +17,7 @@
  *     dump_dex_mem.py and every /proc/PID/mem-based dumper MUST do),
  *     nuke_app() fires before a single byte is read.
  *
- *   LAYER 2a  nativeWipeShard()  [JNI — called from DexProtector after loading]
+ *   LAYER 2a  nativeWipeShard()  [JNI -- called from DexProtector after loading]
  *     Zeroes the first 8 bytes (dex\n magic + version string) of the Java
  *     byte[] that nativeDecryptShard returned.  Eliminates the heap copy of
  *     the plaintext DEX that the script's scanner would find.
@@ -29,28 +29,28 @@
  *     magic in-place.  Catches ART's internal [anon:dalvik-DEX cache] copies
  *     that survive after the Java byte[] has already been wiped by Layer 2a.
  *
- *   LAYER 3  detect_frida_anonymous_memory()  [already present — extended]
+ *   LAYER 3  detect_frida_anonymous_memory()  [already present -- extended]
  *     Detects anonymous r-xp mappings with no file path or backed by memfd:,
  *     which indicates Frida or another injector has inserted executable code.
  *
  *   All layers run every 5 s in the detect_frida_loop background thread.
  *   detect_frida_init() fires via __attribute__((constructor)) the instant
- *   System.load(libphantom.so) is called — before nativeDecryptShard is ever
+ *   System.load(libphantom.so) is called -- before nativeDecryptShard is ever
  *   reached.
  *
  * Build requirements:
- *   • Compile with OLLVM (see phantom/CMakeLists.txt).
- *   • Target ABIs: arm64-v8a and armeabi-v7a.
- *   • After building, ARX-encrypt with encrypt_blob.py and place blobs at:
+ *   * Compile with OLLVM (see phantom/CMakeLists.txt).
+ *   * Target ABIs: arm64-v8a and armeabi-v7a.
+ *   * After building, ARX-encrypt with encrypt_blob.py and place blobs at:
  *       assets/phantom/libphantom_arm64.blob
  *       assets/phantom/libphantom_arm.blob
  *
  * IMPORTANT: Do NOT compile on Replit. Use the CI build with OLLVM toolchain.
  */
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ?
  * Includes
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * ? */
 
 #include <jni.h>
 #include <stdio.h>
@@ -71,9 +71,9 @@
 #include <android/log.h>
 #include <zlib.h>
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * Anti-dump / Anti-Frida — constants & types
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ?
+ * Anti-dump / Anti-Frida -- constants & types
+ * ? */
 
 #define MAX_LINE   512
 #define MAX_LENGTH 256
@@ -109,9 +109,9 @@ typedef Elf32_Ehdr Elf_Ehdr;
 typedef Elf32_Shdr Elf_Shdr;
 #endif
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ?
  * Inline string helpers (avoid libc hooks)
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * ? */
 
 __attribute__((always_inline))
 static inline size_t my_strlen(const char *s) {
@@ -159,9 +159,9 @@ static inline void *my_memset(void *dst, int c, size_t n) {
     return dst;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * Raw syscall wrappers (bypass libc — Frida hooks libc)
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ?
+ * Raw syscall wrappers (bypass libc -- Frida hooks libc)
+ * ? */
 
 #if defined(__aarch64__)
 
@@ -212,7 +212,7 @@ __attribute__((always_inline)) static inline ssize_t my_readlinkat(int d, const 
 __attribute__((always_inline)) static inline int my_mprotect(void *a, size_t l, int prot)
     { return (int)raw_syscall_3(__NR_mprotect, (long)a, (long)l, prot); }
 
-#else  /* armeabi-v7a — use libc syscall() wrapper */
+#else  /* armeabi-v7a -- use libc syscall() wrapper */
 
 __attribute__((always_inline)) static inline int my_openat(int d, const char *p, int f, int m)
     { return (int)syscall(__NR_openat, d, p, f, m); }
@@ -240,9 +240,9 @@ __attribute__((always_inline)) static inline int my_mprotect(void *a, size_t l, 
 
 #endif  /* ABI */
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ?
  * Low-level I/O helpers
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * ? */
 
 static inline ssize_t read_one_line(int fd, char *buf, unsigned int max_len) {
     char b;
@@ -265,9 +265,9 @@ static inline unsigned long checksum(void *buffer, size_t len) {
     return seed;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ?
  * ELF section checksum helpers (Frida mem/disk compare)
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * ? */
 
 static inline void parse_proc_maps_to_fetch_path(char **filepaths) {
     int fd = my_openat(AT_FDCWD, PROC_MAPS, O_RDONLY | O_CLOEXEC, 0);
@@ -344,18 +344,18 @@ static inline bool scan_executable_segments(char *map, execSection *pElfSectArr)
     return false;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ?
  * Kill switch
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * ? */
 
 static inline void nuke_app(void) {
     volatile int *trap = NULL;
     *trap = 0xDEAD;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ?
  * Original anti-Frida detection functions (unchanged)
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * ? */
 
 static inline void detect_ptrace(void) {
     char buf[512];
@@ -448,15 +448,15 @@ static inline void detect_frida_namedpipe(void) {
     closedir(dir);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * LAYER 1 — detect_mem_reader()
+/* ?
+ * LAYER 1 -- detect_mem_reader()
  *
  * Scans every process's open file-descriptor table (/proc/<PID>/fd/*).
  * If any external process has /proc/<OUR_PID>/mem OR /proc/<OUR_PID>/maps
  * open (which dump_dex_mem.py v9 and all /proc/PID/mem-based dumpers MUST
  * do), the readlink of that fd will resolve to our mem/maps path.
- * Detection → nuke_app() immediately, before a single byte is dumped.
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * Detection -> nuke_app() immediately, before a single byte is dumped.
+ * ? */
 
 static void detect_mem_reader(void) {
     pid_t our_pid = getpid();
@@ -484,7 +484,7 @@ static void detect_mem_reader(void) {
         snprintf(fd_dir_path, sizeof(fd_dir_path), "/proc/%s/fd", dname);
 
         DIR *fd_dir = opendir(fd_dir_path);
-        if (!fd_dir) continue;   /* no permission — skip silently */
+        if (!fd_dir) continue;   /* no permission -- skip silently */
 
         struct dirent *fd_ent;
         while ((fd_ent = readdir(fd_dir)) != NULL) {
@@ -501,7 +501,7 @@ static void detect_mem_reader(void) {
                 my_strstr(target, our_maps) != NULL) {
                 closedir(fd_dir);
                 closedir(proc_dir);
-                nuke_app();   /* dumper caught — kill immediately */
+                nuke_app();   /* dumper caught -- kill immediately */
             }
         }
         closedir(fd_dir);
@@ -509,8 +509,8 @@ static void detect_mem_reader(void) {
     closedir(proc_dir);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * LAYER 2b — self_scan_and_poison_dex()
+/* ?
+ * LAYER 2b -- self_scan_and_poison_dex()
  *
  * Reads our own /proc/self/maps and finds every readable anonymous region
  * (no backing file, or [anon:dalvik-*]) that begins with the DEX magic
@@ -530,7 +530,7 @@ static void detect_mem_reader(void) {
  *
  * Called from the background thread every 5 s, AFTER Layer 2a
  * (nativeWipeShard) has already zeroed the Java byte[] source.
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * ? */
 
 static void self_scan_and_poison_dex(void) {
     int maps_fd = my_openat(AT_FDCWD, "/proc/self/maps", O_RDONLY | O_CLOEXEC, 0);
@@ -590,7 +590,7 @@ static void self_scan_and_poison_dex(void) {
                             | ((uint32_t)hdr[43] << 24);
         if (endian_tag != 0x12345678) continue;
 
-        /* ── Found live DEX magic — poison it. ────────────────────────────
+        /* ? Found live DEX magic -- poison it. ?
          * Temporarily make the page writable, zero the magic + version
          * bytes, then restore original protection. */
         long page_size   = 4096;
@@ -620,9 +620,9 @@ static void self_scan_and_poison_dex(void) {
     my_close(maps_fd);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * Background loop — runs all layers every 5 seconds
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ?
+ * Background loop -- runs all layers every 5 seconds
+ * ? */
 
 static void *detect_frida_loop(void *args) {
     struct timespec timereq;
@@ -636,10 +636,10 @@ static void *detect_frida_loop(void *args) {
         detect_ptrace();
         detect_frida_anonymous_memory();
 
-        /* LAYER 1 — catch any process that has our /proc/PID/mem open */
+        /* LAYER 1 -- catch any process that has our /proc/PID/mem open */
         detect_mem_reader();
 
-        /* LAYER 2b — hunt and poison any live DEX magic in our address space */
+        /* LAYER 2b -- hunt and poison any live DEX magic in our address space */
         self_scan_and_poison_dex();
 
         my_nanosleep(&timereq, NULL);
@@ -647,9 +647,9 @@ static void *detect_frida_loop(void *args) {
     return NULL;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * Constructor — runs immediately on System.load(libphantom.so)
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ?
+ * Constructor -- runs immediately on System.load(libphantom.so)
+ * ? */
 
 __attribute__((constructor))
 void detect_frida_init(void) {
@@ -665,8 +665,8 @@ void detect_frida_init(void) {
     pthread_create(&t, NULL, detect_frida_loop, NULL);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * LAYER 2a — nativeWipeShard()  [JNI — called from DexProtector after load]
+/* ?
+ * LAYER 2a -- nativeWipeShard()  [JNI -- called from DexProtector after load]
  *
  * Java calls this immediately after InMemoryDexClassLoader (or the file-
  * based fallback) has consumed the plaintext DEX byte[].  We zero the first
@@ -676,7 +676,7 @@ void detect_frida_init(void) {
  *
  * ART has already fully parsed and mapped the DEX before this is called, so
  * zeroing the source byte[] does not affect class resolution.
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * ? */
 
 JNIEXPORT void JNICALL
 Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeWipeShard(
@@ -699,10 +699,10 @@ Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeWipeShard(
     (*env)->SetByteArrayRegion(env, j_dex, 40, 4, zeros);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ?
  * SHA-256 (minimal, self-contained)
  * Hashes the package name inside native so the hash never returns to Java.
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * ? */
 
 #define ROR32(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
 
@@ -774,9 +774,9 @@ static void sha256(const uint8_t *msg, size_t len, uint8_t out[32]) {
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * ARX KDF — byte-identical to DexSeed.arx() in Java
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ?
+ * ARX KDF -- byte-identical to DexSeed.arx() in Java
+ * ? */
 
 #define ROL32(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
 
@@ -808,9 +808,9 @@ static void arx_kdf(const uint8_t salt[16], const uint8_t pkg_hash[32], uint8_t 
     put_le32(out,  8, s2); put_le32(out, 12, s3);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * ARX stream cipher — port of Java DexCrypto.{exfr,FxIjsF,nDnv}
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ?
+ * ARX stream cipher -- port of Java DexCrypto.{exfr,FxIjsF,nDnv}
+ * ? */
 
 typedef struct {
     uint32_t ks[27];
@@ -877,9 +877,9 @@ static void arx_xor(arx_ctx_t *s, uint8_t *buf, size_t len) {
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ?
  * zlib inflate helper
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * ? */
 
 static uint8_t *inflate_alloc(const uint8_t *in, size_t in_len, size_t *out_len) {
     z_stream zs;
@@ -911,13 +911,13 @@ static uint8_t *inflate_alloc(const uint8_t *in, size_t in_len, size_t *out_len)
     return buf;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * nativeDecryptShard — JNI entry-point
+/* ?
+ * nativeDecryptShard -- JNI entry-point
  *
  * Derives key + decrypts one shard entirely in native.
- * Pipeline reversal: outer inflate → ARX XOR → inner inflate → plaintext DEX.
+ * Pipeline reversal: outer inflate -> ARX XOR -> inner inflate -> plaintext DEX.
  * Key is zeroed on the stack before return; never crosses the JNI boundary.
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * ? */
 
 JNIEXPORT jbyteArray JNICALL
 Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeDecryptShard(

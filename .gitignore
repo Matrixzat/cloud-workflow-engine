@@ -17,15 +17,3 @@
 !"Ultra Dex2c Vmp"/src/main/cpp/phantom_key.c
 !"Ultra Dex2c Vmp"/src/main/cpp/phantom/
 !"Ultra Dex2c Vmp"/src/main/cpp/phantom/CMakeLists.txt
-
-# stub-loader Java files needed by the protected APK at runtime
-!"Ultra Dex2c Vmp"/stub-loader/
-!"Ultra Dex2c Vmp"/stub-loader/src/
-!"Ultra Dex2c Vmp"/stub-loader/src/main/
-!"Ultra Dex2c Vmp"/stub-loader/src/main/java/
-!"Ultra Dex2c Vmp"/stub-loader/src/main/java/com/
-!"Ultra Dex2c Vmp"/stub-loader/src/main/java/com/ultra/
-!"Ultra Dex2c Vmp"/stub-loader/src/main/java/com/ultra/dex2cvmp/
-!"Ultra Dex2c Vmp"/stub-loader/src/main/java/com/ultra/dex2cvmp/utils/
-!"Ultra Dex2c Vmp"/stub-loader/src/main/java/com/ultra/dex2cvmp/utils/DexCrypto.java
-!"Ultra Dex2c Vmp"/stub-loader/src/main/java/com/ultra/dex2cvmp/utils/DexProtector.java

@@ -226,12 +226,14 @@ jobs:
 
       - name: Write linker version script
         run: |
-          # Export both JNI entry-points; hide everything else.
+          # Export only the two JNI entry-points; hide everything else.
+          # nativeDecryptShard : key derivation + DEX shard decryption
+          # nativeWipeShard    : Layer-2a anti-dump — zeroes DEX magic in Java byte[]
           cat > phantom.map << 'EOF'
           {
             global:
               Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeDecryptShard;
-              Java_com_ultra_dex2cvmp_utils_DexCrypto_nativePoisonDex;
+              Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeWipeShard;
             local: *;
           };
           EOF
@@ -239,7 +241,7 @@ jobs:
       - name: Build libphantom.so (arm64-v8a + armeabi-v7a)
         run: |
           set -e
-          SRC="Ultra Dex2c Vmp/src/main/cpp/phantom_key.c"
+          SRC="phantom/phantom_key.c"
 
           COMMON_BASE=(
             --sysroot="$SYSROOT"
@@ -267,7 +269,6 @@ jobs:
             -Wl,-z,relro -Wl,-z,now
             -Wl,--strip-all
             -llog
-            -lz
           )
 
           # ── arm64-v8a (OLLVM — all 8 passes) ─────────────────────────────────
@@ -281,7 +282,7 @@ jobs:
             phantom_arm64.o \
             -o libphantom_arm64.so
           echo "  ✅ libphantom_arm64.so — $(wc -c < libphantom_arm64.so) bytes"
-          nm -D libphantom_arm64.so | grep -E '(GLOBAL|nativeDecryptShard|nativePoisonDex)' || true
+          nm -D libphantom_arm64.so | grep -E '(GLOBAL|nativeGetKey)' || true
 
           # ── armeabi-v7a (OLLVM) ───────────────────────────────────────────────
           echo "Building armeabi-v7a (OLLVM)…"
@@ -294,7 +295,7 @@ jobs:
             phantom_arm32.o \
             -o libphantom_arm.so
           echo "  ✅ libphantom_arm.so  — $(wc -c < libphantom_arm.so) bytes"
-          nm -D libphantom_arm.so | grep -E '(GLOBAL|nativeDecryptShard|nativePoisonDex)' || true
+          nm -D libphantom_arm.so | grep -E '(GLOBAL|nativeGetKey)' || true
 
       - name: Strip + harden
         run: |
@@ -314,8 +315,8 @@ jobs:
           # phantom/encrypt_blob.py matches DexCrypto.encrypt() pipeline exactly:
           #   Java: DeflaterInputStream → exfr XOR → DeflaterOutputStream
           #   = compress(XOR(compress(plaintext)))
-          python3 "Ultra Dex2c Vmp/phantom/encrypt_blob.py" libphantom_arm64.so libphantom_arm64.blob
-          python3 "Ultra Dex2c Vmp/phantom/encrypt_blob.py" libphantom_arm.so   libphantom_arm.blob
+          python3 phantom/encrypt_blob.py libphantom_arm64.so libphantom_arm64.blob
+          python3 phantom/encrypt_blob.py libphantom_arm.so   libphantom_arm.blob
           echo "Blobs:"
           ls -lh libphantom_arm64.blob libphantom_arm.blob
 

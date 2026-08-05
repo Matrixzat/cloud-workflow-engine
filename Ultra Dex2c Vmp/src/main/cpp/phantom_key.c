@@ -12,7 +12,7 @@
  * Anti-dump / Anti-Frida -- three independent layers:
  *
  *   LAYER 1  detect_mem_reader()
- *     Iterates /proc/*/fd/* for every running process.  If any external
+ *     Iterates /proc/<PID>/fd/ for every running process.  If any external
  *     process has our /proc/<PID>/mem or /proc/<PID>/maps open (which
  *     dump_dex_mem.py and every /proc/PID/mem-based dumper MUST do),
  *     nuke_app() fires before a single byte is read.
@@ -451,7 +451,7 @@ static inline void detect_frida_namedpipe(void) {
 /* ?
  * LAYER 1 -- detect_mem_reader()
  *
- * Scans every process's open file-descriptor table (/proc/<PID>/fd/*).
+ * Scans every process's open file-descriptor table (/proc/<PID>/fd/).
  * If any external process has /proc/<OUR_PID>/mem OR /proc/<OUR_PID>/maps
  * open (which dump_dex_mem.py v9 and all /proc/PID/mem-based dumpers MUST
  * do), the readlink of that fd will resolve to our mem/maps path.

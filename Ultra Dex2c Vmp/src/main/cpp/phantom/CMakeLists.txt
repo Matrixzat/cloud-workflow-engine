@@ -33,10 +33,18 @@ set(CMAKE_C_STANDARD 11)
 # ── OLLVM passes ─────────────────────────────────────────────────────────────
 # Enable all three obfuscation passes.  Adjust strength as needed.
 set(OLLVM_FLAGS
-    -mllvm -fla          # control-flow flattening
-    -mllvm -bcf          # bogus control flow
-    -mllvm -sub          # instruction substitution
-    -mllvm -bcf_prob=75  # 75% bogus-CF coverage (default 30)
+    -mllvm -fla            # control-flow flattening
+    -mllvm -bcf            # bogus control flow
+    -mllvm -bcf_prob=100   # 100% bogus-CF coverage — PHANTOM ELITE
+    -mllvm -bcf_loop=4     # 4 bogus-CF iterations — PHANTOM ELITE
+    -mllvm -sub            # instruction substitution
+    -mllvm -sub_loop=3     # 3 substitution iterations
+    -mllvm -sobf           # string obfuscation
+    -mllvm -split          # basic block splitting
+    -mllvm -split_num=5    # 5 splits per block — PHANTOM ELITE
+    -mllvm -ibr            # indirect branching
+    -mllvm -icall          # indirect calls
+    -mllvm -igv            # indirect global variables
 )
 
 # ── Source ────────────────────────────────────────────────────────────────────

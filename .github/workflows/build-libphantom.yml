@@ -272,8 +272,12 @@ jobs:
           )
 
           # ── arm64-v8a (OLLVM — all 8 passes) ─────────────────────────────────
+          # -isystem must come BEFORE COMMON_OLLVM so NDK headers shadow
+          # OLLVM's own bundled stdarg.h / stddef.h from its resource dir.
           echo "Building arm64-v8a (OLLVM)…"
           "$CLANG_ARM64" --target=aarch64-linux-android26 \
+            -isystem "$SYSROOT/usr/include/aarch64-linux-android" \
+            -isystem "$SYSROOT/usr/include" \
             "${COMMON_OLLVM[@]}" \
             -c "$SRC" -o phantom_arm64.o
           "$NDK_LINK_ARM64" \
@@ -282,11 +286,13 @@ jobs:
             phantom_arm64.o \
             -o libphantom_arm64.so
           echo "  ✅ libphantom_arm64.so — $(wc -c < libphantom_arm64.so) bytes"
-          nm -D libphantom_arm64.so | grep -E '(GLOBAL|nativeGetKey)' || true
+          nm -D libphantom_arm64.so | grep GLOBAL || true
 
           # ── armeabi-v7a (OLLVM) ───────────────────────────────────────────────
           echo "Building armeabi-v7a (OLLVM)…"
           "$CLANG_ARM64" --target=armv7a-linux-androideabi21 \
+            -isystem "$SYSROOT/usr/include/arm-linux-androideabi" \
+            -isystem "$SYSROOT/usr/include" \
             "${COMMON_OLLVM[@]}" \
             -c "$SRC" -o phantom_arm32.o
           "$NDK_LINK_ARM32" \
@@ -295,7 +301,7 @@ jobs:
             phantom_arm32.o \
             -o libphantom_arm.so
           echo "  ✅ libphantom_arm.so  — $(wc -c < libphantom_arm.so) bytes"
-          nm -D libphantom_arm.so | grep -E '(GLOBAL|nativeGetKey)' || true
+          nm -D libphantom_arm.so | grep GLOBAL || true
 
       - name: Strip + harden
         run: |

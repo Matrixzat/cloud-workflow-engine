@@ -73,6 +73,15 @@
 #include <android/log.h>
 #include <zlib.h>
 
+// ── Debug logging ─────────────────────────────────────────────────────────────
+// Tag visible in: adb logcat -s PHANTOM
+#define PH_TAG "PHANTOM"
+#define PH_LOG(fmt, ...) \
+    __android_log_print(ANDROID_LOG_DEBUG, PH_TAG, fmt, ##__VA_ARGS__)
+#define PH_NUKE(reason, ...) \
+    __android_log_print(ANDROID_LOG_ERROR, PH_TAG, "NUKE: " reason, ##__VA_ARGS__)
+// ─────────────────────────────────────────────────────────────────────────────
+
 // ?
 // Anti-dump / Anti-Frida -- constants & types
 // ?
@@ -489,6 +498,7 @@ static inline void nuke_app(void) {
 // ?
 
 static inline void detect_ptrace(void) {
+    PH_LOG("detect_ptrace: checking TracerPid");
     char buf[512];
     int fd = my_openat(AT_FDCWD, "/proc/self/status", O_RDONLY | O_CLOEXEC, 0);
     if (fd >= 0) {
@@ -498,7 +508,7 @@ static inline void detect_ptrace(void) {
             char *tracer = my_strstr(buf, "TracerPid:");
             if (tracer) {
                 int pid = atoi(tracer + 10);
-                if (pid > 0) { my_close(fd); nuke_app(); }
+                if (pid > 0) { my_close(fd); PH_NUKE("ptrace — TracerPid=%d", pid); nuke_app(); }
             }
         }
         my_close(fd);
@@ -544,6 +554,7 @@ static inline void detect_ptrace(void) {
 // ?
 
 static void detect_monkey_and_root_tools(void) {
+    PH_LOG("detect_monkey_and_root_tools: scanning parent + running processes");
 
         // ------------------------------------------------------------------
     // A. Monkey parent check
@@ -575,6 +586,7 @@ static void detect_monkey_and_root_tools(void) {
                                 // the first token is the binary / package name.
                                 // "monkey" appears in com.android.commands.monkey.
                                 if (my_strstr(pcmd, "monkey") != NULL) {
+                                    PH_NUKE("monkey parent — ppid cmdline: %s", pcmd);
                                     nuke_app();
                                 }
                             }
@@ -621,6 +633,7 @@ static void detect_monkey_and_root_tools(void) {
 
         for (int i = 0; ATTACK_TOOLS[i] != NULL; i++) {
             if (my_strstr(cmdline, ATTACK_TOOLS[i]) != NULL) {
+                PH_NUKE("attack tool running — pid=%s cmdline=%s", dname, cmdline);
                 closedir(proc_dir);
                 nuke_app();
             }
@@ -645,6 +658,7 @@ static inline void detect_frida_memdiskcompare(void) {
 }
 
 static inline void detect_frida_threads(void) {
+    PH_LOG("detect_frida_threads: scanning thread names for Frida");
     DIR *dir = opendir(PROC_TASK);
     if (dir != NULL) {
         struct dirent *entry = NULL;
@@ -659,6 +673,7 @@ static inline void detect_frida_threads(void) {
                 read_one_line(fd, buf, MAX_LENGTH);
                 if (my_strstr(buf, FRIDA_THREAD_GUM_JS_LOOP) ||
                     my_strstr(buf, FRIDA_THREAD_GMAIN)) {
+                    PH_NUKE("Frida thread detected — thread name: %s", buf);
                     my_close(fd); closedir(dir); nuke_app();
                 }
                 my_close(fd);
@@ -669,6 +684,7 @@ static inline void detect_frida_threads(void) {
 }
 
 static inline void detect_frida_namedpipe(void) {
+    PH_LOG("detect_frida_namedpipe: scanning fds for Frida linjector pipe");
     DIR *dir = opendir(PROC_FD);
     if (dir != NULL) {
         struct dirent *entry = NULL;
@@ -681,6 +697,7 @@ static inline void detect_frida_namedpipe(void) {
             if ((filestat.st_mode & S_IFMT) == S_IFLNK) {
                 my_readlinkat(AT_FDCWD, filePath, buf, MAX_LENGTH);
                 if (my_strstr(buf, FRIDA_NAMEDPIPE_LINJECTOR) != NULL) {
+                    PH_NUKE("Frida named pipe detected — fd link: %s", buf);
                     closedir(dir); nuke_app();
                 }
             }
@@ -747,6 +764,7 @@ static int is_safe_mem_reader(const char *pid_str) {
 }
 
 static void detect_mem_reader(void) {
+    PH_LOG("detect_mem_reader: scanning all /proc/PID/fd for our mem/maps");
     pid_t our_pid = getpid();
 
     char our_mem[64]  = "";
@@ -788,12 +806,13 @@ static void detect_mem_reader(void) {
                 // on Android 16 for legitimate reasons — nuking on those would
                 // crash the app for every rooted user.
                 if (is_safe_mem_reader(dname)) {
-                    // Trusted process — do not nuke, keep scanning.
+                    PH_LOG("detect_mem_reader: pid=%s has our mem open but is WHITELISTED — skipping", dname);
                     break;
                 }
 
                 closedir(fd_dir);
                 closedir(proc_dir);
+                PH_NUKE("mem reader detected — pid=%s has our /proc/mem or /proc/maps open", dname);
                 nuke_app();   // confirmed dumper — kill immediately
             }
         }
@@ -1072,6 +1091,7 @@ static void detect_ebpf_uprobe(void) {
                 // eBPFDexDumper registers uprobe on libart; any hit is a dumper.
         if (my_strstr(buf, "libart") != NULL ||
             my_strstr(buf, "dex_dump") != NULL) {
+            PH_NUKE("eBPF uprobe on libart detected — uprobe entry: %s", buf);
             nuke_app();
         }
     }

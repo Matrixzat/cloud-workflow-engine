@@ -110,37 +110,29 @@ public class DexCrypto {
 
         File soFile = new File(ctx.getCodeCacheDir(), "libphantom.so");
 
-        // Re-decrypt whenever the APK has been updated (lastModified of the
-        // APK file is newer than the cached .so).  This prevents stale cached
-        // .so files from being loaded after an APK update, which would cause
-        // UnsatisfiedLinkError for any JNI symbols added in the new build.
-        long apkModified = new File(ctx.getPackageCodePath()).lastModified();
-        boolean stale = !soFile.exists() || soFile.lastModified() < apkModified;
+        // Always delete and re-decrypt on every cold start so the cached
+        // libphantom.so is never stale after an APK update or replacement.
+        if (soFile.exists()) soFile.delete();
 
-        if (stale) {
-            // Delete any existing stale file before writing.
-            if (soFile.exists()) soFile.delete();
+        String blobName = pickBlobName();
+        String assetPath = Const.DP_LIB + "/" + blobName;
 
-            String blobName = pickBlobName();
-            String assetPath = Const.DP_LIB + "/" + blobName;
+        InputStream bis = ctx.getAssets().open(assetPath);
+        byte[] blob = readFully(bis);
+        closeQuiet(bis);
 
-            InputStream bis = ctx.getAssets().open(assetPath);
-            byte[] blob = readFully(bis);
-            closeQuiet(bis);
+        byte[] soBytes = decryptBlob(blob, key);
 
-            byte[] soBytes = decryptBlob(blob, key);
+        File parent = soFile.getParentFile();
+        if (parent != null && !parent.exists()) parent.mkdirs();
 
-            File parent = soFile.getParentFile();
-            if (parent != null && !parent.exists()) parent.mkdirs();
-
-            FileOutputStream fos = new FileOutputStream(soFile);
-            try {
-                fos.write(soBytes);
-            } finally {
-                closeQuiet(fos);
-            }
-            soFile.setWritable(false, false);
+        FileOutputStream fos = new FileOutputStream(soFile);
+        try {
+            fos.write(soBytes);
+        } finally {
+            closeQuiet(fos);
         }
+        soFile.setWritable(false, false);
 
         // Zero key immediately — it served its only purpose.
         java.util.Arrays.fill(key, (byte) 0);

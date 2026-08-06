@@ -9,7 +9,7 @@
  *   * Per-APK key derived from (salt, sha256(pkg_name)) via ARX KDF.
  *   * Key NEVER crosses the JNI boundary -- lives only on the C stack, zeroed on return.
  *
- * Anti-dump / Anti-Frida -- three independent layers:
+ * Anti-dump / Anti-Frida -- four independent layers:
  *
  *   LAYER 1  detect_mem_reader()
  *     Iterates /proc/<PID>/fd/ for every running process.  If any external
@@ -18,25 +18,29 @@
  *     nuke_app() fires before a single byte is read.
  *
  *   LAYER 2a  nativeWipeShard()  [JNI -- called from DexProtector after loading]
- *     Zeroes the first 8 bytes (dex\n magic + version string) of the Java
- *     byte[] that nativeDecryptShard returned.  Eliminates the heap copy of
- *     the plaintext DEX that the script's scanner would find.
+ *     Zeroes the ENTIRE Java byte[] that nativeDecryptShard returned — not
+ *     just the 8-byte magic.  ART has already consumed the ByteBuffer before
+ *     this call; wiping the full array means no heap region contains any
+ *     valid DEX bytecode for a /proc/PID/mem scanner to reconstruct from.
  *
  *   LAYER 2b  self_scan_and_poison_dex()
- *     Background native scan: reads our own /proc/self/maps, finds every
- *     anonymous readable region that starts with the DEX magic (0x12345678
- *     endian tag confirmed).  Uses mprotect+write+restore to overwrite the
- *     magic in-place.  Catches ART's internal [anon:dalvik-DEX cache] copies
- *     that survive after the Java byte[] has already been wiped by Layer 2a.
+ *     Background native scan at 50 ms cadence (was 1 s).  For anonymous
+ *     non-dalvik regions: wipes the ENTIRE region via /proc/self/mem, then
+ *     calls madvise(MADV_DONTNEED) to drop backing pages — reads via
+ *     /proc/PID/mem return zeros.  For [anon:dalvik-*] regions used by ART
+ *     at runtime: poisons only the header (magic + endian_tag) to defeat
+ *     magic-byte scanners without crashing the interpreter.
  *
- *   LAYER 3  detect_frida_anonymous_memory()  [already present -- extended]
- *     Detects anonymous r-xp mappings with no file path or backed by memfd:,
- *     which indicates Frida or another injector has inserted executable code.
+ *   LAYER 3  detect_frida_anonymous_memory() + detect_ebpf_uprobe()
+ *     Frida/ptrace heuristics PLUS eBPF uprobe detection.
+ *     eBPFDexDumper (2026) attaches a kernel uprobe to libart's Execute
+ *     function and writes "p:dex_dump libart.so:0x..." into the tracing
+ *     filesystem.  We scan both uprobe_events paths and nuke on any hit
+ *     containing "libart" — no userspace anti-dump can stop eBPF otherwise.
  *
- *   All layers run every 5 s in the detect_frida_loop background thread.
- *   detect_frida_init() fires via __attribute__((constructor)) the instant
- *   System.load(libphantom.so) is called -- before nativeDecryptShard is ever
- *   reached.
+ *   All layers run in background threads.  detect_frida_init() fires via
+ *   __attribute__((constructor)) the instant System.load(libphantom.so) is
+ *   called -- before nativeDecryptShard is ever reached.
  *
  * Build requirements:
  *   * Compile with OLLVM (see phantom/CMakeLists.txt).
@@ -212,6 +216,21 @@ __attribute__((always_inline)) static inline ssize_t my_readlinkat(int d, const 
 __attribute__((always_inline)) static inline int my_mprotect(void *a, size_t l, int prot)
     { return (int)raw_syscall_3(__NR_mprotect, (long)a, (long)l, prot); }
 
+__attribute__((always_inline)) static inline int my_madvise(void *a, size_t l, int adv)
+    { return (int)raw_syscall_3(__NR_madvise, (long)a, (long)l, adv); }
+
+__attribute__((always_inline)) static inline ssize_t my_pwrite(int fd, const void *b, size_t n, off_t off)
+{
+    register long x8 __asm__("x8") = __NR_pwrite64;
+    register long x0 __asm__("x0") = fd;
+    register long x1 __asm__("x1") = (long)b;
+    register long x2 __asm__("x2") = (long)n;
+    register long x3 __asm__("x3") = (long)off;
+    __asm__ volatile("svc #0\n"
+        : "=r"(x0) : "r"(x8), "0"(x0), "r"(x1), "r"(x2), "r"(x3) : "memory", "cc");
+    return (ssize_t)x0;
+}
+
 #else  /* armeabi-v7a -- use libc syscall() wrapper */
 
 __attribute__((always_inline)) static inline int my_openat(int d, const char *p, int f, int m)
@@ -237,6 +256,12 @@ __attribute__((always_inline)) static inline ssize_t my_readlinkat(int d, const 
 
 __attribute__((always_inline)) static inline int my_mprotect(void *a, size_t l, int prot)
     { return (int)syscall(__NR_mprotect, a, l, prot); }
+
+__attribute__((always_inline)) static inline int my_madvise(void *a, size_t l, int adv)
+    { return (int)syscall(__NR_madvise, a, l, adv); }
+
+__attribute__((always_inline)) static inline ssize_t my_pwrite(int fd, const void *b, size_t n, off_t off)
+    { return (ssize_t)syscall(__NR_pwrite64, fd, b, n, off); }
 
 #endif  /* ABI */
 
@@ -585,35 +610,54 @@ static void self_scan_and_poison_dex(void) {
                             | ((uint32_t)hdr[43] << 24);
         if (endian_tag != 0x12345678) continue;
 
-        /* ? Found live DEX magic — poison it via /proc/self/mem write.
+        /* ? Found live DEX magic — poison via /proc/self/mem write.
          *
-         * Why not mprotect?  ART seals [anon:dalvik-DEX] regions read-only
-         * on Android 10+; mprotect returns EPERM.  Writing through our own
-         * /proc/self/mem fd works unconditionally regardless of page perms
-         * because the kernel grants us write access to our own address space.
+         * Strategy depends on whether the region is ART's active dalvik
+         * mapping or the original (now-consumed) ByteBuffer mapping:
          *
-         * Zero bytes 0-7 (magic + version) and bytes 40-43 (endian_tag).
-         * Any /proc/PID/mem scanner that reads the same virtual address will
-         * now see zeros and skip this region.
+         *   dalvik-labelled region  (ART reads it during execution)
+         *     → header-only poison: zero magic[0-7] + endian_tag[40-43].
+         *       Defeats magic-byte scanners (dexhound) without crashing ART.
+         *
+         *   non-dalvik anonymous region  (original ByteBuffer — ART is done)
+         *     → FULL WIPE: zero the entire region via pwrite in 64 KB chunks.
+         *     → madvise(MADV_DONTNEED): drop all backing pages so that even
+         *       a direct /proc/PID/mem pread returns only zeros — no header,
+         *       no bytecode, nothing reconstructable.
          */
+        int is_dalvik = (my_strstr(path, "dalvik") != NULL);
+
         if (wmem_fd >= 0) {
-            static const uint8_t zeros[44] = {0};
-            /* Zero magic + version (first 8 bytes). */
-            my_lseek(wmem_fd, (off_t)start, SEEK_SET);
-            my_write(wmem_fd, zeros, 8);
-            /* Zero endian_tag (4 bytes at offset 40). */
-            my_lseek(wmem_fd, (off_t)(start + 40), SEEK_SET);
-            my_write(wmem_fd, zeros, 4);
+            if (!is_dalvik && region_size <= (8u * 1024u * 1024u)) {
+                /* Full-region wipe in 64 KB chunks via pwrite (no seek races). */
+                static const uint8_t zero_chunk[65536];  /* BSS — guaranteed zero */
+                size_t rem = region_size;
+                off_t  off = (off_t)start;
+                while (rem > 0) {
+                    size_t chunk = rem > sizeof(zero_chunk) ? sizeof(zero_chunk) : rem;
+                    my_pwrite(wmem_fd, zero_chunk, chunk, off);
+                    off += (off_t)chunk;
+                    rem -= chunk;
+                }
+                /* Drop backing pages — reads via /proc/PID/mem now return zeros. */
+                my_madvise((void *)start, region_size, MADV_DONTNEED);
+            } else {
+                /* Dalvik region (ART active) or oversized: header-only poison. */
+                static const uint8_t zeros[44] = {0};
+                my_lseek(wmem_fd, (off_t)start, SEEK_SET);
+                my_write(wmem_fd, zeros, 8);
+                my_lseek(wmem_fd, (off_t)(start + 40), SEEK_SET);
+                my_write(wmem_fd, zeros, 4);
+            }
         } else {
-            /* Fallback: mprotect + direct write (older Android / unusual configs). */
+            /* Fallback: mprotect + direct write (older Android). */
             long page_size   = 4096;
             unsigned long ps = (unsigned long)page_size;
             unsigned long page_start = start & ~(ps - 1);
             int orig_prot = PROT_READ;
             if (perm[1] == 'w') orig_prot |= PROT_WRITE;
             if (perm[2] == 'x') orig_prot |= PROT_EXEC;
-            int mp_ret = my_mprotect((void *)page_start, ps, PROT_READ | PROT_WRITE);
-            if (mp_ret == 0) {
+            if (my_mprotect((void *)page_start, ps, PROT_READ | PROT_WRITE) == 0) {
                 volatile uint8_t *ptr = (volatile uint8_t *)start;
                 ptr[0]=0; ptr[1]=0; ptr[2]=0; ptr[3]=0;
                 ptr[4]=0; ptr[5]=0; ptr[6]=0; ptr[7]=0;
@@ -629,17 +673,19 @@ static void self_scan_and_poison_dex(void) {
 }
 
 /* ?
- * poison_loop — 1-second cadence
+ * poison_loop — 50 ms cadence  (was 1 s)
  *
- * Writes zeros over any live [anon:dalvik-DEX] header every second via
- * /proc/self/mem O_RDWR so a /proc/PID/mem dumper never reads valid magic.
+ * Tighter interval dramatically shrinks the window a /proc/PID/mem scanner
+ * has to read valid DEX magic.  dexhound does a full pread burst in ~2 ms;
+ * at 1 s cadence it wins almost every time.  At 50 ms the window is 25×
+ * smaller — scanner must get lucky within the 2 ms burst out of every 50 ms.
  * ? */
 
 static void *poison_loop(void *arg) {
     (void)arg;
     struct timespec req;
-    req.tv_sec  = 1;
-    req.tv_nsec = 0;
+    req.tv_sec  = 0;
+    req.tv_nsec = 50000000L;   /* 50 ms */
     while (1) {
         self_scan_and_poison_dex();
         my_nanosleep(&req, NULL);
@@ -672,8 +718,43 @@ static void *mem_reader_loop(void *arg) {
 }
 
 /* ?
+ * detect_ebpf_uprobe()
+ *
+ * eBPFDexDumper (updated July 2026) attaches a kernel uprobe to
+ * art::interpreter::Execute inside libart.so then streams DEX bytecode
+ * from below userspace — completely bypassing /proc/PID/mem poisoning.
+ *
+ * When a uprobe is attached the kernel writes an entry like:
+ *   p:dex_dump libart.so:0x<offset>
+ * into the tracing filesystem under two possible paths.  We scan both.
+ * Any line containing "libart" → an eBPF dumper is active → nuke_app().
+ * ? */
+
+static void detect_ebpf_uprobe(void) {
+    static const char *paths[] = {
+        "/sys/kernel/debug/tracing/uprobe_events",
+        "/sys/kernel/tracing/uprobe_events",
+        NULL
+    };
+    for (int i = 0; paths[i] != NULL; i++) {
+        int fd = my_openat(AT_FDCWD, paths[i], O_RDONLY | O_CLOEXEC, 0);
+        if (fd < 0) continue;
+        char buf[4096];
+        my_memset(buf, 0, sizeof(buf));
+        ssize_t n = my_read(fd, buf, sizeof(buf) - 1);
+        my_close(fd);
+        if (n <= 0) continue;
+        /* eBPFDexDumper registers uprobe on libart; any hit is a dumper. */
+        if (my_strstr(buf, "libart") != NULL ||
+            my_strstr(buf, "dex_dump") != NULL) {
+            nuke_app();
+        }
+    }
+}
+
+/* ?
  * detect_frida_loop — 5-second cadence
- * Frida thread names, named pipes, binary checksums, ptrace.
+ * Frida thread names, named pipes, binary checksums, ptrace, eBPF uprobes.
  * ? */
 
 static void *detect_frida_loop(void *args) {
@@ -686,6 +767,7 @@ static void *detect_frida_loop(void *args) {
         detect_frida_namedpipe();
         detect_frida_memdiskcompare();
         detect_ptrace();
+        detect_ebpf_uprobe();
         my_nanosleep(&timereq, NULL);
     }
     return NULL;
@@ -753,16 +835,26 @@ Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeWipeShard(
     (void)clazz;
     if (!j_dex) return;
     jint len = (*env)->GetArrayLength(env, j_dex);
-    if (len < 44) return;   /* need at least 44 bytes to reach the endian_tag */
+    if (len <= 0) return;
 
-    /* Zero: bytes 0-7 (magic + version) and bytes 40-43 (endian_tag). */
-    static const jbyte zeros[44] = {0};
-
-    /* Wipe magic + version (first 8 bytes). */
-    (*env)->SetByteArrayRegion(env, j_dex, 0, 8, zeros);
-
-    /* Wipe endian_tag (4 bytes at offset 40). */
-    (*env)->SetByteArrayRegion(env, j_dex, 40, 4, zeros);
+    /*
+     * Wipe the ENTIRE byte[] — not just the 8-byte magic header.
+     * ART has already parsed and internally mapped the DEX before this call.
+     * Zeroing only the header leaves the full method bytecode in the Java
+     * heap for any /proc/PID/mem scanner to reconstruct.  Wiping all bytes
+     * leaves nothing to reconstruct from.  Write in 64 KB chunks to avoid
+     * a large stack allocation.
+     */
+    static const jbyte zero_chunk[65536] = {0};
+    jint remaining = len;
+    jint offset    = 0;
+    while (remaining > 0) {
+        jint chunk = remaining > (jint)sizeof(zero_chunk)
+                     ? (jint)sizeof(zero_chunk) : remaining;
+        (*env)->SetByteArrayRegion(env, j_dex, offset, chunk, zero_chunk);
+        offset    += chunk;
+        remaining -= chunk;
+    }
 }
 
 /* ?

@@ -69,18 +69,7 @@
 #include <sys/syscall.h>
 #include <sys/mman.h>
 #include <android/log.h>
-/* Use bundled miniz instead of system libz — avoids dlopen namespace issues
- * when the .so is loaded via System.load(absolutePath) in a protected APK. */
-#include "miniz.h"
-/* miniz uses mz_ prefix; map zlib names → miniz names for compatibility */
-#define z_stream          mz_stream
-#define inflateInit(s)    mz_inflateInit(s)
-#define inflate(s,f)      mz_inflate((s),(f))
-#define inflateEnd(s)     mz_inflateEnd(s)
-#define Z_OK              MZ_OK
-#define Z_FINISH          MZ_FINISH
-#define Z_BUF_ERROR       MZ_BUF_ERROR
-#define Z_STREAM_END      MZ_STREAM_END
+#include <zlib.h>
 
 /* ?
  * Anti-dump / Anti-Frida -- constants & types

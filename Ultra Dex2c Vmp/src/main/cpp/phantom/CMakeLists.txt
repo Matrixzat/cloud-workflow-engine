@@ -50,7 +50,6 @@ set(OLLVM_FLAGS
 # ── Source ────────────────────────────────────────────────────────────────────
 add_library(phantom SHARED
     ${CMAKE_CURRENT_SOURCE_DIR}/../phantom_key.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../miniz.c   # bundled zlib replacement — no libz.so dependency
 )
 
 # ── Compiler flags ────────────────────────────────────────────────────────────
@@ -73,8 +72,8 @@ target_link_options(phantom PRIVATE
 target_link_libraries(phantom
     android
     log
+    z           # zlib — needed by inflate_alloc in phantom_key.c
     pthread     # needed by detect_frida_loop background thread
-    # z removed — zlib replaced by bundled miniz.c (no libz.so runtime dependency)
 )
 
 # ── Export map — only the two JNI symbols are visible ────────────────────────

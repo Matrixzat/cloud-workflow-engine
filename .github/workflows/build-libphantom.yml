@@ -267,6 +267,7 @@ jobs:
             -Wl,-z,relro -Wl,-z,now
             -Wl,--strip-all
             -llog
+            -lz
           )
 
           # -- arm64-v8a (OLLVM -- all 8 passes) --------------------------------

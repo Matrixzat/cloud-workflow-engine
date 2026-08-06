@@ -232,7 +232,6 @@ jobs:
             global:
               Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeDecryptShard;
               Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeWipeShard;
-              Java_com_ultra_dex2cvmp_utils_DexCrypto_nativePoisonNow;
             local: *;
           };
           EOF
@@ -297,11 +296,37 @@ jobs:
           echo "  OK libphantom_arm.so  -- $(wc -c < libphantom_arm.so) bytes"
           nm -D libphantom_arm.so | grep -E '(GLOBAL|nativeDecryptShard|nativeWipeShard)' || true
 
+          # -- arm64-v8a rootblock variant (OLLVM + -DBLOCK_ROOTED_DEVICES) ----
+          echo "Building arm64-v8a rootblock variant..."
+          "$CLANG_ARM64" --target=aarch64-linux-android26 \
+            "${COMMON_OLLVM[@]}" \
+            -DBLOCK_ROOTED_DEVICES \
+            -c "$SRC" -o phantom_arm64_rootblock.o
+          "$NDK_LINK_ARM64" \
+            "${LDFLAGS[@]}" \
+            -Wl,-soname,libphantom.so \
+            phantom_arm64_rootblock.o \
+            -o libphantom_arm64_rootblock.so
+          echo "  OK libphantom_arm64_rootblock.so -- $(wc -c < libphantom_arm64_rootblock.so) bytes"
+
+          # -- armeabi-v7a rootblock variant ------------------------------------
+          echo "Building armeabi-v7a rootblock variant..."
+          "$CLANG_ARM64" --target=armv7a-linux-androideabi21 \
+            "${COMMON_OLLVM[@]}" \
+            -DBLOCK_ROOTED_DEVICES \
+            -c "$SRC" -o phantom_arm32_rootblock.o
+          "$NDK_LINK_ARM32" \
+            "${LDFLAGS[@]}" \
+            -Wl,-soname,libphantom.so \
+            phantom_arm32_rootblock.o \
+            -o libphantom_arm_rootblock.so
+          echo "  OK libphantom_arm_rootblock.so  -- $(wc -c < libphantom_arm_rootblock.so) bytes"
+
       - name: Strip + harden
         run: |
           STRIP="$TC/bin/llvm-strip"
           OBJCOPY="$TC/bin/llvm-objcopy"
-          for SO in libphantom_arm64.so libphantom_arm.so; do
+          for SO in libphantom_arm64.so libphantom_arm.so libphantom_arm64_rootblock.so libphantom_arm_rootblock.so; do
             "$STRIP" --strip-all "$SO"
             for SEC in .symtab .strtab .comment .note.android.ident .eh_frame .eh_frame_hdr; do
               "$OBJCOPY" --remove-section="$SEC" "$SO" 2>/dev/null || true
@@ -311,10 +336,12 @@ jobs:
 
       - name: Encrypt blobs (compress -> XOR -> compress)
         run: |
-          python3 "Ultra Dex2c Vmp/phantom/encrypt_blob.py" libphantom_arm64.so libphantom_arm64.blob
-          python3 "Ultra Dex2c Vmp/phantom/encrypt_blob.py" libphantom_arm.so   libphantom_arm.blob
+          python3 "Ultra Dex2c Vmp/phantom/encrypt_blob.py" libphantom_arm64.so            libphantom_arm64.blob
+          python3 "Ultra Dex2c Vmp/phantom/encrypt_blob.py" libphantom_arm.so              libphantom_arm.blob
+          python3 "Ultra Dex2c Vmp/phantom/encrypt_blob.py" libphantom_arm64_rootblock.so  libphantom_arm64_rootblock.blob
+          python3 "Ultra Dex2c Vmp/phantom/encrypt_blob.py" libphantom_arm_rootblock.so    libphantom_arm_rootblock.blob
           echo "Blobs:"
-          ls -lh libphantom_arm64.blob libphantom_arm.blob
+          ls -lh libphantom_arm64.blob libphantom_arm.blob libphantom_arm64_rootblock.blob libphantom_arm_rootblock.blob
 
       - name: Verify blob round-trip
         run: |
@@ -328,5 +355,9 @@ jobs:
           path: |
             libphantom_arm64.blob
             libphantom_arm.blob
+            libphantom_arm64_rootblock.blob
+            libphantom_arm_rootblock.blob
             libphantom_arm64.so
             libphantom_arm.so
+            libphantom_arm64_rootblock.so
+            libphantom_arm_rootblock.so

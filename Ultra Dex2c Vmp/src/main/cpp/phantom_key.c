@@ -8,39 +8,23 @@
 // * Per-APK key derived from (salt, sha256(pkg_name)) via ARX KDF.
 // * Key NEVER crosses the JNI boundary -- lives only on the C stack, zeroed on return.
 //
-// Anti-dump / Anti-Frida -- four independent layers:
+// Anti-Frida / Anti-Debugger layers:
 //
-// LAYER 1  inotify_mem_watcher()
-// Installs kernel inotify watches on /proc/self/mem, /proc/self/pagemap
-// and the per-task equivalents.  The kernel fires the event the instant
-// ANY process — including root (uid=0) — opens those files.
-// NOTE: /proc/self/maps is intentionally NOT watched — our own detection
-// loop opens it every 5 s and would self-trigger a false nuke.
+// LAYER 1  nativeWipeShard()  [JNI -- called from DexProtector after loading]
+// Zeroes the ENTIRE Java byte[] that nativeDecryptShard returned so the heap
+// contains no reconstructable DEX bytecode.
 //
-// LAYER 2a  nativeWipeShard()  [JNI -- called from DexProtector after loading]
-// Zeroes the ENTIRE Java byte[] that nativeDecryptShard returned -- not
-// just the 8-byte magic.  ART has already consumed the ByteBuffer before
-// this call; wiping the full array means no heap region contains any
-// valid DEX bytecode for a /proc/PID/mem scanner to reconstruct from.
+// LAYER 2  detect_frida_loop()  [5 s cadence, background thread]
+// Frida/ptrace heuristics PLUS eBPF uprobe detection, JDWP thread scan,
+// Riru/Zygisk/Xposed detection, root detection, and disk-vs-mem ELF compare.
 //
-// LAYER 2b  self_scan_and_poison_dex()
-// Background native scan at 50 ms cadence (was 1 s).  For anonymous
-// non-dalvik regions: wipes the ENTIRE region via /proc/self/mem, then
-// calls madvise(MADV_DONTNEED) to drop backing pages -- reads via
-// /proc/PID/mem return zeros.  For [anon:dalvik-*] regions used by ART
-// at runtime: poisons only the header (magic + endian_tag) to defeat
-// magic-byte scanners without crashing the interpreter.
+// LAYER 3  BLOCK_ROOTED_DEVICES (optional, compile-time opt-in via UI toggle)
+// If compiled with -DBLOCK_ROOTED_DEVICES, the constructor reads the SELinux
+// enforce node.  Rooted phones (Magisk/KernelSU) set setenforce 0 → SELinux
+// permissive → immediate nuke.  Non-rooted phones always read '1' → pass.
 //
-// LAYER 3  detect_frida_anonymous_memory() + detect_ebpf_uprobe()
-// Frida/ptrace heuristics PLUS eBPF uprobe detection.
-// eBPFDexDumper (2026) attaches a kernel uprobe to libart's Execute
-// function and writes "p:dex_dump libart.so:0x..." into the tracing
-// filesystem.  We scan both uprobe_events paths and nuke on any hit
-// containing "libart" -- no userspace anti-dump can stop eBPF otherwise.
-//
-// All layers run in background threads.  detect_frida_init() fires via
-// __attribute__((constructor)) the instant System.load(libphantom.so) is
-// called -- before nativeDecryptShard is ever reached.
+// detect_frida_init() fires via __attribute__((constructor)) the instant
+// System.load(libphantom.so) is called -- before nativeDecryptShard is reached.
 //
 // Build requirements:
 // * Compile with OLLVM (see phantom/CMakeLists.txt).
@@ -71,7 +55,6 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/mman.h>
-#include <sys/inotify.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <link.h>
@@ -96,132 +79,6 @@
 #define MAX_LENGTH 256
 #define MAX_SZ     (80 * 1024 * 1024)
 
-// ?
-// DEX region cache
-//
-// Stores the base addresses of every [anon:dalvik-DEX] and anonymous DEX
-// region we have ever identified.  fast_poison_known_regions() hits each
-// cached address with mprotect+memset every 100 us without
-// touching /proc/self/maps at all -- the cost is only a handful of syscalls
-// per tick, measured in microseconds.
-//
-// self_scan_and_poison_dex() (called at 500 ms cadence and on every
-// nativePoisonNow() JNI call) rebuilds the cache from a fresh maps scan so
-// newly-loaded DEX regions are discovered promptly.
-// ?
-
-#define MAX_DEX_REGIONS 64
-
-typedef struct {
-    unsigned long base;
-    size_t        region_size;
-    int           is_dalvik;       // 1 = ART active region; 0 = original ByteBuffer copy
-} dex_region_entry_t;
-
-static dex_region_entry_t g_dex_cache[MAX_DEX_REGIONS];
-static volatile int       g_dex_cache_count = 0;
-static pthread_mutex_t    g_dex_cache_lock  = PTHREAD_MUTEX_INITIALIZER;
-
-// Persistent fds opened at startup BEFORE inotify is armed.
-// Declared here (before any function that references them) because OLLVM's
-// clang enforces declaration-before-use order for file-scope statics.
-// detect_frida_memdiskcompare(), detect_riru_zygisk(), and
-// self_scan_and_poison_dex() all use these — never re-opening the paths so
-// our own reads never fire the inotify IN_OPEN watch.
-static int g_rmem_fd = -1;   // /proc/self/mem  O_RDONLY
-static int g_maps_fd = -1;   // /proc/self/maps O_RDONLY
-
-// Called from within self_scan_and_poison_dex() while rebuilding the cache.
-// NOT thread-safe by itself -- caller holds g_dex_cache_lock.
-static inline void cache_add_region_locked(unsigned long base,
-                                           size_t region_size,
-                                           int is_dalvik)
-{
-        // Deduplicate by base address.
-    for (int i = 0; i < g_dex_cache_count; i++) {
-        if (g_dex_cache[i].base == base) {
-            g_dex_cache[i].region_size = region_size;
-            g_dex_cache[i].is_dalvik   = is_dalvik;
-            return;
-        }
-    }
-    if (g_dex_cache_count < MAX_DEX_REGIONS) {
-        g_dex_cache[g_dex_cache_count].base        = base;
-        g_dex_cache[g_dex_cache_count].region_size = region_size;
-        g_dex_cache[g_dex_cache_count].is_dalvik   = is_dalvik;
-        g_dex_cache_count++;
-    }
-}
-
-// Forward declarations for ABI-specific syscall wrappers defined below.
-// fast_poison_known_regions() uses these before the #if __aarch64__ block.
-static inline int my_madvise(void *a, size_t l, int adv);
-static inline int my_mprotect(void *a, size_t l, int prot);
-
-// fast_poison_known_regions() -- called every 1 ms.
-//
-// Poisons every cached DEX region using mprotect + direct memset.
-//
-// [anon:dalvik-DEX] regions are MAP_PRIVATE|MAP_ANONYMOUS — ART itself calls
-// mprotect() on them (proven in AOSP mem_map.cc).  Our process can always
-// call mprotect(PROT_WRITE) on its own anonymous pages: no SELinux restriction
-// applies to mprotect, and no memfd sealing is used for InMemoryDexClassLoader.
-//
-// For dalvik-labelled regions  (ART reads during execution):
-//   -> header-only: zero magic[0-7] + endian_tag[40-43] on the first page.
-//      Defeats magic-byte scanners without disturbing ART's bytecode read.
-//
-// For non-dalvik anonymous regions  (original ByteBuffer — ART is done with it):
-//   -> full wipe: mprotect+memset every page, then MADV_DONTNEED to drop
-//      backing pages (subsequent /proc/PID/mem reads return only zeros).
-//
-// Total cost per 100 us tick: ~1-5 us for typical apps (header-only path
-// is just one mprotect+8 byte stores+mprotect per region).
-static void fast_poison_known_regions(void)
-{
-    pthread_mutex_lock(&g_dex_cache_lock);
-    int count = g_dex_cache_count;
-    dex_region_entry_t snap[MAX_DEX_REGIONS];
-    for (int i = 0; i < count; i++) snap[i] = g_dex_cache[i];
-    pthread_mutex_unlock(&g_dex_cache_lock);
-
-    for (int i = 0; i < count; i++) {
-        unsigned long base        = snap[i].base;
-        size_t        region_size = snap[i].region_size;
-        int           is_dalvik   = snap[i].is_dalvik;
-
-        if (base == 0 || region_size == 0) continue;
-
-        if (!is_dalvik && region_size <= (8u * 1024u * 1024u)) {
-            // Full-region wipe: mprotect+memset page by page, then drop pages.
-            unsigned long ps   = 4096;
-            unsigned long addr = base & ~(ps - 1);
-            unsigned long end  = (base + region_size + ps - 1) & ~(ps - 1);
-            while (addr < end) {
-                if (my_mprotect((void *)addr, ps, PROT_READ | PROT_WRITE) == 0) {
-                    volatile uint8_t *p = (volatile uint8_t *)addr;
-                    for (unsigned long j = 0; j < ps; j++) p[j] = 0;
-                    my_mprotect((void *)addr, ps, PROT_READ);
-                }
-                addr += ps;
-            }
-            // Drop backing pages — reads via /proc/PID/mem now return zeros.
-            my_madvise((void *)base, region_size, MADV_DONTNEED);
-        } else {
-            // Dalvik region (ART active) or oversized: header-only poison.
-            // Zero just the DEX magic (bytes 0-7) and endian_tag (bytes 40-43)
-            // on the first page. Enough to defeat every magic-byte scanner.
-            unsigned long ps         = 4096;
-            unsigned long page_start = base & ~(ps - 1);
-            if (my_mprotect((void *)page_start, ps, PROT_READ | PROT_WRITE) == 0) {
-                volatile uint8_t *p = (volatile uint8_t *)base;
-                p[0]=0;p[1]=0;p[2]=0;p[3]=0;p[4]=0;p[5]=0;p[6]=0;p[7]=0;
-                p[40]=0;p[41]=0;p[42]=0;p[43]=0;
-                my_mprotect((void *)page_start, ps, PROT_READ);
-            }
-        }
-    }
-}
 
 static const char *APPNAME                    = "YahyaVM_AntiFrida";
 static const char *FRIDA_THREAD_GUM_JS_LOOP   = "gum-js-loop";
@@ -380,16 +237,6 @@ __attribute__((always_inline)) static inline int my_mprotect(void *a, size_t l, 
 __attribute__((always_inline)) static inline int my_madvise(void *a, size_t l, int adv)
     { return (int)raw_syscall_3(__NR_madvise, (long)a, (long)l, adv); }
 
-// inotify raw syscall wrappers (arm64) — identical to darvincisec's __syscall1/2/3
-__attribute__((always_inline)) static inline int my_inotify_init1(int flags)
-    { return (int)raw_syscall_3(__NR_inotify_init1, flags, 0, 0); }
-
-__attribute__((always_inline)) static inline int my_inotify_add_watch(int fd, const char *path, uint32_t mask)
-    { return (int)raw_syscall_3(__NR_inotify_add_watch, fd, (long)path, (long)mask); }
-
-__attribute__((always_inline)) static inline int my_inotify_rm_watch(int fd, int wd)
-    { return (int)raw_syscall_3(__NR_inotify_rm_watch, fd, wd, 0); }
-
 // socket + connect raw syscall wrappers (arm64)
 __attribute__((always_inline)) static inline int my_socket(int domain, int type, int protocol)
     { return (int)raw_syscall_3(__NR_socket, domain, type, protocol); }
@@ -425,16 +272,6 @@ __attribute__((always_inline)) static inline int my_mprotect(void *a, size_t l, 
 
 __attribute__((always_inline)) static inline int my_madvise(void *a, size_t l, int adv)
     { return (int)syscall(__NR_madvise, a, l, adv); }
-
-// inotify raw syscall wrappers (arm32) — mirrors darvincisec's __syscall1/2/3
-__attribute__((always_inline)) static inline int my_inotify_init1(int flags)
-    { return (int)syscall(__NR_inotify_init1, flags); }
-
-__attribute__((always_inline)) static inline int my_inotify_add_watch(int fd, const char *path, uint32_t mask)
-    { return (int)syscall(__NR_inotify_add_watch, fd, path, mask); }
-
-__attribute__((always_inline)) static inline int my_inotify_rm_watch(int fd, int wd)
-    { return (int)syscall(__NR_inotify_rm_watch, fd, wd); }
 
 // socket + connect raw syscall wrappers (arm32)
 __attribute__((always_inline)) static inline int my_socket(int domain, int type, int protocol)
@@ -551,39 +388,58 @@ static inline bool scan_executable_segments(char *map, execSection *pElfSectArr)
 
 // ?
 // Kill switch
+//
+// Sends SIGKILL to the calling thread via a raw tgkill syscall.
+//
+// WHY NOT null-deref (the old approach):
+//   ART's libsigchain wraps sigaction() and gets first access to EVERY signal,
+//   including SIGSEGV.  ART's fault_handler.cc intercepts SIGSEGV from native
+//   null-derefs to check whether the fault is in managed code — on some Android
+//   versions and OEM ROMs this interception absorbs the signal before it kills
+//   the process.  A null-deref is therefore NOT reliably fatal in JNI context.
+//
+// WHY SIGKILL via raw tgkill:
+//   SIGKILL cannot be caught, blocked, masked, or ignored by ANY userspace
+//   handler — this is a hard kernel guarantee (POSIX + Linux).  ART's
+//   libsigchain has zero power over SIGKILL.  The kernel delivers it
+//   unconditionally and the process is terminated immediately.
+//   AOSP itself uses tgkill() for all signal dispatch (android_util_Process.cpp).
+//
+// Syscall numbers — stable Linux ABI, unchanged across all Android versions
+// (5 → 16+), confirmed from kernel/common/include/uapi/asm-generic/unistd.h:
+//   arm64: __NR_getpid=172  __NR_gettid=178  __NR_tgkill=131  __NR_kill=129
+//   arm32: numbers resolved at compile time via NDK <sys/syscall.h> __NR_* defs
 // ?
 
-static inline void nuke_app(void) {
-    volatile int *trap = NULL;
-    *trap = 0xDEAD;
+__attribute__((noreturn)) static void nuke_app(void) {
+#if defined(__aarch64__)
+    // Fully raw path — zero libc, zero ART involvement.
+    // Hardcoded numbers match the stable arm64 Linux ABI (never changes).
+    long pid = raw_syscall_3(172 /*__NR_getpid*/, 0, 0, 0);
+    long tid = raw_syscall_3(178 /*__NR_gettid*/, 0, 0, 0);
+    // tgkill(pid, tid, SIGKILL=9) — kills this specific thread; kernel
+    // propagates SIGKILL to the whole thread group (process) immediately.
+    raw_syscall_3(131 /*__NR_tgkill*/, pid, tid, 9 /*SIGKILL*/);
+    // Fallback: kill(pid, SIGKILL) — targets the entire process group.
+    raw_syscall_3(129 /*__NR_kill*/, pid, 9 /*SIGKILL*/, 0);
+#else
+    // arm32 EABI — libc syscall() wrapper is fine; SIGKILL is still uncatchable.
+    // __NR_* resolved from NDK <sys/syscall.h> (bionic copies kernel headers).
+    // Confirmed from arch/arm/tools/syscall.tbl (Android kernel + Linus tree,
+    // stable since first arm32 Android, __NR_SYSCALL_BASE=0 on EABI):
+    //   __NR_getpid=20  __NR_kill=37  __NR_gettid=224  __NR_tgkill=268
+    pid_t pid = (pid_t)syscall(__NR_getpid);          // 20
+    pid_t tid = (pid_t)syscall(__NR_gettid);          // 224
+    syscall(__NR_tgkill, (long)pid, (long)tid, 9L);   // 268, SIGKILL=9
+    syscall(__NR_kill,   (long)pid,              9L);  // 37,  SIGKILL=9
+#endif
+    // Should NEVER reach here — SIGKILL is unconditional.
+    // Paranoia-only null-deref as absolute last resort.
+    volatile int *p = (volatile int *)0;
+    *p = 0xDEAD;
+    __builtin_unreachable();
 }
 
-// nuke_with_poison() -- called instead of nuke_app() when a live dump is
-// detected.  Before crashing, we aggressively zero every known DEX region:
-//
-//   mprotect(PROT_NONE)       -- makes the pages completely unreadable; any
-//                                in-flight /proc/PID/mem read gets EIO.
-//   madvise(MADV_DONTNEED)    -- drops all backing pages; subsequent reads
-//                                (even via root /proc/PID/mem) return zeros.
-//
-// Since we are dying anyway, crashing ART is fine.
-static void nuke_with_poison(void) {
-    pthread_mutex_lock(&g_dex_cache_lock);
-    int count = g_dex_cache_count;
-    dex_region_entry_t snap[MAX_DEX_REGIONS];
-    for (int i = 0; i < count; i++) snap[i] = g_dex_cache[i];
-    pthread_mutex_unlock(&g_dex_cache_lock);
-
-    for (int i = 0; i < count; i++) {
-        if (snap[i].base == 0 || snap[i].region_size == 0) continue;
-        // Make unreadable — in-flight dumper gets EIO immediately.
-        my_mprotect((void *)snap[i].base, snap[i].region_size, PROT_NONE);
-        // Drop backing pages — zeros returned on any subsequent read.
-        my_madvise((void *)snap[i].base, snap[i].region_size, MADV_DONTNEED);
-    }
-    PH_LOG("nuke_with_poison: zeroed %d DEX regions — dying now", count);
-    nuke_app();
-}
 
 // ?
 // Original anti-Frida detection functions (unchanged)
@@ -735,13 +591,9 @@ static void detect_monkey_and_root_tools(void) {
 }
 
 static inline void detect_frida_memdiskcompare(void) {
-    // Open a fresh fd each call.  /proc/self/maps is NOT in the inotify
-    // watch list (removed to prevent self-triggering), so opening it here
-    // is safe.  Using a fresh fd also eliminates the race condition that
-    // existed when g_maps_fd was shared between poison_loop and this thread.
-    // Bug fix: added elfSectionArr[i] NULL guard — array is initialised to
-    // {NULL} and stays NULL if fetch_checksum_of_library() failed at startup;
-    // passing NULL to scan_executable_segments caused a null-deref crash.
+    // Open a fresh fd each call — avoids cross-thread fd sharing.
+    // elfSectionArr[i] NULL guard: array stays NULL if fetch_checksum_of_library()
+    // failed at startup; passing NULL to scan_executable_segments crashes.
     int fd = my_openat(AT_FDCWD, PROC_MAPS, O_RDONLY | O_CLOEXEC, 0);
     if (fd < 0) return;
     char map[MAX_LINE];
@@ -966,328 +818,7 @@ static inline void detect_frida_namedpipe(void) {
     closedir(dir);
 }
 
-// ?
-// ─────────────────────────────────────────────────────────────────────────────
-// LAYER 1 -- inotify_mem_watcher
-//
-// Technique from darvincisec/AntiDebugandMemoryDump (280 stars):
-//   Install inotify watches on /proc/self/mem, /proc/self/maps,
-//   /proc/self/pagemap and the per-task equivalents.  The kernel fires an
-//   IN_OPEN event the instant ANY external process — including root (uid=0,
-//   Matrix Dumper, dexhound) — calls open() on those files.  No polling,
-//   no EPERM, no whitelist needed.
-//
-// Why this beats the old fd-scan approach:
-//   Old: poll /proc/*/fd every 20 ms.  Root process fds are unreadable
-//        (EPERM), so root dumpers were invisible.  Non-root window ~50 ms
-//        meant 2-3 dumps could finish before the next poll.
-//   New: kernel fires event in < 1 us.  Root or not — doesn't matter.
-//        We get the event before the dumper's first read() returns.
-//
-// Important setup detail:
-//   g_rmem_fd and g_maps_fd are opened ONCE in detect_frida_init(), BEFORE
-//   the inotify watches are installed.  Those initial opens do NOT trigger
-//   IN_OPEN.  self_scan_and_poison_dex() uses these globals — it never
-//   calls open() on those paths again, so our own internal scans are silent.
-// ─────────────────────────────────────────────────────────────────────────────
 
-// Buffer sized to hold 1024 events — matches darvincisec's EVENT_BUF_LEN.
-#define INOTIFY_EVENT_SIZE  (sizeof(struct inotify_event))
-#define INOTIFY_BUF_LEN     (1024 * (INOTIFY_EVENT_SIZE + 16))
-// Maximum inotify watch descriptors (3 global + 2 per-task, up to 100 tasks).
-#define INOTIFY_MAX_WATCHERS 256
-
-static void *inotify_mem_watcher(void *arg) {
-    (void)arg;
-    char buf[INOTIFY_BUF_LEN];
-
-    // Outer loop: re-create the inotify fd each iteration.
-    // This re-adds watches for every current thread (picks up new threads
-    // spawned after startup), mirroring darvincisec's design exactly.
-    while (1) {
-        int ifd = my_inotify_init1(0);
-        if (ifd < 0) {
-            // Kernel too old or fd limit hit — retry after 1s.
-            PH_LOG("inotify_init1 failed (%d) — retrying in 1s", ifd);
-            struct timespec ts = {1, 0};
-            my_nanosleep(&ts, NULL);
-            continue;
-        }
-
-        // Track all watch descriptors so we can clean up after an event.
-        int wd[INOTIFY_MAX_WATCHERS];
-        int wcount = 0;
-
-        // ── Global proc files ─────────────────────────────────────────────
-        // /proc/self/mem — the primary target of every DEX dumper.
-        //   IN_OPEN only: we hold g_rmem_fd open (opened before inotify is
-        //   armed); our self-scan uses that fd and never calls open() again.
-        //   External dumpers must call open() first — IN_OPEN catches them.
-        wd[wcount++] = my_inotify_add_watch(ifd,
-            "/proc/self/mem",     (uint32_t)IN_OPEN);
-
-        // NOTE: /proc/self/maps is intentionally NOT watched.
-        //   detect_frida_memdiskcompare() and detect_riru_zygisk() both read
-        //   maps on every 5-second loop iteration (using g_maps_fd / lseek).
-        //   Watching maps would fire IN_OPEN on our own reads, instantly
-        //   self-triggering a false nuke on clean devices. Confirmed crash on
-        //   TECNO CK7n (Android 13, non-rooted) where the 7ms gap between
-        //   inotify arming and detect_frida_memdiskcompare's openat was enough
-        //   to nuke the app. Maps coverage is provided by detect_riru_zygisk()
-        //   and detect_frida_memdiskcompare() independently.
-
-        // /proc/self/pagemap — physical page resolver used by advanced carvers.
-        //   We never open pagemap ourselves, so IN_ACCESS | IN_OPEN is safe.
-        wd[wcount++] = my_inotify_add_watch(ifd,
-            "/proc/self/pagemap", (uint32_t)(IN_ACCESS | IN_OPEN));
-
-        // ── Per-task mem + pagemap for ALL current threads ────────────────
-        // Matches darvincisec exactly: iterate /proc/self/task/ and add
-        // watches for each thread's mem and pagemap files.  A dumper that
-        // targets /proc/<PID>/task/<TID>/mem is caught this way.
-        DIR *task_dir = opendir("/proc/self/task");
-        if (task_dir) {
-            struct dirent *entry;
-            while ((entry = readdir(task_dir)) != NULL &&
-                   wcount < INOTIFY_MAX_WATCHERS - 2) {
-
-                if (entry->d_name[0] == '.') continue;
-
-                char mem_path[64], pgm_path[64];
-                snprintf(mem_path, sizeof(mem_path),
-                         "/proc/self/task/%s/mem",     entry->d_name);
-                snprintf(pgm_path, sizeof(pgm_path),
-                         "/proc/self/task/%s/pagemap", entry->d_name);
-
-                // IN_OPEN only for task mem (same self-trigger reason as above).
-                wd[wcount++] = my_inotify_add_watch(ifd, mem_path,
-                                                    (uint32_t)IN_OPEN);
-                // IN_ACCESS | IN_OPEN for pagemap — we never read it.
-                wd[wcount++] = my_inotify_add_watch(ifd, pgm_path,
-                                                    (uint32_t)(IN_ACCESS | IN_OPEN));
-            }
-            closedir(task_dir);
-        }
-
-        PH_LOG("inotify_mem_watcher: armed %d watches (proc+all-tasks)", wcount);
-
-        // ── Blocking read — zero CPU until kernel fires an event ──────────
-        ssize_t length = my_read(ifd, buf, sizeof(buf));
-
-        if (length > 0) {
-            // Walk the event list — matches darvincisec's while(read_length<length).
-            int offset = 0;
-            while (offset < (int)length) {
-                struct inotify_event *ev =
-                    (struct inotify_event *)((char *)buf + offset);
-
-                if (ev->mask & IN_ACCESS) {
-                    PH_NUKE("inotify IN_ACCESS — external process read /proc/self/{mem|pagemap} — zeroing all DEX regions");
-                    nuke_with_poison();
-                } else if (ev->mask & IN_OPEN) {
-                    PH_NUKE("inotify IN_OPEN — external process opened /proc/self/{mem|pagemap} — zeroing all DEX regions");
-                    nuke_with_poison();
-                }
-                // nuke_with_poison() never returns; this line is unreachable
-                // unless something is very wrong — advance and keep trying.
-                offset += (int)(INOTIFY_EVENT_SIZE + ev->len);
-            }
-        }
-
-        // ── Cleanup: remove all watches, close fd, re-arm immediately ─────
-        for (int j = 0; j < wcount; j++) {
-            if (wd[j] > 0) my_inotify_rm_watch(ifd, wd[j]);
-        }
-        my_close(ifd);
-        // No sleep — re-arm instantly so there is never a window without
-        // active watches (unlike darvincisec's 1s sleep gap).
-    }
-    return NULL;
-}
-
-// ?
-// LAYER 2b -- self_scan_and_poison_dex()
-//
-// Reads our own /proc/self/maps and finds every readable anonymous region
-// (no backing file, or [anon:dalvik-*]) that begins with the DEX magic
-// bytes (dex\n = 0x64 0x65 0x78 0x0a) AND has a valid endian_tag
-// (0x12345678) at offset 40.
-//
-// For each such region we:
-// 1. Temporarily elevate the page's protection to PROT_READ|PROT_WRITE
-// using mprotect().
-// 2. Overwrite the first 8 bytes (magic + version string) with zeros.
-// 3. Restore the original page protection.
-//
-// Additionally, every discovered region is registered into the DEX region
-// cache (g_dex_cache) so fast_poison_known_regions() can hit it every 1 ms
-// without re-scanning /proc/self/maps.
-//
-// This is called at 500 ms cadence (cache refresh) and immediately from
-// nativePoisonNow() JNI after each InMemoryDexClassLoader call.
-// ?
-
-static void self_scan_and_poison_dex(void) {
-    // Use the persistent global fds opened at startup (before inotify was
-    // armed).  Opening /proc/self/mem or /proc/self/maps here would trigger
-    // our own inotify watch and cause a self-nuke.
-    int maps_fd = g_maps_fd;
-    int rmem_fd = g_rmem_fd;
-    if (maps_fd < 0 || rmem_fd < 0) return;
-
-    // Seek maps back to the beginning — procfs regenerates on each read.
-    my_lseek(maps_fd, 0, SEEK_SET);
-
-    char line[MAX_LINE];
-    while (read_one_line(maps_fd, line, MAX_LINE) > 0) {
-        unsigned long start = 0, end = 0;
-        char perm[8]          = "";
-        char path[MAX_LENGTH] = "";
-        char tmp[MAX_LENGTH]  = "";
-
-                // Parse map line: addr-addr perm offset dev inode [path]
-        int fields = sscanf(line, "%lx-%lx %4s %s %s %s %255s",
-                            &start, &end, perm, tmp, tmp, tmp, path);
-        if (fields < 3) continue;
-
-                // Must be readable.
-        if (perm[0] != 'r') continue;
-
-                // Skip write+execute (JIT code), and system libraries/framework.
-        if (perm[1] == 'w' && perm[2] == 'x') continue;
-        if (fields >= 7) {
-            if (my_strstr(path, "/system/")  != NULL) continue;
-            if (my_strstr(path, "/vendor/")  != NULL) continue;
-            if (my_strstr(path, "/apex/")    != NULL) continue;
-            if (my_strstr(path, ".oat")      != NULL) continue;
-            if (my_strstr(path, ".vdex")     != NULL) continue;
-            if (my_strstr(path, ".art")      != NULL) continue;
-            if (my_strstr(path, ".odex")     != NULL) continue;
-                        // Only target anonymous or dalvik-labelled regions.
-            if (path[0] != '\0'
-                && my_strstr(path, "dalvik") == NULL
-                && my_strstr(path, "anon")   == NULL) continue;
-        }
-
-        size_t region_size = end - start;
-        if (region_size < 112 || region_size > MAX_SZ) continue;
-
-                // Read first 44 bytes of the region safely via /proc/self/mem.
-        uint8_t hdr[44];
-        my_lseek(rmem_fd, (off_t)start, SEEK_SET);
-        ssize_t n = my_read(rmem_fd, hdr, sizeof(hdr));
-        if (n < 44) continue;
-
-                // Check DEX magic: 'dex\n'
-        if (hdr[0] != 'd' || hdr[1] != 'e' || hdr[2] != 'x' || hdr[3] != '\n') continue;
-
-                // Validate endian tag at offset 40 = 0x12345678 (little-endian).
-        uint32_t endian_tag = (uint32_t)hdr[40]
-                            | ((uint32_t)hdr[41] << 8)
-                            | ((uint32_t)hdr[42] << 16)
-                            | ((uint32_t)hdr[43] << 24);
-        if (endian_tag != 0x12345678) continue;
-
-                // ? Found live DEX magic -- register in cache + poison.
-        //
-        // Strategy depends on whether the region is ART's active dalvik
-        // mapping or the original (now-consumed) ByteBuffer mapping:
-        //
-        // dalvik-labelled region  (ART reads it during execution)
-        // -> header-only poison: zero magic[0-7] + endian_tag[40-43].
-        // Defeats magic-byte scanners (dexhound) without crashing ART.
-        //
-        // non-dalvik anonymous region  (original ByteBuffer -- ART is done)
-        // -> FULL WIPE: mprotect+memset every page, then madvise(MADV_DONTNEED)
-        // to drop backing pages so even a direct /proc/PID/mem read returns
-        // only zeros -- no header, no bytecode, nothing reconstructable.
-        //
-        // Register into g_dex_cache regardless of poison path so that
-        // fast_poison_known_regions() keeps hitting this address every 1 ms
-        // without needing to re-scan maps.
-        int is_dalvik = (my_strstr(path, "dalvik") != NULL);
-
-        pthread_mutex_lock(&g_dex_cache_lock);
-        cache_add_region_locked(start, region_size, is_dalvik);
-        pthread_mutex_unlock(&g_dex_cache_lock);
-
-        if (!is_dalvik && region_size <= (8u * 1024u * 1024u)) {
-            // Non-dalvik anonymous region (original ByteBuffer — ART is done).
-            // Full wipe: mprotect+memset every page, then drop backing pages.
-            unsigned long ps   = 4096;
-            unsigned long addr = start & ~(ps - 1);
-            unsigned long end  = (start + region_size + ps - 1) & ~(ps - 1);
-            while (addr < end) {
-                if (my_mprotect((void *)addr, ps, PROT_READ | PROT_WRITE) == 0) {
-                    volatile uint8_t *p = (volatile uint8_t *)addr;
-                    for (unsigned long j = 0; j < ps; j++) p[j] = 0;
-                    my_mprotect((void *)addr, ps, PROT_READ);
-                }
-                addr += ps;
-            }
-            my_madvise((void *)start, region_size, MADV_DONTNEED);
-        } else {
-            // Dalvik region (ART active) or oversized: header-only poison.
-            // Zero magic[0-7] + endian_tag[40-43] via mprotect+direct write.
-            unsigned long ps         = 4096;
-            unsigned long page_start = start & ~(ps - 1);
-            int orig_prot = PROT_READ;
-            if (perm[1] == 'w') orig_prot |= PROT_WRITE;
-            if (perm[2] == 'x') orig_prot |= PROT_EXEC;
-            if (my_mprotect((void *)page_start, ps, PROT_READ | PROT_WRITE) == 0) {
-                volatile uint8_t *ptr = (volatile uint8_t *)start;
-                ptr[0]=0;ptr[1]=0;ptr[2]=0;ptr[3]=0;
-                ptr[4]=0;ptr[5]=0;ptr[6]=0;ptr[7]=0;
-                ptr[40]=0;ptr[41]=0;ptr[42]=0;ptr[43]=0;
-                my_mprotect((void *)page_start, ps, orig_prot);
-            }
-        }
-    }
-
-    // Do NOT close — these are the persistent global fds.
-}
-
-// ?
-// poison_loop -- two-tier cadence
-//
-// TIER 1 (100 us)  fast_poison_known_regions()
-// Hits every cached DEX base address with mprotect+memset -- no maps I/O,
-// no readdir, just mprotect syscalls + direct byte stores.  Total cost per
-// tick: ~1-5 us for typical apps (header-only path per region).
-// This shrinks the valid-DEX window from 50 ms -> 100 us: the dumper must
-// complete its entire /proc/PID/mem seek+read inside that window -- it cannot.
-//
-// TIER 2 (500 ms)  self_scan_and_poison_dex()
-// Full /proc/self/maps re-scan.  Discovers newly-loaded DEX regions (e.g.
-// shards loaded after the app has warmed up) and rebuilds g_dex_cache so
-// Tier 1 keeps hitting the right addresses.  Also performs a full poison
-// pass for belt-and-suspenders coverage.
-//
-// Note: nativePoisonNow() (called from Java immediately after every
-// InMemoryDexClassLoader) also runs a full scan so new regions enter the
-// cache with zero delay -- the 500 ms background refresh is just a safety net.
-// ?
-
-static void *poison_loop(void *arg) {
-    (void)arg;
-
-    struct timespec fast_tick = { 0, 100000L };        // 100 us
-
-    // Run a full maps refresh every 5000 ticks (= 500 ms).
-    int refresh_counter = 0;
-
-    while (1) {
-        fast_poison_known_regions();
-
-        if (++refresh_counter >= 5000) {
-            refresh_counter = 0;
-            self_scan_and_poison_dex();               // rebuilds cache + full poison pass
-        }
-
-        my_nanosleep(&fast_tick, NULL);
-    }
-    return NULL;
-}
 
 
 // ?
@@ -1367,10 +898,7 @@ static void detect_riru_zygisk(void) {
     PH_LOG("detect_riru_zygisk: scanning maps + phdr + paths");
 
     // ── 1. /proc/self/maps scan ───────────────────────────────────────────────
-    // Open a fresh fd — /proc/self/maps is NOT in the inotify watch list so
-    // opening it here is safe and eliminates the g_maps_fd race condition
-    // (g_maps_fd is used by self_scan_and_poison_dex in poison_loop thread;
-    // sharing it with this thread without a mutex caused garbled reads).
+    // Open a fresh fd each call — avoids cross-thread fd sharing.
     {
         int fd = my_openat(AT_FDCWD, "/proc/self/maps", O_RDONLY | O_CLOEXEC, 0);
         if (fd >= 0) {
@@ -1514,17 +1042,11 @@ static void *detect_frida_loop(void *args) {
 // ?
 // Constructor -- runs immediately on System.load(libphantom.so)
 //
-// Three independent threads launched:
-// poison_loop       -- fast_poison every 100 us + full maps refresh every 500 ms
-// Tier-1 cost: ~1-5 us/tick (mprotect+memset, no maps I/O).
-// Tier-2 cost: full /proc/self/maps scan rebuilds the
-// DEX region cache and performs a belt-and-suspenders
-// full poison pass.
+// Threads launched:
+//   detect_frida_loop -- 5 s cadence -- Frida/ptrace/eBPF/root heuristics.
 //
-// inotify_mem_watcher -- kernel event, zero CPU -- fires the instant ANY
-// process (including root) opens /proc/self/{mem,maps,pagemap}.
-//
-// detect_frida_loop -- 5 s   -- Frida/ptrace/eBPF heuristics.
+// Optional (compile-time -DBLOCK_ROOTED_DEVICES):
+//   SELinux permissive → immediate nuke (rooted phone detected on launch).
 // ?
 
 __attribute__((constructor))
@@ -1532,27 +1054,19 @@ void detect_frida_init(void) {
     // ── 1. Seal /proc/self/mem ───────────────────────────────────────────
     // prctl(PR_SET_DUMPABLE, 0) tells the kernel to refuse open() on
     // /proc/<PID>/mem from any external process.
-    // NOTE: root + setenforce 0 bypasses this -- see check #2 below.
     prctl(PR_SET_DUMPABLE, 0);
 
     // ── 2. SELinux permissive detection ─────────────────────────────────
-    // Dumpers call "setenforce 0" before launching the app so they can
-    // open /proc/PID/mem as root even with PR_SET_DUMPABLE=0.
+    // Rooted devices (Magisk / KernelSU) run setenforce 0, so SELinux reads
+    // '0' (permissive).  Non-rooted phones always read '1' (enforcing).
     //
-    // NOTE: We do NOT nuke immediately on permissive SELinux.
-    // Rooted devices (Magisk / KernelSU) often set setenforce 0 globally,
-    // and legitimate users on rooted phones must not be killed on launch.
-    // Nuking here caused a false-positive SIGSEGV on every rooted device
-    // regardless of whether a dump was actually in progress.
+    // When BLOCK_ROOTED_DEVICES is defined (user-enabled toggle in the UI),
+    // we nuke immediately: the app will not work on any rooted device.
+    // When it is NOT defined, SELinux state is ignored — only the Frida /
+    // debugger detections below are active kill triggers.
     //
-    // The real dump-protection layers are:
-    //   • inotify_mem_watcher() -- kernel event fires the instant any process opens our mem
-    //   • poison_loop()         -- continuously zeros DEX headers in [anon:dalvik-*]
-    //   • detect_frida_*()     -- Frida thread names, named pipes, disk-vs-mem
-    // Those layers remain fully active regardless of SELinux mode.
-    //
-    // Android mounts selinuxfs at TWO possible paths depending on kernel:
-    //   /sys/fs/selinux/enforce          -- Android 5-15, most kernels
+    // Android mounts selinuxfs at two possible paths depending on kernel:
+    //   /sys/fs/selinux/enforce              -- Android 5-15, most kernels
     //   /sys/kernel/security/selinux/enforce -- Android 16 / kernel 6.6+
     {
         static const char * const SELINUX_PATHS[] = {
@@ -1567,22 +1081,21 @@ void detect_frida_init(void) {
             char ebuf[4] = {0};
             my_read(sefd, ebuf, 3);
             my_close(sefd);
-            // '0' = permissive -- noted but not acted on here.
-            // inotify_mem_watcher + poison_loop handle the actual threat.
+#ifdef BLOCK_ROOTED_DEVICES
+            if (ebuf[0] == '0') {
+                PH_NUKE("SELinux permissive — rooted device detected (BLOCK_ROOTED_DEVICES)");
+                nuke_app();
+            }
+#else
             (void)ebuf;
+#endif
             break;
         }
     }
 
     // ── 3. Monkey / root-tool check -- SYNCHRONOUS before any thread ────
-    // detect_monkey_and_root_tools() also runs in detect_frida_loop, but
-    // that loop runs in a background thread that may not be scheduled for
-    // 1-5 s while the main thread is busy loading classes.  The dump
-    // happens at ~4 s after PID appears, so the thread check can fire
-    // too late.  Calling it here in the constructor guarantees it runs
-    // synchronously -- BEFORE System.loadLibrary() returns, BEFORE any
-    // Java code calls nativeDecryptShard().  If monkey is detected we
-    // nuke and never decrypt.
+    // Runs synchronously so it fires BEFORE System.loadLibrary() returns
+    // and BEFORE any Java code calls nativeDecryptShard().
     detect_monkey_and_root_tools();
 
     char *filePaths[NUM_LIBS] = {NULL, NULL};
@@ -1594,28 +1107,7 @@ void detect_frida_init(void) {
         }
     }
     pthread_t t;
-    // Open persistent global fds BEFORE arming inotify.
-    // self_scan_and_poison_dex() uses these — it never re-opens these paths,
-    // so our own internal reads never trigger the inotify watches below.
-    g_rmem_fd = my_openat(AT_FDCWD, "/proc/self/mem",  O_RDONLY | O_CLOEXEC, 0);
-    g_maps_fd = my_openat(AT_FDCWD, "/proc/self/maps", O_RDONLY | O_CLOEXEC, 0);
-
-    pthread_create(&t, NULL, poison_loop,          NULL);   // 100 us fast + 500 ms refresh
-    pthread_create(&t, NULL, inotify_mem_watcher,  NULL);   // kernel event — catches root dumpers
-    pthread_create(&t, NULL, detect_frida_loop,    NULL);   // 5 s
-}
-
-// nativePoisonNow -- JNI hook called from Java immediately after
-// InMemoryDexClassLoader has parsed the DEX bytes.  At that exact moment
-// ART has created [anon:dalvik-DEX] mappings for the DEX, so a single
-// forced poison pass here eliminates the live-header window that exists
-// between DEX load and the first scheduled poison_loop tick.
-JNIEXPORT void JNICALL
-Java_com_ultra_dex2cvmp_utils_DexCrypto_nativePoisonNow(
-        JNIEnv *env, jclass clazz)
-{
-    (void)env; (void)clazz;
-    self_scan_and_poison_dex();
+    pthread_create(&t, NULL, detect_frida_loop, NULL);   // 5 s
 }
 
 // ?

@@ -374,27 +374,6 @@ static inline void detect_ptrace(void) {
     }
 }
 
-static inline void detect_frida_anonymous_memory(void) {
-    char map[512];
-    int fd = my_openat(AT_FDCWD, "/proc/self/maps", O_RDONLY | O_CLOEXEC, 0);
-    if (fd < 0) return;
-    while (read_one_line(fd, map, sizeof(map)) > 0) {
-        if (my_strstr(map, "r-xp") != NULL) {
-            /* Skip legitimate Android/ART anonymous executable regions —
-             * these are NOT Frida. Flagging them causes false-positive kills
-             * on every device that uses the ART JIT compiler. */
-            if (my_strstr(map, "dalvik")   != NULL) continue;
-            if (my_strstr(map, "anon:art") != NULL) continue;
-            if (my_strstr(map, "anon:scudo") != NULL) continue;
-            if (my_strstr(map, "stack")    != NULL) continue;
-            /* Frida: no file path at all, or backed by a memfd */
-            if (my_strstr(map, "/") == NULL || my_strstr(map, "memfd:") != NULL) {
-                my_close(fd); nuke_app();
-            }
-        }
-    }
-    my_close(fd);
-}
 
 static inline void detect_frida_memdiskcompare(void) {
     int fd = my_openat(AT_FDCWD, PROC_MAPS, O_RDONLY | O_CLOEXEC, 0);
@@ -642,8 +621,6 @@ static void *detect_frida_loop(void *args) {
         detect_frida_namedpipe();
         detect_frida_memdiskcompare();
         detect_ptrace();
-        detect_frida_anonymous_memory();
-
         /* LAYER 1 -- catch any process that has our /proc/PID/mem open */
         detect_mem_reader();
 

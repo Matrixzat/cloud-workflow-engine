@@ -95,7 +95,7 @@
 //
 // Stores the base addresses of every [anon:dalvik-DEX] and anonymous DEX
 // region we have ever identified.  fast_poison_known_regions() hits each
-// cached address with a pwrite of 8+4 zero bytes every 1 ms without
+// cached address with mprotect+memset every 100 us without
 // touching /proc/self/maps at all -- the cost is only a handful of syscalls
 // per tick, measured in microseconds.
 //
@@ -140,34 +140,32 @@ static inline void cache_add_region_locked(unsigned long base,
 
 // Forward declarations for ABI-specific syscall wrappers defined below.
 // fast_poison_known_regions() uses these before the #if __aarch64__ block.
-static inline ssize_t my_pwrite(int fd, const void *b, size_t n, off_t off);
-static inline int     my_madvise(void *a, size_t l, int adv);
-static inline int     my_mprotect(void *a, size_t l, int prot);
+static inline int my_madvise(void *a, size_t l, int adv);
+static inline int my_mprotect(void *a, size_t l, int prot);
 
 // fast_poison_known_regions() -- called every 1 ms.
 //
-// Takes an already-open /proc/self/mem writable fd (kept open for the life
-// of the poison_loop thread so no open/close overhead per tick).
+// Poisons every cached DEX region using mprotect + direct memset.
 //
-// For dalvik-labelled regions: zeroes magic[0-7] + endian_tag[40-43].
-// For non-dalvik anonymous regions (original ByteBuffer copy): zeroes the
-// full region in 64 KB chunks + MADV_DONTNEED.
+// [anon:dalvik-DEX] regions are MAP_PRIVATE|MAP_ANONYMOUS — ART itself calls
+// mprotect() on them (proven in AOSP mem_map.cc).  Our process can always
+// call mprotect(PROT_WRITE) on its own anonymous pages: no SELinux restriction
+// applies to mprotect, and no memfd sealing is used for InMemoryDexClassLoader.
 //
-// Total cost per 1 ms tick with N cached regions:
-// dalvik regions  -> 2 pwrite64 syscalls each (~2 uss)
-// non-dalvik      -> (size/64KB) pwrite64 calls + 1 madvise  (~50-200 uss
-// for typical 1-4 MB regions, first time only -- on
-// subsequent ticks the pages are already zeroed so the
-// writes are page-cache no-ops)
-static void fast_poison_known_regions(int wmem_fd)
+// For dalvik-labelled regions  (ART reads during execution):
+//   -> header-only: zero magic[0-7] + endian_tag[40-43] on the first page.
+//      Defeats magic-byte scanners without disturbing ART's bytecode read.
+//
+// For non-dalvik anonymous regions  (original ByteBuffer — ART is done with it):
+//   -> full wipe: mprotect+memset every page, then MADV_DONTNEED to drop
+//      backing pages (subsequent /proc/PID/mem reads return only zeros).
+//
+// Total cost per 100 us tick: ~1-5 us for typical apps (header-only path
+// is just one mprotect+8 byte stores+mprotect per region).
+static void fast_poison_known_regions(void)
 {
-    if (wmem_fd < 0) return;
-
-    static const uint8_t zero_chunk[65536];       // BSS -- guaranteed zero
-
     pthread_mutex_lock(&g_dex_cache_lock);
     int count = g_dex_cache_count;
-        // Copy to a local snapshot so we hold the lock for minimal time.
     dex_region_entry_t snap[MAX_DEX_REGIONS];
     for (int i = 0; i < count; i++) snap[i] = g_dex_cache[i];
     pthread_mutex_unlock(&g_dex_cache_lock);
@@ -180,39 +178,31 @@ static void fast_poison_known_regions(int wmem_fd)
         if (base == 0 || region_size == 0) continue;
 
         if (!is_dalvik && region_size <= (8u * 1024u * 1024u)) {
-                        // Full-region wipe.
-            size_t rem = region_size;
-            off_t  off = (off_t)base;
-            while (rem > 0) {
-                size_t chunk = rem > sizeof(zero_chunk) ? sizeof(zero_chunk) : rem;
-                my_pwrite(wmem_fd, zero_chunk, chunk, off);
-                off += (off_t)chunk;
-                rem -= chunk;
+            // Full-region wipe: mprotect+memset page by page, then drop pages.
+            unsigned long ps   = 4096;
+            unsigned long addr = base & ~(ps - 1);
+            unsigned long end  = (base + region_size + ps - 1) & ~(ps - 1);
+            while (addr < end) {
+                if (my_mprotect((void *)addr, ps, PROT_READ | PROT_WRITE) == 0) {
+                    volatile uint8_t *p = (volatile uint8_t *)addr;
+                    for (unsigned long j = 0; j < ps; j++) p[j] = 0;
+                    my_mprotect((void *)addr, ps, PROT_READ);
+                }
+                addr += ps;
             }
+            // Drop backing pages — reads via /proc/PID/mem now return zeros.
             my_madvise((void *)base, region_size, MADV_DONTNEED);
         } else {
-            // Header-only poison for dalvik (ART active) or oversized regions.
-            // Strategy: mprotect+memset first (direct write, always reliable on
-            // private anonymous pages), then pwrite via /proc/self/mem as fallback.
-            // On Android 16, pwrite may fail silently on sealed ART pages while
-            // mprotect on the process's own anonymous mapping still succeeds.
-            static const uint8_t zeros[44] = {0};
-            long ps = 4096;
-            unsigned long page_start = base & ~((unsigned long)ps - 1);
-            int mprotect_ok = (my_mprotect((void *)page_start, (size_t)ps,
-                                            PROT_READ | PROT_WRITE) == 0);
-            if (mprotect_ok) {
+            // Dalvik region (ART active) or oversized: header-only poison.
+            // Zero just the DEX magic (bytes 0-7) and endian_tag (bytes 40-43)
+            // on the first page. Enough to defeat every magic-byte scanner.
+            unsigned long ps         = 4096;
+            unsigned long page_start = base & ~(ps - 1);
+            if (my_mprotect((void *)page_start, ps, PROT_READ | PROT_WRITE) == 0) {
                 volatile uint8_t *p = (volatile uint8_t *)base;
-                // zero magic (0-7)
                 p[0]=0;p[1]=0;p[2]=0;p[3]=0;p[4]=0;p[5]=0;p[6]=0;p[7]=0;
-                // zero endian_tag (40-43)
                 p[40]=0;p[41]=0;p[42]=0;p[43]=0;
-                my_mprotect((void *)page_start, (size_t)ps, PROT_READ);
-            }
-            // Belt-and-suspenders: also attempt pwrite regardless.
-            if (wmem_fd >= 0) {
-                my_pwrite(wmem_fd, zeros,     8, (off_t)base);
-                my_pwrite(wmem_fd, zeros + 8, 4, (off_t)(base + 40));
+                my_mprotect((void *)page_start, ps, PROT_READ);
             }
         }
     }
@@ -354,18 +344,6 @@ __attribute__((always_inline)) static inline int my_mprotect(void *a, size_t l, 
 __attribute__((always_inline)) static inline int my_madvise(void *a, size_t l, int adv)
     { return (int)raw_syscall_3(__NR_madvise, (long)a, (long)l, adv); }
 
-__attribute__((always_inline)) static inline ssize_t my_pwrite(int fd, const void *b, size_t n, off_t off)
-{
-    register long x8 __asm__("x8") = __NR_pwrite64;
-    register long x0 __asm__("x0") = fd;
-    register long x1 __asm__("x1") = (long)b;
-    register long x2 __asm__("x2") = (long)n;
-    register long x3 __asm__("x3") = (long)off;
-    __asm__ volatile("svc #0\n"
-        : "=r"(x0) : "r"(x8), "0"(x0), "r"(x1), "r"(x2), "r"(x3) : "memory", "cc");
-    return (ssize_t)x0;
-}
-
 #else  // armeabi-v7a -- use libc syscall() wrapper
 
 __attribute__((always_inline)) static inline int my_openat(int d, const char *p, int f, int m)
@@ -394,9 +372,6 @@ __attribute__((always_inline)) static inline int my_mprotect(void *a, size_t l, 
 
 __attribute__((always_inline)) static inline int my_madvise(void *a, size_t l, int adv)
     { return (int)syscall(__NR_madvise, a, l, adv); }
-
-__attribute__((always_inline)) static inline ssize_t my_pwrite(int fd, const void *b, size_t n, off_t off)
-    { return (ssize_t)syscall(__NR_pwrite64, fd, b, n, off); }
 
 #endif  // ABI
 
@@ -898,12 +873,6 @@ static void self_scan_and_poison_dex(void) {
     int rmem_fd = my_openat(AT_FDCWD, "/proc/self/mem", O_RDONLY | O_CLOEXEC, 0);
     if (rmem_fd < 0) { my_close(maps_fd); return; }
 
-        // Open mem read-WRITE for poisoning.
-    // Writing through /proc/self/mem bypasses page-protection entirely --
-    // this is the only reliable way to overwrite ART's [anon:dalvik-DEX]
-    // regions, which are sealed read-only (mprotect returns EPERM on them).
-    int wmem_fd = my_openat(AT_FDCWD, "/proc/self/mem", O_RDWR | O_CLOEXEC, 0);
-
     char line[MAX_LINE];
     while (read_one_line(maps_fd, line, MAX_LINE) > 0) {
         unsigned long start = 0, end = 0;
@@ -964,10 +933,9 @@ static void self_scan_and_poison_dex(void) {
         // Defeats magic-byte scanners (dexhound) without crashing ART.
         //
         // non-dalvik anonymous region  (original ByteBuffer -- ART is done)
-        // -> FULL WIPE: zero the entire region via pwrite in 64 KB chunks.
-        // -> madvise(MADV_DONTNEED): drop all backing pages so that even
-        // a direct /proc/PID/mem pread returns only zeros -- no header,
-        // no bytecode, nothing reconstructable.
+        // -> FULL WIPE: mprotect+memset every page, then madvise(MADV_DONTNEED)
+        // to drop backing pages so even a direct /proc/PID/mem read returns
+        // only zeros -- no header, no bytecode, nothing reconstructable.
         //
         // Register into g_dex_cache regardless of poison path so that
         // fast_poison_known_regions() keeps hitting this address every 1 ms
@@ -978,55 +946,39 @@ static void self_scan_and_poison_dex(void) {
         cache_add_region_locked(start, region_size, is_dalvik);
         pthread_mutex_unlock(&g_dex_cache_lock);
 
-        if (wmem_fd >= 0) {
-            if (!is_dalvik && region_size <= (8u * 1024u * 1024u)) {
-                                // Full-region wipe in 64 KB chunks via pwrite (no seek races).
-                static const uint8_t zero_chunk[65536];                  // BSS -- guaranteed zero
-                size_t rem = region_size;
-                off_t  off = (off_t)start;
-                while (rem > 0) {
-                    size_t chunk = rem > sizeof(zero_chunk) ? sizeof(zero_chunk) : rem;
-                    my_pwrite(wmem_fd, zero_chunk, chunk, off);
-                    off += (off_t)chunk;
-                    rem -= chunk;
+        if (!is_dalvik && region_size <= (8u * 1024u * 1024u)) {
+            // Non-dalvik anonymous region (original ByteBuffer — ART is done).
+            // Full wipe: mprotect+memset every page, then drop backing pages.
+            unsigned long ps   = 4096;
+            unsigned long addr = start & ~(ps - 1);
+            unsigned long end  = (start + region_size + ps - 1) & ~(ps - 1);
+            while (addr < end) {
+                if (my_mprotect((void *)addr, ps, PROT_READ | PROT_WRITE) == 0) {
+                    volatile uint8_t *p = (volatile uint8_t *)addr;
+                    for (unsigned long j = 0; j < ps; j++) p[j] = 0;
+                    my_mprotect((void *)addr, ps, PROT_READ);
                 }
-                                // Drop backing pages -- reads via /proc/PID/mem now return zeros.
-                my_madvise((void *)start, region_size, MADV_DONTNEED);
-            } else {
-                // Dalvik region (ART active) or oversized: header-only poison.
-                // Primary: mprotect + direct memset — reliable on private anonymous
-                // pages on Android 16 where pwrite(/proc/self/mem) silently fails.
-                // Fallback: pwrite via /proc/self/mem and lseek+write.
-                static const uint8_t zeros[44] = {0};
-                unsigned long ps = 4096;
-                unsigned long page_start = start & ~(ps - 1);
-                int orig_prot = PROT_READ;
-                if (perm[1] == 'w') orig_prot |= PROT_WRITE;
-                if (perm[2] == 'x') orig_prot |= PROT_EXEC;
-
-                int mp_ok = (my_mprotect((void *)page_start, ps,
-                                          PROT_READ | PROT_WRITE) == 0);
-                if (mp_ok) {
-                    volatile uint8_t *ptr = (volatile uint8_t *)start;
-                    ptr[0]=0;ptr[1]=0;ptr[2]=0;ptr[3]=0;
-                    ptr[4]=0;ptr[5]=0;ptr[6]=0;ptr[7]=0;
-                    ptr[40]=0;ptr[41]=0;ptr[42]=0;ptr[43]=0;
-                    my_mprotect((void *)page_start, ps, orig_prot);
-                }
-                // Belt-and-suspenders: also attempt pwrite.
-                if (wmem_fd >= 0) {
-                    my_lseek(wmem_fd, (off_t)start, SEEK_SET);
-                    my_write(wmem_fd, zeros, 8);
-                    my_lseek(wmem_fd, (off_t)(start + 40), SEEK_SET);
-                    my_write(wmem_fd, zeros, 4);
-                    my_pwrite(wmem_fd, zeros,     8, (off_t)start);
-                    my_pwrite(wmem_fd, zeros + 8, 4, (off_t)(start + 40));
-                }
+                addr += ps;
+            }
+            my_madvise((void *)start, region_size, MADV_DONTNEED);
+        } else {
+            // Dalvik region (ART active) or oversized: header-only poison.
+            // Zero magic[0-7] + endian_tag[40-43] via mprotect+direct write.
+            unsigned long ps         = 4096;
+            unsigned long page_start = start & ~(ps - 1);
+            int orig_prot = PROT_READ;
+            if (perm[1] == 'w') orig_prot |= PROT_WRITE;
+            if (perm[2] == 'x') orig_prot |= PROT_EXEC;
+            if (my_mprotect((void *)page_start, ps, PROT_READ | PROT_WRITE) == 0) {
+                volatile uint8_t *ptr = (volatile uint8_t *)start;
+                ptr[0]=0;ptr[1]=0;ptr[2]=0;ptr[3]=0;
+                ptr[4]=0;ptr[5]=0;ptr[6]=0;ptr[7]=0;
+                ptr[40]=0;ptr[41]=0;ptr[42]=0;ptr[43]=0;
+                my_mprotect((void *)page_start, ps, orig_prot);
             }
         }
     }
 
-    if (wmem_fd >= 0) my_close(wmem_fd);
     my_close(rmem_fd);
     my_close(maps_fd);
 }
@@ -1034,16 +986,12 @@ static void self_scan_and_poison_dex(void) {
 // ?
 // poison_loop -- two-tier cadence
 //
-// TIER 1 (1 ms)  fast_poison_known_regions()
-// Hits every cached DEX base address with a pwrite of zeros -- no maps I/O,
-// no readdir, just a handful of pwrite64 syscalls.  Total cost per tick:
-// ~2-10 uss for typical apps (2-8 cached regions x 2 pwrite64 calls each).
-// This shrinks the valid-DEX window from 50 ms -> 1 ms: the dumper must
-// complete its entire /proc/PID/mem seek+read in the single-millisecond
-// gap between consecutive fast-poison ticks -- in practice it cannot.
-//
-// The writable /proc/self/mem fd is opened ONCE and kept alive for the
-// lifetime of this thread (no open/close overhead per tick).
+// TIER 1 (100 us)  fast_poison_known_regions()
+// Hits every cached DEX base address with mprotect+memset -- no maps I/O,
+// no readdir, just mprotect syscalls + direct byte stores.  Total cost per
+// tick: ~1-5 us for typical apps (header-only path per region).
+// This shrinks the valid-DEX window from 50 ms -> 100 us: the dumper must
+// complete its entire /proc/PID/mem seek+read inside that window -- it cannot.
 //
 // TIER 2 (500 ms)  self_scan_and_poison_dex()
 // Full /proc/self/maps re-scan.  Discovers newly-loaded DEX regions (e.g.
@@ -1059,17 +1007,13 @@ static void self_scan_and_poison_dex(void) {
 static void *poison_loop(void *arg) {
     (void)arg;
 
-        // Keep /proc/self/mem open for the life of this thread.
-    int wmem_fd = my_openat(AT_FDCWD, "/proc/self/mem", O_RDWR | O_CLOEXEC, 0);
-
-        // 100 us fast-tick (was 1 ms) -- shrinks the valid-DEX window 10x.
     struct timespec fast_tick = { 0, 100000L };        // 100 us
 
     // Run a full maps refresh every 5000 ticks (= 500 ms).
     int refresh_counter = 0;
 
     while (1) {
-        fast_poison_known_regions(wmem_fd);
+        fast_poison_known_regions();
 
         if (++refresh_counter >= 5000) {
             refresh_counter = 0;
@@ -1183,8 +1127,8 @@ static void *detect_frida_loop(void *args) {
 // Constructor -- runs immediately on System.load(libphantom.so)
 //
 // Three independent threads launched:
-// poison_loop       -- fast_poison every 1 ms + full maps refresh every 500 ms
-// Tier-1 cost: ~2-10 uss/tick (pwrite only, no maps I/O).
+// poison_loop       -- fast_poison every 100 us + full maps refresh every 500 ms
+// Tier-1 cost: ~1-5 us/tick (mprotect+memset, no maps I/O).
 // Tier-2 cost: full /proc/self/maps scan rebuilds the
 // DEX region cache and performs a belt-and-suspenders
 // full poison pass.

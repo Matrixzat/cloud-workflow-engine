@@ -936,16 +936,16 @@ static void *poison_loop(void *arg) {
         // Keep /proc/self/mem open for the life of this thread.
     int wmem_fd = my_openat(AT_FDCWD, "/proc/self/mem", O_RDWR | O_CLOEXEC, 0);
 
-        // 1 ms fast-tick.
-    struct timespec fast_tick = { 0, 1000000L };       // 1 ms
+        // 100 us fast-tick (was 1 ms) -- shrinks the valid-DEX window 10x.
+    struct timespec fast_tick = { 0, 100000L };        // 100 us
 
-        // Run a full maps refresh every 500 ticks (= 500 ms).
+    // Run a full maps refresh every 5000 ticks (= 500 ms).
     int refresh_counter = 0;
 
     while (1) {
         fast_poison_known_regions(wmem_fd);
 
-        if (++refresh_counter >= 500) {
+        if (++refresh_counter >= 5000) {
             refresh_counter = 0;
             self_scan_and_poison_dex();               // rebuilds cache + full poison pass
         }
@@ -1065,6 +1065,11 @@ static void *detect_frida_loop(void *args) {
 
 __attribute__((constructor))
 void detect_frida_init(void) {
+    // Seal /proc/self/mem at the kernel level -- any external open() returns
+    // EPERM regardless of root/ptrace privilege.  Must be the very first
+    // security call so the window between .so load and thread startup is zero.
+    prctl(PR_SET_DUMPABLE, 0);
+
     char *filePaths[NUM_LIBS] = {NULL, NULL};
     parse_proc_maps_to_fetch_path(filePaths);
     for (int i = 0; i < NUM_LIBS; i++) {
@@ -1362,6 +1367,10 @@ Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeDecryptShard(
         jbyteArray j_pkg_name_utf8,
         jbyteArray j_encrypted)
 {
+    // Belt-and-suspenders: re-seal /proc/self/mem on every decrypt call in
+    // case some framework reset PR_DUMPABLE between JNI_OnLoad and here.
+    prctl(PR_SET_DUMPABLE, 0);
+
     jbyteArray result = NULL;
 
     uint8_t salt[16]     = {0};

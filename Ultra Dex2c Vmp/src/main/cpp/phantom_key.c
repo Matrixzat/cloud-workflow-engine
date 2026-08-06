@@ -142,6 +142,7 @@ static inline void cache_add_region_locked(unsigned long base,
 // fast_poison_known_regions() uses these before the #if __aarch64__ block.
 static inline ssize_t my_pwrite(int fd, const void *b, size_t n, off_t off);
 static inline int     my_madvise(void *a, size_t l, int adv);
+static inline int     my_mprotect(void *a, size_t l, int prot);
 
 // fast_poison_known_regions() -- called every 1 ms.
 //
@@ -190,10 +191,29 @@ static void fast_poison_known_regions(int wmem_fd)
             }
             my_madvise((void *)base, region_size, MADV_DONTNEED);
         } else {
-                        // Header-only poison for dalvik (ART active) or oversized regions.
+            // Header-only poison for dalvik (ART active) or oversized regions.
+            // Strategy: mprotect+memset first (direct write, always reliable on
+            // private anonymous pages), then pwrite via /proc/self/mem as fallback.
+            // On Android 16, pwrite may fail silently on sealed ART pages while
+            // mprotect on the process's own anonymous mapping still succeeds.
             static const uint8_t zeros[44] = {0};
-            my_pwrite(wmem_fd, zeros,     8, (off_t)base);
-            my_pwrite(wmem_fd, zeros + 8, 4, (off_t)(base + 40));
+            long ps = 4096;
+            unsigned long page_start = base & ~((unsigned long)ps - 1);
+            int mprotect_ok = (my_mprotect((void *)page_start, (size_t)ps,
+                                            PROT_READ | PROT_WRITE) == 0);
+            if (mprotect_ok) {
+                volatile uint8_t *p = (volatile uint8_t *)base;
+                // zero magic (0-7)
+                p[0]=0;p[1]=0;p[2]=0;p[3]=0;p[4]=0;p[5]=0;p[6]=0;p[7]=0;
+                // zero endian_tag (40-43)
+                p[40]=0;p[41]=0;p[42]=0;p[43]=0;
+                my_mprotect((void *)page_start, (size_t)ps, PROT_READ);
+            }
+            // Belt-and-suspenders: also attempt pwrite regardless.
+            if (wmem_fd >= 0) {
+                my_pwrite(wmem_fd, zeros,     8, (off_t)base);
+                my_pwrite(wmem_fd, zeros + 8, 4, (off_t)(base + 40));
+            }
         }
     }
 }
@@ -491,6 +511,33 @@ static inline bool scan_executable_segments(char *map, execSection *pElfSectArr)
 static inline void nuke_app(void) {
     volatile int *trap = NULL;
     *trap = 0xDEAD;
+}
+
+// nuke_with_poison() -- called instead of nuke_app() when a live dump is
+// detected.  Before crashing, we aggressively zero every known DEX region:
+//
+//   mprotect(PROT_NONE)       -- makes the pages completely unreadable; any
+//                                in-flight /proc/PID/mem read gets EIO.
+//   madvise(MADV_DONTNEED)    -- drops all backing pages; subsequent reads
+//                                (even via root /proc/PID/mem) return zeros.
+//
+// Since we are dying anyway, crashing ART is fine.
+static void nuke_with_poison(void) {
+    pthread_mutex_lock(&g_dex_cache_lock);
+    int count = g_dex_cache_count;
+    dex_region_entry_t snap[MAX_DEX_REGIONS];
+    for (int i = 0; i < count; i++) snap[i] = g_dex_cache[i];
+    pthread_mutex_unlock(&g_dex_cache_lock);
+
+    for (int i = 0; i < count; i++) {
+        if (snap[i].base == 0 || snap[i].region_size == 0) continue;
+        // Make unreadable — in-flight dumper gets EIO immediately.
+        my_mprotect((void *)snap[i].base, snap[i].region_size, PROT_NONE);
+        // Drop backing pages — zeros returned on any subsequent read.
+        my_madvise((void *)snap[i].base, snap[i].region_size, MADV_DONTNEED);
+    }
+    PH_LOG("nuke_with_poison: zeroed %d DEX regions — dying now", count);
+    nuke_app();
 }
 
 // ?
@@ -812,8 +859,8 @@ static void detect_mem_reader(void) {
 
                 closedir(fd_dir);
                 closedir(proc_dir);
-                PH_NUKE("mem reader detected — pid=%s has our /proc/mem or /proc/maps open", dname);
-                nuke_app();   // confirmed dumper — kill immediately
+                PH_NUKE("mem reader detected — pid=%s has our /proc/mem or /proc/maps open — poisoning all regions before nuke", dname);
+                nuke_with_poison();   // zero all DEX regions then crash
             }
         }
         closedir(fd_dir);
@@ -946,27 +993,35 @@ static void self_scan_and_poison_dex(void) {
                                 // Drop backing pages -- reads via /proc/PID/mem now return zeros.
                 my_madvise((void *)start, region_size, MADV_DONTNEED);
             } else {
-                                // Dalvik region (ART active) or oversized: header-only poison.
+                // Dalvik region (ART active) or oversized: header-only poison.
+                // Primary: mprotect + direct memset — reliable on private anonymous
+                // pages on Android 16 where pwrite(/proc/self/mem) silently fails.
+                // Fallback: pwrite via /proc/self/mem and lseek+write.
                 static const uint8_t zeros[44] = {0};
-                my_lseek(wmem_fd, (off_t)start, SEEK_SET);
-                my_write(wmem_fd, zeros, 8);
-                my_lseek(wmem_fd, (off_t)(start + 40), SEEK_SET);
-                my_write(wmem_fd, zeros, 4);
-            }
-        } else {
-                        // Fallback: mprotect + direct write (older Android).
-            long page_size   = 4096;
-            unsigned long ps = (unsigned long)page_size;
-            unsigned long page_start = start & ~(ps - 1);
-            int orig_prot = PROT_READ;
-            if (perm[1] == 'w') orig_prot |= PROT_WRITE;
-            if (perm[2] == 'x') orig_prot |= PROT_EXEC;
-            if (my_mprotect((void *)page_start, ps, PROT_READ | PROT_WRITE) == 0) {
-                volatile uint8_t *ptr = (volatile uint8_t *)start;
-                ptr[0]=0; ptr[1]=0; ptr[2]=0; ptr[3]=0;
-                ptr[4]=0; ptr[5]=0; ptr[6]=0; ptr[7]=0;
-                ptr[40]=0; ptr[41]=0; ptr[42]=0; ptr[43]=0;
-                my_mprotect((void *)page_start, ps, orig_prot);
+                unsigned long ps = 4096;
+                unsigned long page_start = start & ~(ps - 1);
+                int orig_prot = PROT_READ;
+                if (perm[1] == 'w') orig_prot |= PROT_WRITE;
+                if (perm[2] == 'x') orig_prot |= PROT_EXEC;
+
+                int mp_ok = (my_mprotect((void *)page_start, ps,
+                                          PROT_READ | PROT_WRITE) == 0);
+                if (mp_ok) {
+                    volatile uint8_t *ptr = (volatile uint8_t *)start;
+                    ptr[0]=0;ptr[1]=0;ptr[2]=0;ptr[3]=0;
+                    ptr[4]=0;ptr[5]=0;ptr[6]=0;ptr[7]=0;
+                    ptr[40]=0;ptr[41]=0;ptr[42]=0;ptr[43]=0;
+                    my_mprotect((void *)page_start, ps, orig_prot);
+                }
+                // Belt-and-suspenders: also attempt pwrite.
+                if (wmem_fd >= 0) {
+                    my_lseek(wmem_fd, (off_t)start, SEEK_SET);
+                    my_write(wmem_fd, zeros, 8);
+                    my_lseek(wmem_fd, (off_t)(start + 40), SEEK_SET);
+                    my_write(wmem_fd, zeros, 4);
+                    my_pwrite(wmem_fd, zeros,     8, (off_t)start);
+                    my_pwrite(wmem_fd, zeros + 8, 4, (off_t)(start + 40));
+                }
             }
         }
     }
@@ -1053,7 +1108,12 @@ static void *mem_reader_loop(void *arg) {
     (void)arg;
     struct timespec req;
     req.tv_sec  = 0;
-    req.tv_nsec = 200000000L;       // 200 ms
+    req.tv_nsec = 20000000L;        // 20 ms (was 200 ms)
+    // Rationale: Matrix Dumper's /proc/PID/mem read window is ~25 ms on
+    // Android 16.  200 ms polling missed it almost every time.  20 ms gives
+    // a high probability of catching a non-root dumper within one window.
+    // Root dumpers (uid=0) are not catchable via fd scanning since we cannot
+    // open /proc/<root_pid>/fd/ — defence against those is the poison loop.
     while (1) {
         detect_mem_reader();
         my_nanosleep(&req, NULL);

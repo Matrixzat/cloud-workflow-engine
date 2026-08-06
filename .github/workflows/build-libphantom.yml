@@ -232,6 +232,7 @@ jobs:
             global:
               Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeDecryptShard;
               Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeWipeShard;
+              Java_com_ultra_dex2cvmp_utils_DexCrypto_nativePoisonNow;
             local: *;
           };
           EOF

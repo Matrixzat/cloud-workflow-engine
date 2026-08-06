@@ -121,6 +121,15 @@ static dex_region_entry_t g_dex_cache[MAX_DEX_REGIONS];
 static volatile int       g_dex_cache_count = 0;
 static pthread_mutex_t    g_dex_cache_lock  = PTHREAD_MUTEX_INITIALIZER;
 
+// Persistent fds opened at startup BEFORE inotify is armed.
+// Declared here (before any function that references them) because OLLVM's
+// clang enforces declaration-before-use order for file-scope statics.
+// detect_frida_memdiskcompare(), detect_riru_zygisk(), and
+// self_scan_and_poison_dex() all use these — never re-opening the paths so
+// our own reads never fire the inotify IN_OPEN watch.
+static int g_rmem_fd = -1;   // /proc/self/mem  O_RDONLY
+static int g_maps_fd = -1;   // /proc/self/maps O_RDONLY
+
 // Called from within self_scan_and_poison_dex() while rebuilding the cache.
 // NOT thread-safe by itself -- caller holds g_dex_cache_lock.
 static inline void cache_add_region_locked(unsigned long base,
@@ -974,12 +983,6 @@ static inline void detect_frida_namedpipe(void) {
 //   IN_OPEN.  self_scan_and_poison_dex() uses these globals — it never
 //   calls open() on those paths again, so our own internal scans are silent.
 // ─────────────────────────────────────────────────────────────────────────────
-
-// Persistent fds opened at startup before inotify is armed.
-// self_scan_and_poison_dex uses these so it never re-opens /proc/self/mem
-// or /proc/self/maps (which would trigger our own inotify watch).
-static int g_rmem_fd      = -1;   // /proc/self/mem  O_RDONLY
-static int g_maps_fd      = -1;   // /proc/self/maps O_RDONLY
 
 // Buffer sized to hold 1024 events — matches darvincisec's EVENT_BUF_LEN.
 #define INOTIFY_EVENT_SIZE  (sizeof(struct inotify_event))

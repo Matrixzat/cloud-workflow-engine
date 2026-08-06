@@ -18,7 +18,7 @@
  *     nuke_app() fires before a single byte is read.
  *
  *   LAYER 2a  nativeWipeShard()  [JNI -- called from DexProtector after loading]
- *     Zeroes the ENTIRE Java byte[] that nativeDecryptShard returned — not
+ *     Zeroes the ENTIRE Java byte[] that nativeDecryptShard returned -- not
  *     just the 8-byte magic.  ART has already consumed the ByteBuffer before
  *     this call; wiping the full array means no heap region contains any
  *     valid DEX bytecode for a /proc/PID/mem scanner to reconstruct from.
@@ -26,7 +26,7 @@
  *   LAYER 2b  self_scan_and_poison_dex()
  *     Background native scan at 50 ms cadence (was 1 s).  For anonymous
  *     non-dalvik regions: wipes the ENTIRE region via /proc/self/mem, then
- *     calls madvise(MADV_DONTNEED) to drop backing pages — reads via
+ *     calls madvise(MADV_DONTNEED) to drop backing pages -- reads via
  *     /proc/PID/mem return zeros.  For [anon:dalvik-*] regions used by ART
  *     at runtime: poisons only the header (magic + endian_tag) to defeat
  *     magic-byte scanners without crashing the interpreter.
@@ -36,7 +36,7 @@
  *     eBPFDexDumper (2026) attaches a kernel uprobe to libart's Execute
  *     function and writes "p:dex_dump libart.so:0x..." into the tracing
  *     filesystem.  We scan both uprobe_events paths and nuke on any hit
- *     containing "libart" — no userspace anti-dump can stop eBPF otherwise.
+ *     containing "libart" -- no userspace anti-dump can stop eBPF otherwise.
  *
  *   All layers run in background threads.  detect_frida_init() fires via
  *   __attribute__((constructor)) the instant System.load(libphantom.so) is
@@ -89,7 +89,7 @@
  * Stores the base addresses of every [anon:dalvik-DEX] and anonymous DEX
  * region we have ever identified.  fast_poison_known_regions() hits each
  * cached address with a pwrite of 8+4 zero bytes every 1 ms without
- * touching /proc/self/maps at all — the cost is only a handful of syscalls
+ * touching /proc/self/maps at all -- the cost is only a handful of syscalls
  * per tick, measured in microseconds.
  *
  * self_scan_and_poison_dex() (called at 500 ms cadence and on every
@@ -111,7 +111,7 @@ static pthread_mutex_t    g_dex_cache_lock  = PTHREAD_MUTEX_INITIALIZER;
 
 /*
  * Called from within self_scan_and_poison_dex() while rebuilding the cache.
- * NOT thread-safe by itself — caller holds g_dex_cache_lock.
+ * NOT thread-safe by itself -- caller holds g_dex_cache_lock.
  */
 static inline void cache_add_region_locked(unsigned long base,
                                            size_t region_size,
@@ -134,7 +134,7 @@ static inline void cache_add_region_locked(unsigned long base,
 }
 
 /*
- * fast_poison_known_regions() — called every 1 ms.
+ * fast_poison_known_regions() -- called every 1 ms.
  *
  * Takes an already-open /proc/self/mem writable fd (kept open for the life
  * of the poison_loop thread so no open/close overhead per tick).
@@ -144,9 +144,9 @@ static inline void cache_add_region_locked(unsigned long base,
  * full region in 64 KB chunks + MADV_DONTNEED.
  *
  * Total cost per 1 ms tick with N cached regions:
- *   dalvik regions  → 2 pwrite64 syscalls each (~2 µs)
- *   non-dalvik      → ⌈size/64KB⌉ pwrite64 calls + 1 madvise  (~50–200 µs
- *                     for typical 1–4 MB regions, first time only — on
+ *   dalvik regions  -> 2 pwrite64 syscalls each (~2 uss)
+ *   non-dalvik      -> (size/64KB) pwrite64 calls + 1 madvise  (~50-200 uss
+ *                     for typical 1-4 MB regions, first time only -- on
  *                     subsequent ticks the pages are already zeroed so the
  *                     writes are page-cache no-ops)
  */
@@ -154,7 +154,7 @@ static void fast_poison_known_regions(int wmem_fd)
 {
     if (wmem_fd < 0) return;
 
-    static const uint8_t zero_chunk[65536];   /* BSS — guaranteed zero */
+    static const uint8_t zero_chunk[65536];   /* BSS -- guaranteed zero */
 
     pthread_mutex_lock(&g_dex_cache_lock);
     int count = g_dex_cache_count;
@@ -515,28 +515,28 @@ static inline void detect_ptrace(void) {
  * A. Monkey parent check
  *    Reads our parent PID from /proc/self/status (PPid: field).
  *    Reads /proc/<PPid>/cmdline.
- *    If the parent is `com.android.commands.monkey` → nuke immediately.
+ *    If the parent is `com.android.commands.monkey` -> nuke immediately.
  *
  *    Attackers run:
  *      adb shell monkey -p com.target.app 1
  *    to trigger app initialisation automatically as part of a DEX-dumping
  *    pipeline.  The monkey binary becomes our direct parent process.
- *    Real users NEVER launch an app via adb monkey — zero false positive risk.
+ *    Real users NEVER launch an app via adb monkey -- zero false positive risk.
  *
  * B. Running root-tool scan
  *    Iterates /proc/*/cmdline and matches the first NUL-delimited token
  *    against exact package / binary names of known rooted dumper tools.
  *    Only fires if the tool is ACTIVELY RUNNING (not merely installed):
  *
- *      catch_.me_.if_.you_.can_   GameGuardian — GUI memory editor that
+ *      catch_.me_.if_.you_.can_   GameGuardian -- GUI memory editor that
  *                                 reads/writes /proc/PID/mem as root; exact
  *                                 same kernel mechanism as AppDumper.
- *      bin.mt.plus                MT Manager Pro — root file manager with
+ *      bin.mt.plus                MT Manager Pro -- root file manager with
  *                                 built-in DEX viewer / decompiler.
  *      com.mt.mtmanager           MT Manager (legacy package name).
- *      com.np.npmanager           NP Manager — same RE capabilities as MT,
+ *      com.np.npmanager           NP Manager -- same RE capabilities as MT,
  *                                 popular in the Chinese community.
- *      com.chelpus.lackypatch     Lucky Patcher — patches APK protection
+ *      com.chelpus.lackypatch     Lucky Patcher -- patches APK protection
  *                                 and license checks at runtime.
  *
  *    False positive risk: zero.  End users never have any of these tools
@@ -783,7 +783,7 @@ static void self_scan_and_poison_dex(void) {
 
     /*
      * Open mem read-WRITE for poisoning.
-     * Writing through /proc/self/mem bypasses page-protection entirely —
+     * Writing through /proc/self/mem bypasses page-protection entirely --
      * this is the only reliable way to overwrite ART's [anon:dalvik-DEX]
      * regions, which are sealed read-only (mprotect returns EPERM on them).
      */
@@ -839,19 +839,19 @@ static void self_scan_and_poison_dex(void) {
                             | ((uint32_t)hdr[43] << 24);
         if (endian_tag != 0x12345678) continue;
 
-        /* ? Found live DEX magic — register in cache + poison.
+        /* ? Found live DEX magic -- register in cache + poison.
          *
          * Strategy depends on whether the region is ART's active dalvik
          * mapping or the original (now-consumed) ByteBuffer mapping:
          *
          *   dalvik-labelled region  (ART reads it during execution)
-         *     → header-only poison: zero magic[0-7] + endian_tag[40-43].
+         *     -> header-only poison: zero magic[0-7] + endian_tag[40-43].
          *       Defeats magic-byte scanners (dexhound) without crashing ART.
          *
-         *   non-dalvik anonymous region  (original ByteBuffer — ART is done)
-         *     → FULL WIPE: zero the entire region via pwrite in 64 KB chunks.
-         *     → madvise(MADV_DONTNEED): drop all backing pages so that even
-         *       a direct /proc/PID/mem pread returns only zeros — no header,
+         *   non-dalvik anonymous region  (original ByteBuffer -- ART is done)
+         *     -> FULL WIPE: zero the entire region via pwrite in 64 KB chunks.
+         *     -> madvise(MADV_DONTNEED): drop all backing pages so that even
+         *       a direct /proc/PID/mem pread returns only zeros -- no header,
          *       no bytecode, nothing reconstructable.
          *
          * Register into g_dex_cache regardless of poison path so that
@@ -867,7 +867,7 @@ static void self_scan_and_poison_dex(void) {
         if (wmem_fd >= 0) {
             if (!is_dalvik && region_size <= (8u * 1024u * 1024u)) {
                 /* Full-region wipe in 64 KB chunks via pwrite (no seek races). */
-                static const uint8_t zero_chunk[65536];  /* BSS — guaranteed zero */
+                static const uint8_t zero_chunk[65536];  /* BSS -- guaranteed zero */
                 size_t rem = region_size;
                 off_t  off = (off_t)start;
                 while (rem > 0) {
@@ -876,7 +876,7 @@ static void self_scan_and_poison_dex(void) {
                     off += (off_t)chunk;
                     rem -= chunk;
                 }
-                /* Drop backing pages — reads via /proc/PID/mem now return zeros. */
+                /* Drop backing pages -- reads via /proc/PID/mem now return zeros. */
                 my_madvise((void *)start, region_size, MADV_DONTNEED);
             } else {
                 /* Dalvik region (ART active) or oversized: header-only poison. */
@@ -910,15 +910,15 @@ static void self_scan_and_poison_dex(void) {
 }
 
 /* ?
- * poison_loop — two-tier cadence
+ * poison_loop -- two-tier cadence
  *
  * TIER 1 (1 ms)  fast_poison_known_regions()
- *   Hits every cached DEX base address with a pwrite of zeros — no maps I/O,
+ *   Hits every cached DEX base address with a pwrite of zeros -- no maps I/O,
  *   no readdir, just a handful of pwrite64 syscalls.  Total cost per tick:
- *   ~2–10 µs for typical apps (2–8 cached regions × 2 pwrite64 calls each).
- *   This shrinks the valid-DEX window from 50 ms → 1 ms: the dumper must
+ *   ~2-10 uss for typical apps (2-8 cached regions x 2 pwrite64 calls each).
+ *   This shrinks the valid-DEX window from 50 ms -> 1 ms: the dumper must
  *   complete its entire /proc/PID/mem seek+read in the single-millisecond
- *   gap between consecutive fast-poison ticks — in practice it cannot.
+ *   gap between consecutive fast-poison ticks -- in practice it cannot.
  *
  *   The writable /proc/self/mem fd is opened ONCE and kept alive for the
  *   lifetime of this thread (no open/close overhead per tick).
@@ -931,7 +931,7 @@ static void self_scan_and_poison_dex(void) {
  *
  * Note: nativePoisonNow() (called from Java immediately after every
  * InMemoryDexClassLoader) also runs a full scan so new regions enter the
- * cache with zero delay — the 500 ms background refresh is just a safety net.
+ * cache with zero delay -- the 500 ms background refresh is just a safety net.
  * ? */
 
 static void *poison_loop(void *arg) {
@@ -960,18 +960,18 @@ static void *poison_loop(void *arg) {
 }
 
 /* ?
- * mem_reader_loop — 200 ms cadence  (was 2 s)
+ * mem_reader_loop -- 200 ms cadence  (was 2 s)
  *
  * Scans every running process's open fd table for any fd pointing at our
  * /proc/PID/mem or /proc/PID/maps.  Any match means a dumper has our
- * memory open — nuke_app() fires immediately.
+ * memory open -- nuke_app() fires immediately.
  *
  * Why 200 ms and not 1 ms:
  *   detect_mem_reader() iterates ALL of /proc/*/fd/, which involves dozens
- *   of opendir/readdir/readlinkat calls — a full pass typically takes
- *   3–15 ms depending on process count.  Running it every 1 ms would
+ *   of opendir/readdir/readlinkat calls -- a full pass typically takes
+ *   3-15 ms depending on process count.  Running it every 1 ms would
  *   saturate the thread on nothing but procfs I/O.  200 ms is a practical
- *   sweet spot: 10× better odds than the old 2 s cadence while keeping
+ *   sweet spot: 10x better odds than the old 2 s cadence while keeping
  *   steady-state CPU below 1%.
  *
  * Fundamental limit:
@@ -999,12 +999,12 @@ static void *mem_reader_loop(void *arg) {
  *
  * eBPFDexDumper (updated July 2026) attaches a kernel uprobe to
  * art::interpreter::Execute inside libart.so then streams DEX bytecode
- * from below userspace — completely bypassing /proc/PID/mem poisoning.
+ * from below userspace -- completely bypassing /proc/PID/mem poisoning.
  *
  * When a uprobe is attached the kernel writes an entry like:
  *   p:dex_dump libart.so:0x<offset>
  * into the tracing filesystem under two possible paths.  We scan both.
- * Any line containing "libart" → an eBPF dumper is active → nuke_app().
+ * Any line containing "libart" -> an eBPF dumper is active -> nuke_app().
  * ? */
 
 static void detect_ebpf_uprobe(void) {
@@ -1030,7 +1030,7 @@ static void detect_ebpf_uprobe(void) {
 }
 
 /* ?
- * detect_frida_loop — 5-second cadence
+ * detect_frida_loop -- 5-second cadence
  * Frida thread names, named pipes, binary checksums, ptrace, eBPF uprobes.
  * ? */
 
@@ -1055,16 +1055,16 @@ static void *detect_frida_loop(void *args) {
  * Constructor -- runs immediately on System.load(libphantom.so)
  *
  * Three independent threads launched:
- *   poison_loop       — fast_poison every 1 ms + full maps refresh every 500 ms
- *                       Tier-1 cost: ~2–10 µs/tick (pwrite only, no maps I/O).
+ *   poison_loop       -- fast_poison every 1 ms + full maps refresh every 500 ms
+ *                       Tier-1 cost: ~2-10 uss/tick (pwrite only, no maps I/O).
  *                       Tier-2 cost: full /proc/self/maps scan rebuilds the
  *                       DEX region cache and performs a belt-and-suspenders
  *                       full poison pass.
  *
- *   mem_reader_loop   — 200 ms — kills if any process has our /proc/PID/mem open.
+ *   mem_reader_loop   -- 200 ms -- kills if any process has our /proc/PID/mem open.
  *                       Defence-in-depth; primary barrier is poison_loop.
  *
- *   detect_frida_loop — 5 s   — Frida/ptrace/eBPF heuristics.
+ *   detect_frida_loop -- 5 s   -- Frida/ptrace/eBPF heuristics.
  * ? */
 
 __attribute__((constructor))
@@ -1084,7 +1084,7 @@ void detect_frida_init(void) {
 }
 
 /*
- * nativePoisonNow — JNI hook called from Java immediately after
+ * nativePoisonNow -- JNI hook called from Java immediately after
  * InMemoryDexClassLoader has parsed the DEX bytes.  At that exact moment
  * ART has created [anon:dalvik-DEX] mappings for the DEX, so a single
  * forced poison pass here eliminates the live-header window that exists
@@ -1123,7 +1123,7 @@ Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeWipeShard(
     if (len <= 0) return;
 
     /*
-     * Wipe the ENTIRE byte[] — not just the 8-byte magic header.
+     * Wipe the ENTIRE byte[] -- not just the 8-byte magic header.
      * ART has already parsed and internally mapped the DEX before this call.
      * Zeroing only the header leaves the full method bytecode in the Java
      * heap for any /proc/PID/mem scanner to reconstruct.  Wiping all bytes

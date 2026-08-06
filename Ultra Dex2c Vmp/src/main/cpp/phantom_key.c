@@ -725,10 +725,14 @@ static void detect_monkey_and_root_tools(void) {
 }
 
 static inline void detect_frida_memdiskcompare(void) {
-    int fd = my_openat(AT_FDCWD, PROC_MAPS, O_RDONLY | O_CLOEXEC, 0);
-    if (fd < 0) return;
+    // Use the persistent global fd opened at startup rather than opening
+    // a new fd each call.  Opening /proc/self/maps fresh would have fired
+    // IN_OPEN on the inotify watch (self-trigger false positive, confirmed
+    // crash on TECNO CK7n Android 13).  lseek(0) rewinds the file position.
+    if (g_maps_fd < 0) return;
+    my_lseek(g_maps_fd, 0, SEEK_SET);
     char map[MAX_LINE];
-    while ((read_one_line(fd, map, MAX_LINE)) > 0) {
+    while ((read_one_line(g_maps_fd, map, MAX_LINE)) > 0) {
         for (int i = 0; i < NUM_LIBS; i++) {
             if (my_strstr(map, libstocheck[i]) != NULL) {
                 scan_executable_segments(map, elfSectionArr[i]);
@@ -736,7 +740,6 @@ static inline void detect_frida_memdiskcompare(void) {
             }
         }
     }
-    my_close(fd);
 }
 
 // detect_frida_threads — three checks per task, matching darvincisec + NativeShield:
@@ -1007,19 +1010,24 @@ static void *inotify_mem_watcher(void *arg) {
 
         // ── Global proc files ─────────────────────────────────────────────
         // /proc/self/mem — the primary target of every DEX dumper.
-        //   IN_OPEN only (not IN_ACCESS): we have a persistent g_rmem_fd and
-        //   our self-scan reads from it; IN_ACCESS would self-trigger.
+        //   IN_OPEN only: we hold g_rmem_fd open (opened before inotify is
+        //   armed); our self-scan uses that fd and never calls open() again.
         //   External dumpers must call open() first — IN_OPEN catches them.
         wd[wcount++] = my_inotify_add_watch(ifd,
             "/proc/self/mem",     (uint32_t)IN_OPEN);
 
-        // /proc/self/maps — must be read to locate DEX region addresses.
-        //   Same reasoning: we hold g_maps_fd open; external opens fire IN_OPEN.
-        wd[wcount++] = my_inotify_add_watch(ifd,
-            "/proc/self/maps",    (uint32_t)IN_OPEN);
+        // NOTE: /proc/self/maps is intentionally NOT watched.
+        //   detect_frida_memdiskcompare() and detect_riru_zygisk() both read
+        //   maps on every 5-second loop iteration (using g_maps_fd / lseek).
+        //   Watching maps would fire IN_OPEN on our own reads, instantly
+        //   self-triggering a false nuke on clean devices. Confirmed crash on
+        //   TECNO CK7n (Android 13, non-rooted) where the 7ms gap between
+        //   inotify arming and detect_frida_memdiskcompare's openat was enough
+        //   to nuke the app. Maps coverage is provided by detect_riru_zygisk()
+        //   and detect_frida_memdiskcompare() independently.
 
         // /proc/self/pagemap — physical page resolver used by advanced carvers.
-        //   We never open this ourselves, so IN_ACCESS | IN_OPEN is safe here.
+        //   We never open pagemap ourselves, so IN_ACCESS | IN_OPEN is safe.
         wd[wcount++] = my_inotify_add_watch(ifd,
             "/proc/self/pagemap", (uint32_t)(IN_ACCESS | IN_OPEN));
 
@@ -1067,7 +1075,7 @@ static void *inotify_mem_watcher(void *arg) {
                     PH_NUKE("inotify IN_ACCESS — external process read /proc/self/{mem|pagemap} — zeroing all DEX regions");
                     nuke_with_poison();
                 } else if (ev->mask & IN_OPEN) {
-                    PH_NUKE("inotify IN_OPEN — external process opened /proc/self/{mem|maps|pagemap} — zeroing all DEX regions");
+                    PH_NUKE("inotify IN_OPEN — external process opened /proc/self/{mem|pagemap} — zeroing all DEX regions");
                     nuke_with_poison();
                 }
                 // nuke_with_poison() never returns; this line is unreachable
@@ -1349,21 +1357,22 @@ static void detect_riru_zygisk(void) {
     PH_LOG("detect_riru_zygisk: scanning maps + phdr + paths");
 
     // ── 1. /proc/self/maps scan ───────────────────────────────────────────────
+    // Use g_maps_fd (persistent fd opened before inotify arming) — never open
+    // /proc/self/maps fresh here as that would fire IN_OPEN on any future watch.
     {
-        int fd = my_openat(AT_FDCWD, "/proc/self/maps", O_RDONLY | O_CLOEXEC, 0);
-        if (fd >= 0) {
+        if (g_maps_fd >= 0) {
+            my_lseek(g_maps_fd, 0, SEEK_SET);
             char map[MAX_LINE] = "";
-            while (read_one_line(fd, map, MAX_LINE) > 0) {
+            while (read_one_line(g_maps_fd, map, MAX_LINE) > 0) {
                 if (my_strstr(map, HOOK_RIRU)    ||
                     my_strstr(map, HOOK_ZYGISK)  ||
                     my_strstr(map, HOOK_XPOSED)  ||
                     my_strstr(map, HOOK_LSPD)    ||
                     my_strstr(map, HOOK_EDXPOSED)) {
                     PH_NUKE("hooking framework in /proc/self/maps: %s", map);
-                    my_close(fd); nuke_app();
+                    nuke_app();
                 }
             }
-            my_close(fd);
         }
     }
 

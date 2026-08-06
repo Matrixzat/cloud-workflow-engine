@@ -380,6 +380,14 @@ static inline void detect_frida_anonymous_memory(void) {
     if (fd < 0) return;
     while (read_one_line(fd, map, sizeof(map)) > 0) {
         if (my_strstr(map, "r-xp") != NULL) {
+            /* Skip legitimate Android/ART anonymous executable regions —
+             * these are NOT Frida. Flagging them causes false-positive kills
+             * on every device that uses the ART JIT compiler. */
+            if (my_strstr(map, "dalvik")   != NULL) continue;
+            if (my_strstr(map, "anon:art") != NULL) continue;
+            if (my_strstr(map, "anon:scudo") != NULL) continue;
+            if (my_strstr(map, "stack")    != NULL) continue;
+            /* Frida: no file path at all, or backed by a memfd */
             if (my_strstr(map, "/") == NULL || my_strstr(map, "memfd:") != NULL) {
                 my_close(fd); nuke_app();
             }

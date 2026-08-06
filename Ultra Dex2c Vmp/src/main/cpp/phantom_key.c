@@ -1074,13 +1074,23 @@ void detect_frida_init(void) {
     // ── 2. SELinux permissive detection ─────────────────────────────────
     // Dumpers call "setenforce 0" before launching the app so they can
     // open /proc/PID/mem as root even with PR_SET_DUMPABLE=0.
-    // If SELinux is permissive we are on a tampered/rooted environment
-    // that is actively trying to bypass our protections -- nuke now,
-    // before any DEX is decrypted.
+    // If SELinux is permissive we are on a tampered environment --
+    // nuke before any DEX is decrypted.
+    //
+    // Android mounts selinuxfs at TWO possible paths depending on kernel:
+    //   /sys/fs/selinux/enforce          -- Android 5-15, most kernels
+    //   /sys/kernel/security/selinux/enforce -- Android 16 / kernel 6.6+
+    // Check both so every Android version from 5 to 16 is covered.
     {
-        int sefd = my_openat(AT_FDCWD, "/sys/fs/selinux/enforce",
-                             O_RDONLY | O_CLOEXEC, 0);
-        if (sefd >= 0) {
+        static const char * const SELINUX_PATHS[] = {
+            "/sys/fs/selinux/enforce",
+            "/sys/kernel/security/selinux/enforce",
+            NULL
+        };
+        for (int si = 0; SELINUX_PATHS[si] != NULL; si++) {
+            int sefd = my_openat(AT_FDCWD, SELINUX_PATHS[si],
+                                 O_RDONLY | O_CLOEXEC, 0);
+            if (sefd < 0) continue;
             char ebuf[4] = {0};
             my_read(sefd, ebuf, 3);
             my_close(sefd);
@@ -1088,6 +1098,7 @@ void detect_frida_init(void) {
             if (ebuf[0] == '0') {
                 nuke_app();
             }
+            break; // found and checked -- no need to try second path
         }
     }
 

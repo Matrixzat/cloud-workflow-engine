@@ -71,6 +71,8 @@
 #include <sys/syscall.h>
 #include <sys/mman.h>
 #include <sys/inotify.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
 #include <android/log.h>
 #include <zlib.h>
 
@@ -213,6 +215,14 @@ static const char *APPNAME                    = "YahyaVM_AntiFrida";
 static const char *FRIDA_THREAD_GUM_JS_LOOP   = "gum-js-loop";
 static const char *FRIDA_THREAD_GMAIN         = "gmain";
 static const char *FRIDA_NAMEDPIPE_LINJECTOR  = "linjector";
+
+// Frida WebSocket fingerprint (technique from PhuongDoZz/NativeShield).
+// When you send an HTTP WebSocket upgrade with a fixed Sec-WebSocket-Key,
+// the server's Sec-WebSocket-Accept is a deterministic SHA1-based hash.
+// Frida's server ALWAYS responds with this exact base64 token.
+// Key used:    CpxD2C5REVLHvsUC9YAoqg==
+// Accept hash: tyZql/Y8dNFFyopTrHadWzvbvRs=
+static const char *FRIDA_WS_ACCEPT            = "tyZql/Y8dNFFyopTrHadWzvbvRs=";
 static const char *PROC_MAPS                  = "/proc/self/maps";
 static const char *PROC_STATUS                = "/proc/self/task/%s/status";
 static const char *PROC_FD                    = "/proc/self/fd";
@@ -355,6 +365,13 @@ __attribute__((always_inline)) static inline int my_inotify_add_watch(int fd, co
 __attribute__((always_inline)) static inline int my_inotify_rm_watch(int fd, int wd)
     { return (int)raw_syscall_3(__NR_inotify_rm_watch, fd, wd, 0); }
 
+// socket + connect raw syscall wrappers (arm64)
+__attribute__((always_inline)) static inline int my_socket(int domain, int type, int protocol)
+    { return (int)raw_syscall_3(__NR_socket, domain, type, protocol); }
+
+__attribute__((always_inline)) static inline int my_connect(int fd, const struct sockaddr *addr, socklen_t len)
+    { return (int)raw_syscall_3(__NR_connect, fd, (long)addr, (long)len); }
+
 #else  // armeabi-v7a -- use libc syscall() wrapper
 
 __attribute__((always_inline)) static inline int my_openat(int d, const char *p, int f, int m)
@@ -393,6 +410,13 @@ __attribute__((always_inline)) static inline int my_inotify_add_watch(int fd, co
 
 __attribute__((always_inline)) static inline int my_inotify_rm_watch(int fd, int wd)
     { return (int)syscall(__NR_inotify_rm_watch, fd, wd); }
+
+// socket + connect raw syscall wrappers (arm32)
+__attribute__((always_inline)) static inline int my_socket(int domain, int type, int protocol)
+    { return (int)syscall(__NR_socket, domain, type, protocol); }
+
+__attribute__((always_inline)) static inline int my_connect(int fd, const struct sockaddr *addr, socklen_t len)
+    { return (int)syscall(__NR_connect, fd, addr, len); }
 
 #endif  // ABI
 
@@ -723,6 +747,95 @@ static inline void detect_frida_threads(void) {
             }
         }
         closedir(dir);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// detect_frida_websocket -- Frida server WebSocket fingerprint
+//
+// Frida's built-in server exposes a WebSocket endpoint used by frida-tools.
+// The Sec-WebSocket-Accept header is deterministic:
+//   SHA1("CpxD2C5REVLHvsUC9YAoqg==" + WS_MAGIC_GUID) → base64 → fixed string.
+// Any port that returns "tyZql/Y8dNFFyopTrHadWzvbvRs=" IS Frida.
+//
+// Port scan strategy: check Frida's default (27042) + a focused list of
+// common alternative ports used in real-world deployments.  Connecting to a
+// closed port returns ECONNREFUSED instantly, so the scan is fast even
+// across 30+ ports.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// HTTP WebSocket upgrade request with the fixed key NativeShield uses.
+static const char FRIDA_WS_REQUEST[] =
+    "GET /ws HTTP/1.1\r\n"
+    "Upgrade: websocket\r\n"
+    "Connection: Upgrade\r\n"
+    "Sec-WebSocket-Key: CpxD2C5REVLHvsUC9YAoqg==\r\n"
+    "Sec-WebSocket-Version: 13\r\n"
+    "Host: 127.0.0.1\r\n"
+    "User-Agent: Frida/16.1.7\r\n"
+    "\r\n";
+
+// Returns 1 if port 127.0.0.1:port responds with the Frida fingerprint.
+static int check_frida_port(int port) {
+    int fd = my_socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return 0;
+
+    // 400 ms timeout on both send and receive — don't hang on open ports
+    // that are NOT Frida (other localhost servers).
+    struct timeval tv = {0, 400000};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    struct sockaddr_in addr;
+    my_memset(&addr, 0, sizeof(addr));
+    addr.sin_family      = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);   // 127.0.0.1
+    addr.sin_port        = htons((uint16_t)port);
+
+    // connect() to a closed port returns ECONNREFUSED immediately.
+    if (my_connect(fd, (const struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        my_close(fd);
+        return 0;
+    }
+
+    // Port is open — send the WebSocket upgrade and read the response.
+    my_write(fd, FRIDA_WS_REQUEST, sizeof(FRIDA_WS_REQUEST) - 1);
+
+    char res[512];
+    my_memset(res, 0, sizeof(res));
+    my_read(fd, res, sizeof(res) - 1);
+    my_close(fd);
+
+    return my_strstr(res, FRIDA_WS_ACCEPT) != NULL;
+}
+
+static inline void detect_frida_websocket(void) {
+    PH_LOG("detect_frida_websocket: scanning for Frida server WebSocket fingerprint");
+
+    // Ports to probe — Frida default + common alternatives used in the wild.
+    // Connecting to a closed port is instant; this list runs in < 1 ms total
+    // for a typical device where none of these ports are open.
+    static const int FRIDA_PORTS[] = {
+        27042,          // Frida default (frida-server, gadget)
+        27043, 27041,   // ±1 from default (common manual tweaks)
+        27040, 27044,   // ±2
+        27039, 27045,   // ±3
+        1337,           // "leet" port popular in CTFs / PoCs
+        4444,           // Metasploit default — sometimes reused
+        5555,           // ADB default — Frida-over-USB sometimes lands here
+        1234, 6666, 7777, 8888, 9999,  // common quick-test ports
+        8080, 8081,     // common HTTP alternative ports
+        31415,          // seen in some frida-server wrappers
+        11111, 22222,   // round numbers used in tutorials
+    };
+    static const int N_PORTS = (int)(sizeof(FRIDA_PORTS) / sizeof(FRIDA_PORTS[0]));
+
+    for (int i = 0; i < N_PORTS; i++) {
+        if (check_frida_port(FRIDA_PORTS[i])) {
+            PH_NUKE("Frida WebSocket fingerprint detected on port %d — server responding with Frida WS accept hash",
+                    FRIDA_PORTS[i]);
+            nuke_app();
+        }
     }
 }
 
@@ -1123,6 +1236,7 @@ static void *detect_frida_loop(void *args) {
     while (1) {
         detect_frida_threads();
         detect_frida_namedpipe();
+        detect_frida_websocket();                 // WebSocket fingerprint: tyZql/Y8dNFFyopTrHadWzvbvRs=
         detect_frida_memdiskcompare();
         detect_ptrace();
         detect_ebpf_uprobe();

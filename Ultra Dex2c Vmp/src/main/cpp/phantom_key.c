@@ -11,10 +11,11 @@
 // Anti-dump / Anti-Frida -- four independent layers:
 //
 // LAYER 1  inotify_mem_watcher()
-// Installs kernel inotify watches on /proc/self/mem, /proc/self/maps,
-// /proc/self/pagemap and the per-task equivalents.  The kernel fires the
-// event the instant ANY process — including root (uid=0) — opens those
-// files, so root dumpers are caught with zero polling latency.
+// Installs kernel inotify watches on /proc/self/mem, /proc/self/pagemap
+// and the per-task equivalents.  The kernel fires the event the instant
+// ANY process — including root (uid=0) — opens those files.
+// NOTE: /proc/self/maps is intentionally NOT watched — our own detection
+// loop opens it every 5 s and would self-trigger a false nuke.
 //
 // LAYER 2a  nativeWipeShard()  [JNI -- called from DexProtector after loading]
 // Zeroes the ENTIRE Java byte[] that nativeDecryptShard returned -- not
@@ -734,21 +735,26 @@ static void detect_monkey_and_root_tools(void) {
 }
 
 static inline void detect_frida_memdiskcompare(void) {
-    // Use the persistent global fd opened at startup rather than opening
-    // a new fd each call.  Opening /proc/self/maps fresh would have fired
-    // IN_OPEN on the inotify watch (self-trigger false positive, confirmed
-    // crash on TECNO CK7n Android 13).  lseek(0) rewinds the file position.
-    if (g_maps_fd < 0) return;
-    my_lseek(g_maps_fd, 0, SEEK_SET);
+    // Open a fresh fd each call.  /proc/self/maps is NOT in the inotify
+    // watch list (removed to prevent self-triggering), so opening it here
+    // is safe.  Using a fresh fd also eliminates the race condition that
+    // existed when g_maps_fd was shared between poison_loop and this thread.
+    // Bug fix: added elfSectionArr[i] NULL guard — array is initialised to
+    // {NULL} and stays NULL if fetch_checksum_of_library() failed at startup;
+    // passing NULL to scan_executable_segments caused a null-deref crash.
+    int fd = my_openat(AT_FDCWD, PROC_MAPS, O_RDONLY | O_CLOEXEC, 0);
+    if (fd < 0) return;
     char map[MAX_LINE];
-    while ((read_one_line(g_maps_fd, map, MAX_LINE)) > 0) {
+    while ((read_one_line(fd, map, MAX_LINE)) > 0) {
         for (int i = 0; i < NUM_LIBS; i++) {
             if (my_strstr(map, libstocheck[i]) != NULL) {
-                scan_executable_segments(map, elfSectionArr[i]);
+                if (elfSectionArr[i] != NULL)           // NULL guard — CRASH FIX
+                    scan_executable_segments(map, elfSectionArr[i]);
                 break;
             }
         }
     }
+    my_close(fd);
 }
 
 // detect_frida_threads — three checks per task, matching darvincisec + NativeShield:
@@ -939,20 +945,21 @@ static inline void detect_frida_websocket(void) {
 static inline void detect_frida_namedpipe(void) {
     PH_LOG("detect_frida_namedpipe: scanning fds for Frida linjector pipe");
     DIR *dir = opendir(PROC_FD);
-    if (dir != NULL) {
-        struct dirent *entry = NULL;
-        while ((entry = readdir(dir)) != NULL) {
-            struct stat filestat;
-            char buf[MAX_LENGTH] = "";
-            char filePath[MAX_LENGTH] = "";
-            snprintf(filePath, sizeof(filePath), "/proc/self/fd/%s", entry->d_name);
-            lstat(filePath, &filestat);
-            if ((filestat.st_mode & S_IFMT) == S_IFLNK) {
-                my_readlinkat(AT_FDCWD, filePath, buf, MAX_LENGTH);
-                if (my_strstr(buf, FRIDA_NAMEDPIPE_LINJECTOR) != NULL) {
-                    PH_NUKE("Frida named pipe detected — fd link: %s", buf);
-                    closedir(dir); nuke_app();
-                }
+    // Bug fix: closedir(NULL) is undefined behaviour (crash) if opendir fails.
+    // Guard everything — only enter and close if dir is non-NULL.
+    if (dir == NULL) return;
+    struct dirent *entry = NULL;
+    while ((entry = readdir(dir)) != NULL) {
+        struct stat filestat;
+        char buf[MAX_LENGTH] = "";
+        char filePath[MAX_LENGTH] = "";
+        snprintf(filePath, sizeof(filePath), "/proc/self/fd/%s", entry->d_name);
+        lstat(filePath, &filestat);
+        if ((filestat.st_mode & S_IFMT) == S_IFLNK) {
+            my_readlinkat(AT_FDCWD, filePath, buf, MAX_LENGTH);
+            if (my_strstr(buf, FRIDA_NAMEDPIPE_LINJECTOR) != NULL) {
+                PH_NUKE("Frida named pipe detected — fd link: %s", buf);
+                closedir(dir); nuke_app();
             }
         }
     }
@@ -1360,22 +1367,25 @@ static void detect_riru_zygisk(void) {
     PH_LOG("detect_riru_zygisk: scanning maps + phdr + paths");
 
     // ── 1. /proc/self/maps scan ───────────────────────────────────────────────
-    // Use g_maps_fd (persistent fd opened before inotify arming) — never open
-    // /proc/self/maps fresh here as that would fire IN_OPEN on any future watch.
+    // Open a fresh fd — /proc/self/maps is NOT in the inotify watch list so
+    // opening it here is safe and eliminates the g_maps_fd race condition
+    // (g_maps_fd is used by self_scan_and_poison_dex in poison_loop thread;
+    // sharing it with this thread without a mutex caused garbled reads).
     {
-        if (g_maps_fd >= 0) {
-            my_lseek(g_maps_fd, 0, SEEK_SET);
+        int fd = my_openat(AT_FDCWD, "/proc/self/maps", O_RDONLY | O_CLOEXEC, 0);
+        if (fd >= 0) {
             char map[MAX_LINE] = "";
-            while (read_one_line(g_maps_fd, map, MAX_LINE) > 0) {
+            while (read_one_line(fd, map, MAX_LINE) > 0) {
                 if (my_strstr(map, HOOK_RIRU)    ||
                     my_strstr(map, HOOK_ZYGISK)  ||
                     my_strstr(map, HOOK_XPOSED)  ||
                     my_strstr(map, HOOK_LSPD)    ||
                     my_strstr(map, HOOK_EDXPOSED)) {
                     PH_NUKE("hooking framework in /proc/self/maps: %s", map);
-                    nuke_app();
+                    my_close(fd); nuke_app();
                 }
             }
+            my_close(fd);
         }
     }
 

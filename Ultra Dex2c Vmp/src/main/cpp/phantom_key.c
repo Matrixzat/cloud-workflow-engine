@@ -699,10 +699,56 @@ static inline void detect_frida_namedpipe(void) {
 // Detection -> nuke_app() immediately, before a single byte is dumped.
 // ?
 
+// Processes that may legitimately open /proc/PID/mem or /proc/PID/maps on
+// a rooted Android 16 device without being a dumper.  These are kernel/system
+// daemons, profiling infrastructure, and root-management frameworks.
+// Checked against /proc/<PID>/cmdline before calling nuke_app().
+static const char * const SAFE_MEM_READERS[] = {
+    // Android profiling / tracing stack (Perfetto, heapprofd)
+    "traced",           // perfetto traced daemon
+    "heapprofd",        // heap profiler daemon
+    "traced_probes",    // perfetto probes
+    // Crash / debug infrastructure
+    "debuggerd",        // crash dump reporter
+    "crash_dump",       // crash_dump64 helper
+    // Android runtime / zygote
+    "zygote",           // zygote / zygote64
+    "system_server",    // system server
+    "lmkd",             // low-memory killer daemon
+    // Root management frameworks (Magisk, KernelSU, APatch)
+    "magisk",           // Magisk daemon / manager
+    "magiskd",          // Magisk daemon (some versions)
+    "zygisk",           // Zygisk module loader
+    "ksu",              // KernelSU
+    "ksud",             // KernelSU daemon
+    "apd",              // APatch daemon
+    // Hardware / GPU services that scan process memory
+    "surfaceflinger",
+    "android.hardware",
+    NULL
+};
+
+// Returns 1 if the process cmdline starts with a known safe reader name.
+static int is_safe_mem_reader(const char *pid_str) {
+    char cmdline_path[64] = "";
+    snprintf(cmdline_path, sizeof(cmdline_path), "/proc/%s/cmdline", pid_str);
+    int fd = my_openat(AT_FDCWD, cmdline_path, O_RDONLY | O_CLOEXEC, 0);
+    if (fd < 0) return 0;
+    char cmdline[256] = "";
+    ssize_t n = my_read(fd, cmdline, sizeof(cmdline) - 1);
+    my_close(fd);
+    if (n <= 0) return 0;
+    cmdline[n] = '\0';
+    for (int i = 0; SAFE_MEM_READERS[i] != NULL; i++) {
+        if (my_strstr(cmdline, SAFE_MEM_READERS[i]) != NULL)
+            return 1;
+    }
+    return 0;
+}
+
 static void detect_mem_reader(void) {
     pid_t our_pid = getpid();
 
-        // Build the target strings we're looking for in other processes' fds.
     char our_mem[64]  = "";
     char our_maps[64] = "";
     snprintf(our_mem,  sizeof(our_mem),  "/proc/%d/mem",  our_pid);
@@ -713,19 +759,15 @@ static void detect_mem_reader(void) {
 
     struct dirent *pid_ent;
     while ((pid_ent = readdir(proc_dir)) != NULL) {
-                // Only numeric entries are PIDs.
         const char *dname = pid_ent->d_name;
         if (!isdigit((unsigned char)dname[0])) continue;
-
-                // Skip our own process.
         if (atoi(dname) == our_pid) continue;
 
-                // Open /proc/<OTHER_PID>/fd/
         char fd_dir_path[MAX_LENGTH] = "";
         snprintf(fd_dir_path, sizeof(fd_dir_path), "/proc/%s/fd", dname);
 
         DIR *fd_dir = opendir(fd_dir_path);
-        if (!fd_dir) continue;           // no permission -- skip silently
+        if (!fd_dir) continue;
 
         struct dirent *fd_ent;
         while ((fd_ent = readdir(fd_dir)) != NULL) {
@@ -740,9 +782,19 @@ static void detect_mem_reader(void) {
 
             if (my_strstr(target, our_mem)  != NULL ||
                 my_strstr(target, our_maps) != NULL) {
+
+                // Before nuking: verify this isn't a trusted system/root daemon.
+                // Magisk, KernelSU, traced, heapprofd etc. open /proc/PID/mem
+                // on Android 16 for legitimate reasons — nuking on those would
+                // crash the app for every rooted user.
+                if (is_safe_mem_reader(dname)) {
+                    // Trusted process — do not nuke, keep scanning.
+                    break;
+                }
+
                 closedir(fd_dir);
                 closedir(proc_dir);
-                nuke_app();                   // dumper caught -- kill immediately
+                nuke_app();   // confirmed dumper — kill immediately
             }
         }
         closedir(fd_dir);
@@ -1074,13 +1126,22 @@ void detect_frida_init(void) {
     // ── 2. SELinux permissive detection ─────────────────────────────────
     // Dumpers call "setenforce 0" before launching the app so they can
     // open /proc/PID/mem as root even with PR_SET_DUMPABLE=0.
-    // If SELinux is permissive we are on a tampered environment --
-    // nuke before any DEX is decrypted.
+    //
+    // NOTE: We do NOT nuke immediately on permissive SELinux.
+    // Rooted devices (Magisk / KernelSU) often set setenforce 0 globally,
+    // and legitimate users on rooted phones must not be killed on launch.
+    // Nuking here caused a false-positive SIGSEGV on every rooted device
+    // regardless of whether a dump was actually in progress.
+    //
+    // The real dump-protection layers are:
+    //   • detect_mem_reader()  -- fires if any process has our /proc/PID/mem open
+    //   • poison_loop()        -- continuously zeros DEX headers in [anon:dalvik-*]
+    //   • detect_frida_*()     -- Frida thread names, named pipes, disk-vs-mem
+    // Those layers remain fully active regardless of SELinux mode.
     //
     // Android mounts selinuxfs at TWO possible paths depending on kernel:
     //   /sys/fs/selinux/enforce          -- Android 5-15, most kernels
     //   /sys/kernel/security/selinux/enforce -- Android 16 / kernel 6.6+
-    // Check both so every Android version from 5 to 16 is covered.
     {
         static const char * const SELINUX_PATHS[] = {
             "/sys/fs/selinux/enforce",
@@ -1094,11 +1155,10 @@ void detect_frida_init(void) {
             char ebuf[4] = {0};
             my_read(sefd, ebuf, 3);
             my_close(sefd);
-            // '0' = permissive (setenforce 0 was run) -- abort immediately
-            if (ebuf[0] == '0') {
-                nuke_app();
-            }
-            break; // found and checked -- no need to try second path
+            // '0' = permissive -- noted but not acted on here.
+            // detect_mem_reader + poison_loop handle the actual threat.
+            (void)ebuf;
+            break;
         }
     }
 

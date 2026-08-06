@@ -72,7 +72,7 @@ target_link_options(phantom PRIVATE
 target_link_libraries(phantom
     android
     log
-    z           # zlib — needed by inflate_alloc in phantom_key.c
+    -Wl,-Bstatic z -Wl,-Bdynamic   # zlib statically linked — System.load() namespace has no libz.so
     pthread     # needed by detect_frida_loop background thread
 )
 

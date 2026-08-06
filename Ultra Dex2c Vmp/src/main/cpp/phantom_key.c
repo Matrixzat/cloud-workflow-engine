@@ -73,6 +73,8 @@
 #include <sys/inotify.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <link.h>
+#include <dlfcn.h>
 #include <android/log.h>
 #include <zlib.h>
 
@@ -223,6 +225,19 @@ static const char *FRIDA_NAMEDPIPE_LINJECTOR  = "linjector";
 // Key used:    CpxD2C5REVLHvsUC9YAoqg==
 // Accept hash: tyZql/Y8dNFFyopTrHadWzvbvRs=
 static const char *FRIDA_WS_ACCEPT            = "tyZql/Y8dNFFyopTrHadWzvbvRs=";
+
+// Java debugger thread name (JDWP = Java Debug Wire Protocol)
+// darvincisec + NativeShield both check /proc/self/task/*/comm for this.
+static const char *JDWP_THREAD_NAME           = "JDWP";
+
+// Hooking framework strings found in loaded library paths or /proc/self/maps.
+// Riru injects libmain.so from /data/adb/riru; Zygisk injects from its module dir.
+// LSPosed / EdXposed appear as "lspd" / "edxposed" in mapped library names.
+static const char *HOOK_RIRU                  = "riru";
+static const char *HOOK_ZYGISK               = "zygisk";
+static const char *HOOK_XPOSED               = "xposed";
+static const char *HOOK_LSPD                 = "lspd";
+static const char *HOOK_EDXPOSED             = "edxposed";
 static const char *PROC_MAPS                  = "/proc/self/maps";
 static const char *PROC_STATUS                = "/proc/self/task/%s/status";
 static const char *PROC_FD                    = "/proc/self/fd";
@@ -724,30 +739,100 @@ static inline void detect_frida_memdiskcompare(void) {
     my_close(fd);
 }
 
+// detect_frida_threads — three checks per task, matching darvincisec + NativeShield:
+//
+//  1. /proc/self/task/<tid>/comm
+//     Raw thread name (no prefix).  Exact checks:
+//       - "JDWP"         → Java Debug Wire Protocol thread = Java debugger attached
+//       - "gum-js-loop"  → Frida's JavaScript engine thread
+//       - "gmain"        → Frida's GLib main loop thread
+//
+//  2. /proc/self/task/<tid>/status  (full read)
+//     - Name: field  → same Frida thread name checks as backup
+//     - TracerPid:   → non-zero means a debugger is ptrace-attached to THIS thread
+//
+// Reading status for EVERY task (not just /proc/self/status) catches debuggers
+// that attach to a single worker thread rather than the main thread — a common
+// bypass of single-file TracerPid checks.
 static inline void detect_frida_threads(void) {
-    PH_LOG("detect_frida_threads: scanning thread names for Frida");
+    PH_LOG("detect_frida_threads: scanning all task comm + status");
     DIR *dir = opendir(PROC_TASK);
-    if (dir != NULL) {
-        struct dirent *entry = NULL;
-        while ((entry = readdir(dir)) != NULL) {
-            char filePath[MAX_LENGTH] = "";
-            if (my_strcmp(entry->d_name, ".") == 0 ||
-                my_strcmp(entry->d_name, "..") == 0) continue;
-            snprintf(filePath, sizeof(filePath), PROC_STATUS, entry->d_name);
-            int fd = my_openat(AT_FDCWD, filePath, O_RDONLY | O_CLOEXEC, 0);
+    if (dir == NULL) return;
+
+    struct dirent *entry = NULL;
+    while ((entry = readdir(dir)) != NULL) {
+        if (my_strcmp(entry->d_name, ".") == 0 ||
+            my_strcmp(entry->d_name, "..") == 0) continue;
+
+        // ── 1. comm file — raw thread name, cleanest for exact matching ──────
+        {
+            char comm_path[MAX_LENGTH] = "";
+            snprintf(comm_path, sizeof(comm_path),
+                     "/proc/self/task/%s/comm", entry->d_name);
+            int fd = my_openat(AT_FDCWD, comm_path, O_RDONLY | O_CLOEXEC, 0);
             if (fd >= 0) {
-                char buf[MAX_LENGTH] = "";
-                read_one_line(fd, buf, MAX_LENGTH);
-                if (my_strstr(buf, FRIDA_THREAD_GUM_JS_LOOP) ||
-                    my_strstr(buf, FRIDA_THREAD_GMAIN)) {
-                    PH_NUKE("Frida thread detected — thread name: %s", buf);
-                    my_close(fd); closedir(dir); nuke_app();
-                }
+                char name[MAX_LENGTH] = "";
+                read_one_line(fd, name, MAX_LENGTH);
                 my_close(fd);
+
+                // JDWP = Java debugger (darvincisec + NativeShield technique)
+                if (my_strncmp(name, JDWP_THREAD_NAME, 4) == 0) {
+                    PH_NUKE("JDWP Java debugger thread — task=%s comm=%s",
+                            entry->d_name, name);
+                    closedir(dir); nuke_app();
+                }
+                // Frida runtime threads
+                if (my_strstr(name, FRIDA_THREAD_GUM_JS_LOOP) ||
+                    my_strstr(name, FRIDA_THREAD_GMAIN)) {
+                    PH_NUKE("Frida thread via comm — task=%s name=%s",
+                            entry->d_name, name);
+                    closedir(dir); nuke_app();
+                }
             }
         }
-        closedir(dir);
+
+        // ── 2. status file — TracerPid + backup Name: check ──────────────────
+        {
+            char status_path[MAX_LENGTH] = "";
+            snprintf(status_path, sizeof(status_path),
+                     "/proc/self/task/%s/status", entry->d_name);
+            int fd = my_openat(AT_FDCWD, status_path, O_RDONLY | O_CLOEXEC, 0);
+            if (fd >= 0) {
+                char buf[1024] = "";
+                ssize_t n = my_read(fd, buf, sizeof(buf) - 1);
+                my_close(fd);
+                if (n > 0) {
+                    buf[n] = '\0';
+
+                    // TracerPid: <pid>  — non-zero = debugger attached to this task
+                    char *tracer = my_strstr(buf, "TracerPid:");
+                    if (tracer) {
+                        int tpid = atoi(tracer + 10);
+                        if (tpid > 0) {
+                            PH_NUKE("per-task TracerPid=%d on task=%s",
+                                    tpid, entry->d_name);
+                            closedir(dir); nuke_app();
+                        }
+                    }
+
+                    // Name: field (backup — comm is primary)
+                    char *name_field = my_strstr(buf, "Name:");
+                    if (name_field) {
+                        name_field += 5;
+                        while (*name_field == '\t' || *name_field == ' ')
+                            name_field++;
+                        if (my_strstr(name_field, FRIDA_THREAD_GUM_JS_LOOP) ||
+                            my_strstr(name_field, FRIDA_THREAD_GMAIN)) {
+                            PH_NUKE("Frida thread via status Name: task=%s",
+                                    entry->d_name);
+                            closedir(dir); nuke_app();
+                        }
+                    }
+                }
+            }
+        }
     }
+    closedir(dir);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1224,6 +1309,162 @@ static void detect_ebpf_uprobe(void) {
 }
 
 // ?
+// detect_riru_zygisk -- Riru / Zygisk / Xposed / LSPosed injection detection
+//
+// Three independent signal sources (NativeShield RiGisk.cpp technique):
+//
+//   1. /proc/self/maps scan
+//      Riru injects libmain.so from /data/adb/riru/; Zygisk from its module
+//      directory.  LSPosed appears as "lspd"; EdXposed as "edxposed".
+//      Any matching string in a mapped path → injection detected.
+//      Note: advanced Zygisk (DenyList) can hide from maps; source 2 covers that.
+//
+//   2. dl_iterate_phdr (raw linker list)
+//      Walks the dynamic linker's in-memory list of loaded libraries.
+//      Different data source from procfs — DenyList hides from /proc/self/maps
+//      but the linker's soinfo list still has the real path at load time.
+//
+//   3. Known module install paths
+//      If the directory exists, the framework is installed (even if not currently
+//      injected into this specific process).  Zygisk modules survive reboots and
+//      are in the process if they target our app.
+// ?
+
+// C-style dl_iterate_phdr callback (file is compiled as C, not C++).
+static int hook_phdr_cb(struct dl_phdr_info *info, size_t size, void *data) {
+    (void)size;
+    if (!info || !info->dlpi_name || info->dlpi_name[0] == '\0') return 0;
+    if (my_strstr(info->dlpi_name, HOOK_RIRU)    ||
+        my_strstr(info->dlpi_name, HOOK_ZYGISK)  ||
+        my_strstr(info->dlpi_name, HOOK_XPOSED)  ||
+        my_strstr(info->dlpi_name, HOOK_LSPD)    ||
+        my_strstr(info->dlpi_name, HOOK_EDXPOSED)) {
+        *(int *)data = 1;
+        return 1;   // stop iteration
+    }
+    return 0;
+}
+
+static void detect_riru_zygisk(void) {
+    PH_LOG("detect_riru_zygisk: scanning maps + phdr + paths");
+
+    // ── 1. /proc/self/maps scan ───────────────────────────────────────────────
+    {
+        int fd = my_openat(AT_FDCWD, "/proc/self/maps", O_RDONLY | O_CLOEXEC, 0);
+        if (fd >= 0) {
+            char map[MAX_LINE] = "";
+            while (read_one_line(fd, map, MAX_LINE) > 0) {
+                if (my_strstr(map, HOOK_RIRU)    ||
+                    my_strstr(map, HOOK_ZYGISK)  ||
+                    my_strstr(map, HOOK_XPOSED)  ||
+                    my_strstr(map, HOOK_LSPD)    ||
+                    my_strstr(map, HOOK_EDXPOSED)) {
+                    PH_NUKE("hooking framework in /proc/self/maps: %s", map);
+                    my_close(fd); nuke_app();
+                }
+            }
+            my_close(fd);
+        }
+    }
+
+    // ── 2. dl_iterate_phdr — linker's in-memory library list ─────────────────
+    {
+        int found = 0;
+        dl_iterate_phdr(hook_phdr_cb, &found);
+        if (found) {
+            PH_NUKE("hooking framework found via dl_iterate_phdr");
+            nuke_app();
+        }
+    }
+
+    // ── 3. Known install paths — existence check ──────────────────────────────
+    static const char *HOOK_PATHS[] = {
+        "/data/adb/riru",
+        "/data/adb/modules/riru",
+        "/data/adb/modules/zygisk",
+        "/data/misc/riru",
+        "/system/lib/libxposed_art.so",
+        "/system/lib64/libxposed_art.so",
+        "/system/framework/XposedBridge.jar",
+        NULL
+    };
+    for (int i = 0; HOOK_PATHS[i] != NULL; i++) {
+        int fd = my_openat(AT_FDCWD, HOOK_PATHS[i], O_RDONLY | O_CLOEXEC, 0);
+        if (fd >= 0) {
+            PH_NUKE("hooking framework path exists: %s", HOOK_PATHS[i]);
+            my_close(fd); nuke_app();
+        }
+    }
+}
+
+// ?
+// detect_root -- su binary + Magisk mount detection
+//
+// Two independent checks (NativeShield RootDetect.cpp technique):
+//
+//   A. su binary existence
+//      Attempts to open each known su path with O_RDONLY.  On a non-rooted
+//      device these files do not exist.  If ANY opens successfully, root is
+//      confirmed → nuke_app().
+//
+//   B. /proc/self/mounts scan for Magisk signatures
+//      Magisk mounts a mirror of /data under /data/adb/modules and creates
+//      entries containing "magisk", "core/mirror", or "core/img" in the
+//      process mount namespace.  Reading /proc/self/mounts and scanning for
+//      these strings catches Magisk even when it hides su from PATH.
+// ?
+
+static void detect_root(void) {
+    PH_LOG("detect_root: checking su binaries + Magisk mounts");
+
+    // ── A. su binary existence ────────────────────────────────────────────────
+    static const char *SU_PATHS[] = {
+        "/data/local/su",
+        "/data/local/bin/su",
+        "/data/local/xbin/su",
+        "/sbin/su",
+        "/su/bin/su",
+        "/system/bin/su",
+        "/system/xbin/su",
+        "/system/bin/.ext/su",
+        "/system/bin/failsafe/su",
+        "/system/sd/xbin/su",
+        "/system/usr/we-need-root/su",
+        "/cache/su",
+        "/data/su",
+        "/dev/su",
+        NULL
+    };
+    for (int i = 0; SU_PATHS[i] != NULL; i++) {
+        int fd = my_openat(AT_FDCWD, SU_PATHS[i], O_RDONLY | O_CLOEXEC, 0);
+        if (fd >= 0) {
+            PH_NUKE("su binary found: %s — root confirmed", SU_PATHS[i]);
+            my_close(fd); nuke_app();
+        }
+    }
+
+    // ── B. /proc/self/mounts — Magisk mount signatures ────────────────────────
+    {
+        int fd = my_openat(AT_FDCWD, "/proc/self/mounts", O_RDONLY | O_CLOEXEC, 0);
+        if (fd >= 0) {
+            char buf[MAX_LINE] = "";
+            static const char *MAGISK_MARKERS[] = {
+                "magisk", "core/mirror", "core/img", NULL
+            };
+            while (read_one_line(fd, buf, MAX_LINE) > 0) {
+                for (int i = 0; MAGISK_MARKERS[i] != NULL; i++) {
+                    if (my_strstr(buf, MAGISK_MARKERS[i])) {
+                        PH_NUKE("Magisk mount detected: %s", buf);
+                        my_close(fd); nuke_app();
+                    }
+                }
+            }
+            my_close(fd);
+        }
+    }
+}
+
+// ?
 // detect_frida_loop -- 5-second cadence
 // Frida thread names, named pipes, binary checksums, ptrace, eBPF uprobes.
 // ?
@@ -1234,12 +1475,14 @@ static void *detect_frida_loop(void *args) {
     timereq.tv_sec  = 5;
     timereq.tv_nsec = 0;
     while (1) {
-        detect_frida_threads();
+        detect_frida_threads();                   // JDWP + per-task TracerPid + gum-js-loop/gmain
         detect_frida_namedpipe();
         detect_frida_websocket();                 // WebSocket fingerprint: tyZql/Y8dNFFyopTrHadWzvbvRs=
         detect_frida_memdiskcompare();
         detect_ptrace();
         detect_ebpf_uprobe();
+        detect_riru_zygisk();                     // Riru/Zygisk/Xposed: maps + phdr + paths
+        detect_root();                            // su binaries + Magisk mounts
         detect_monkey_and_root_tools();           // monkey + GameGuardian + MT/NP/LuckyPatcher
         my_nanosleep(&timereq, NULL);
     }

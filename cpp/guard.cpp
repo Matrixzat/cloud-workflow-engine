@@ -438,6 +438,84 @@ static __attribute__((noinline)) void g_decode(const uint8_t *enc, int len, char
     (__builtin_expect((((uint32_t)(n)*((uint32_t)(n)+1u))&1u)==0u,1))
 
 // ════════════════════════════════════════════════════════════════════════════
+// Raw svc #0 proc-file reader — zero PLT / GOT / libc involvement
+//
+// DPatch (libpandora) uses ByteHook to PLT-patch fopen/open/openat/pread in
+// our .so.  Every fopen("/proc/self/maps") call is intercepted and redirected
+// to a fake/clean copy.  Using svc #0 directly bypasses all PLT trampolines —
+// the kernel call goes straight to the VFS layer, returning real kernel data.
+//
+// Forward-declare the svc #0 wrappers defined later in this file (they must
+// appear after the ABI #ifdef blocks; the declarations let early functions
+// call them without restructuring the file).
+// ════════════════════════════════════════════════════════════════════════════
+static int     m_openat(const char *path, int flags);
+static ssize_t m_pread(int fd, void *buf, size_t n, off_t off);
+static int     m_close(int fd);
+
+/* Buffered sequential reader over a kernel file via svc #0 pread64. */
+typedef struct {
+    int   fd;
+    off_t rd_off;         /* next pread offset into the file          */
+    char  b[4096];
+    int   b_pos;          /* next unconsumed byte within b[]          */
+    int   b_len;          /* valid bytes in b[]                       */
+    int   eof;            /* 1 once the fd yields nothing more        */
+} RawRdr;
+
+static void rrd_open(RawRdr *r, const char *path) {
+    r->fd     = m_openat(path, O_RDONLY);
+    r->rd_off = 0;
+    r->b_pos  = 0;
+    r->b_len  = 0;
+    r->eof    = (r->fd < 0) ? 1 : 0;
+}
+static void rrd_close(RawRdr *r) {
+    if (r->fd >= 0) { m_close(r->fd); r->fd = -1; }
+    r->eof = 1;
+}
+/* Reads one newline-terminated line into out[0..max-1]; returns 1 or 0. */
+static int rrd_getline(RawRdr *r, char *out, int max) {
+    if (r->eof || r->fd < 0 || max <= 1) return 0;
+    int n = 0;
+    while (n < max - 1) {
+        if (r->b_pos >= r->b_len) {
+            ssize_t rd = m_pread(r->fd, r->b, sizeof(r->b), r->rd_off);
+            if (rd <= 0) { r->eof = 1; break; }
+            r->rd_off += (off_t)rd;
+            r->b_pos = 0; r->b_len = (int)rd;
+        }
+        char ch = r->b[r->b_pos++];
+        out[n++] = ch;
+        if (ch == '\n') break;
+    }
+    out[n] = '\0';
+    return (n > 0) ? 1 : 0;
+}
+
+/* ── DPatch / libpandora detection via real /proc/self/maps ─────────────────
+ * DPatch's libpandora.so MUST be mapped into our process to function.
+ * We read maps via svc #0 so DPatch's fopen hook cannot intercept us.
+ * Finding "pandora" or "libpandora" in the real map → nuke immediately.
+ */
+static __attribute__((noinline)) int detect_pandora_in_maps(void) {
+    char s_maps[SP_BUF_SZ];
+    reveal_ns(1u, SP_PROC_MAPS, SP_PROC_MAPS_LEN, s_maps);
+
+    RawRdr r; rrd_open(&r, s_maps);
+    if (r.eof) return 0;
+    char line[512]; int found = 0;
+    while (!found && rrd_getline(&r, line, sizeof(line))) {
+        /* "pandora" covers both "libpandora.so" and any pandora path entry */
+        if (strstr(line, "pandora") || strstr(line, "bytehook"))
+            found = 1;
+    }
+    rrd_close(&r);
+    if (found) CRASH_HERE("DPatch/libpandora detected in process maps");
+    return found;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Anti-debug: abort if TracerPid != 0
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -453,19 +531,20 @@ static void check_tracer(void) {
     reveal_ns(77, SP_TRACER_STATUS, SP_TRACER_STATUS_LEN, s_status);
     reveal_ns(78, SP_TRACER_PID,    SP_TRACER_PID_LEN,    s_tpid);
 
+    /* Read /proc/self/status via svc #0 — DPatch hooks fopen but not raw pread64 */
     char line[256];
-    FILE *f = fopen(s_status, "r");
-    if (!f) { GLOGI("check_tracer: could not open status file, skipping"); return; }
-    while (fgets(line, sizeof(line), f)) {
+    RawRdr rdr; rrd_open(&rdr, s_status);
+    if (rdr.eof) { GLOGI("check_tracer: could not open status file, skipping"); return; }
+    while (rrd_getline(&rdr, line, sizeof(line))) {
         if (strncmp(line, s_tpid, 10) == 0) {
             long pid = strtol(line + 10, NULL, 10);
-            fclose(f);
+            rrd_close(&rdr);
             GLOGI("check_tracer: TracerPid=%ld", pid);
             if (pid != 0) CRASH_HERE("TracerPid != 0 (debugger/ptrace attached)");
             return;
         }
     }
-    fclose(f);
+    rrd_close(&rdr);
     GLOGI("check_tracer: TracerPid line not found");
 }
 
@@ -488,7 +567,7 @@ static int get_apk_path(char *out, size_t sz) {
     char s_sp[SP_BUF_SZ], s_va[SP_BUF_SZ];
 
     char fallback[512] = {0};
-    FILE *f = NULL;
+    RawRdr rdr; rdr.fd = -1; rdr.eof = 1; /* initialised in state 0x71u */
     DIR  *d = NULL;
     int have_fallback = 0, result = 0;
 
@@ -511,14 +590,14 @@ static int get_apk_path(char *out, size_t sz) {
         CFF_NEXT(0x71u);
     }
     case 0x71u: {
-        // Stage 1 — /proc/self/maps
-        f = fopen(s_maps, "r");
+        // Stage 1 — /proc/self/maps via svc #0 (bypasses DPatch fopen hook)
+        rrd_open(&rdr, s_maps);
         CFF_NEXT(0xBCu);
     }
     case 0xBCu: {
-        if (!f) { CFF_NEXT(0xD4u); break; }
+        if (rdr.eof) { CFF_NEXT(0xD4u); break; }
         char line[512];
-        while (fgets(line, sizeof(line), f)) {
+        while (rrd_getline(&rdr, line, sizeof(line))) {
             char *p = strstr(line, s_dot_apk);
             if (!p) continue;
             char *slash = NULL;
@@ -531,7 +610,7 @@ static int get_apk_path(char *out, size_t sz) {
             if (len >= sz) continue;
             if (is_da) {
                 strncpy(out, slash, len); out[len] = '\0';
-                fclose(f); f = NULL; result = 1;
+                rrd_close(&rdr); result = 1;
                 CFF_NEXT(0xFFu); break;
             }
             if (!have_fallback && len < sizeof(fallback)) {
@@ -539,7 +618,7 @@ static int get_apk_path(char *out, size_t sz) {
                 have_fallback = 1;
             }
         }
-        if (_c != 0xFFu) { if (f) { fclose(f); f = NULL; } CFF_NEXT(0xD4u); }
+        if (_c != 0xFFu) { rrd_close(&rdr); CFF_NEXT(0xD4u); }
         break;
     }
     case 0xD4u: {
@@ -652,11 +731,12 @@ static __attribute__((noinline)) int check_pipeline_maps(void) {
     char s_maps[SP_BUF_SZ];
     reveal_ns(1u, SP_PROC_MAPS, SP_PROC_MAPS_LEN, s_maps);
 
-    FILE *f = fopen(s_maps, "r");
-    if (!f) return 0;
+    /* svc #0 read — DPatch's ByteHook PLT trampoline on fopen cannot intercept */
+    RawRdr rdr; rrd_open(&rdr, s_maps);
+    if (rdr.eof) return 0;
     char line[512];
     int found = 0;
-    while (fgets(line, sizeof(line), f)) {
+    while (rrd_getline(&rdr, line, sizeof(line))) {
         if (strstr(line, s_frida)  || strstr(line, s_xposed) ||
             strstr(line, s_substr) || strstr(line, s_gadget) ||
             strstr(line, s_magisk) || strstr(line, s_saurik)) {
@@ -664,7 +744,7 @@ static __attribute__((noinline)) int check_pipeline_maps(void) {
             break;
         }
     }
-    fclose(f);
+    rrd_close(&rdr);
     GLOGI("check_pipeline_maps: found=%d", found);
     return found;
 }
@@ -681,18 +761,18 @@ static __attribute__((noinline)) int check_render_hooks(void) {
     char s_maps[SP_BUF_SZ];
     reveal_ns(1u, SP_PROC_MAPS, SP_PROC_MAPS_LEN, s_maps);
 
-    FILE *f = fopen(s_maps, "r");
-    if (!f) return 0;
+    RawRdr rdr; rrd_open(&rdr, s_maps);
+    if (rdr.eof) return 0;
     char line[512];
     int found = 0;
-    while (fgets(line, sizeof(line), f)) {
+    while (rrd_getline(&rdr, line, sizeof(line))) {
         if (strstr(line, s_lsplant) || strstr(line, s_zygisk) ||
             strstr(line, s_riru)    || strstr(line, s_lspatch)) {
             found = 1;
             break;
         }
     }
-    fclose(f);
+    rrd_close(&rdr);
     GLOGI("check_render_hooks: found=%d", found);
     return found;
 }
@@ -713,12 +793,12 @@ static __attribute__((noinline)) int check_runtime_path(void) {
     size_t sys_len  = strlen(s_sys);
     size_t apex_len = strlen(s_apex);
 
-    FILE *f = fopen(s_maps, "r");
-    if (!f) return 0;
+    RawRdr rdr; rrd_open(&rdr, s_maps);
+    if (rdr.eof) return 0;
     char line[512];
     int bad = 0;
 
-    while (fgets(line, sizeof(line), f)) {
+    while (rrd_getline(&rdr, line, sizeof(line))) {
         int is_art   = (strstr(line, s_libart) != NULL);
         int is_librt = (strstr(line, s_librt)  != NULL);
         if (!is_art && !is_librt) continue;
@@ -735,7 +815,7 @@ static __attribute__((noinline)) int check_runtime_path(void) {
             break;
         }
     }
-    fclose(f);
+    rrd_close(&rdr);
     GLOGI("check_runtime_path: bad=%d", bad);
     return bad;
 }
@@ -1038,8 +1118,9 @@ static __attribute__((noinline)) int lvm_exec(
     for (int i = 0; i < prog_len; i++) cs ^= prog[i];
     if (cs != expected_cs) { CRASH_HERE("lvm: bytecode integrity"); return 0; }
 
-    // VM state
-    FILE *vm_file  = NULL;
+    // VM state — file I/O uses svc #0 RawRdr, not fopen (DPatch hooks fopen)
+    RawRdr vm_rdr; vm_rdr.fd = -1; vm_rdr.eof = 1;
+    vm_rdr.rd_off = 0; vm_rdr.b_pos = 0; vm_rdr.b_len = 0;
     char  vm_lb[512];
     int   vm_acc   = 0;   // accumulator — returned at HALT
     int   vm_res   = 0;   // last primitive result
@@ -1054,7 +1135,7 @@ static __attribute__((noinline)) int lvm_exec(
         switch (op) {
             // ── Control ────────────────────────────────────────────────
             case 0x01: /* HALT  */ goto lvm_halt;
-            case 0x02: /* CRASH */ CRASH_HERE("lvm: CRASH opcode"); if(vm_file)fclose(vm_file); return 0;
+            case 0x02: /* CRASH */ CRASH_HERE("lvm: CRASH opcode"); rrd_close(&vm_rdr); return 0;
             case 0x30: /* NOP   */ break;
             case 0x20: /* JZ    */ if (vm_res == 0) pc += (int)(int8_t)arg; break;
             case 0x21: /* JNZ   */ if (vm_res != 0) pc += (int)(int8_t)arg; break;
@@ -1065,22 +1146,21 @@ static __attribute__((noinline)) int lvm_exec(
             case 0x41: /* LMOV  */ vm_acc = vm_res;            break;
             case 0x42: /* LNOT  */ vm_acc = !vm_acc;           break;
 
-            // ── File I/O primitives ────────────────────────────────────
+            // ── File I/O primitives — svc #0, zero PLT/GOT surface ────
             case 0x50: { /* LOPEN */
                 char path[GVM_PATH_BUF];
                 lvm_prim_str(arg, path, sizeof(path));
-                if (vm_file) { fclose(vm_file); vm_file = NULL; }
-                vm_file = fopen(path, "r");
-                vm_res  = (vm_file != NULL) ? 1 : 0;
+                rrd_close(&vm_rdr);
+                rrd_open(&vm_rdr, path);
+                vm_res = (!vm_rdr.eof) ? 1 : 0;
                 break;
             }
             case 0x51: { /* LGETS */
-                if (!vm_file) { vm_res = 0; break; }
-                vm_res = (fgets(vm_lb, (int)sizeof(vm_lb), vm_file) != NULL) ? 1 : 0;
+                vm_res = rrd_getline(&vm_rdr, vm_lb, (int)sizeof(vm_lb));
                 break;
             }
             case 0x52: { /* LCLOSE */
-                if (vm_file) { fclose(vm_file); vm_file = NULL; }
+                rrd_close(&vm_rdr);
                 break;
             }
             case 0x53: { /* LSTRST */
@@ -1091,21 +1171,21 @@ static __attribute__((noinline)) int lvm_exec(
             }
 
             // ── System primitives ──────────────────────────────────────
-            case 0x56: { /* LTRACE — read TracerPid from /proc/self/status */
+            case 0x56: { /* LTRACE — read TracerPid via svc #0 (bypasses DPatch fopen hook) */
                 char s_status[SP_BUF_SZ*2] = {0}, s_tpid[SP_BUF_SZ] = {0};
                 reveal_ns(77, SP_TRACER_STATUS, SP_TRACER_STATUS_LEN, s_status);
                 reveal_ns(78, SP_TRACER_PID,    SP_TRACER_PID_LEN,    s_tpid);
-                FILE *tf = fopen(s_status, "r");
+                RawRdr tf; rrd_open(&tf, s_status);
                 int traced = 0;
-                if (tf) {
+                if (!tf.eof) {
                     char line[256];
-                    while (fgets(line, sizeof(line), tf)) {
+                    while (rrd_getline(&tf, line, sizeof(line))) {
                         if (strncmp(line, s_tpid, 10) == 0) {
                             traced = (strtol(line + 10, NULL, 10) != 0) ? 1 : 0;
                             break;
                         }
                     }
-                    fclose(tf);
+                    rrd_close(&tf);
                 }
                 vm_res = traced;
                 break;
@@ -1225,7 +1305,7 @@ static __attribute__((noinline)) int lvm_exec(
         if (pc < 0 || pc >= prog_len) break;
     }
 lvm_halt:
-    if (vm_file) { fclose(vm_file); }
+    rrd_close(&vm_rdr);
     return vm_acc;
 }
 
@@ -2173,9 +2253,11 @@ static __attribute__((noinline)) int so_find_user_lib_name(char *out, int out_ma
     _SX(s_maps, _sm, 0xAB); _SX(s_data, _da, 0xAB);
     _SX(s_so,   _so, 0xAB); _SX(s_ci,   _ci, 0xAB);
 
-    FILE *f = fopen(s_maps, "r"); if (!f) return 0;
+    /* svc #0 — DPatch hooks fopen(/proc/self/maps) to return fake content;
+     * raw pread64 goes directly to the kernel and cannot be intercepted. */
+    RawRdr rdr; rrd_open(&rdr, s_maps); if (rdr.eof) return 0;
     char line[512];
-    while (fgets(line, sizeof(line), f)) {
+    while (rrd_getline(&rdr, line, sizeof(line))) {
         if (!strstr(line, s_data)) continue;
         if (!strstr(line, s_so))   continue;
         char *sl = strrchr(line, '/'); if (!sl) continue;
@@ -2186,9 +2268,9 @@ static __attribute__((noinline)) int so_find_user_lib_name(char *out, int out_ma
         int n = (int)strlen(name);
         if (n <= 3 || n >= out_max) continue;
         strncpy(out, name, out_max - 1); out[out_max - 1] = '\0';
-        fclose(f); return 1;
+        rrd_close(&rdr); return 1;
     }
-    fclose(f); return 0;
+    rrd_close(&rdr); return 0;
 }
 
 // Returns 1 = tamper/missing (→ crash), 0 = clean.
@@ -2841,6 +2923,14 @@ static __attribute__((noinline)) int gvm_sig_check(void) {
 __attribute__((constructor))
 static void fonts_init(void) {
     GLOGI("fonts_init: constructor entry");
+
+    // ── DPatch / libpandora detection — FIRST, before any other check ──────
+    // DPatch hooks fopen/openat via ByteHook PLT trampolines.  We read the
+    // real /proc/self/maps via svc #0 before DPatch can redirect anything.
+    // libpandora.so MUST be mapped into our process to function — it cannot
+    // hide from a raw kernel read.  Any hit → instant crash.
+    detect_pandora_in_maps();
+
     // ARM64 disassembly of fonts_init() shows ONLY five opaque VM calls and
     // two process/thread spawns — zero recognisable security function names.
     // All detection lives inside AES-256-CBC encrypted lvm_exec programs:

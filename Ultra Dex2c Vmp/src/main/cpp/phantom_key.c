@@ -1093,7 +1093,198 @@ void detect_frida_init(void) {
         }
     }
 
-    // ── 3. Monkey / root-tool check -- SYNCHRONOUS before any thread ────
+#ifdef BLOCK_ROOTED_DEVICES
+    // ── 3. Su binary paths ───────────────────────────────────────────────
+    // 14 canonical su locations used by SuperSU, Kingroot, and other
+    // old-school root tools.  Raw my_openat (svc#0) — libc/PLT hooks
+    // cannot intercept.  Sourced from NativeShield project.
+    {
+        static const char * const SU_PATHS[] = {
+            "/data/local/su",
+            "/data/local/bin/su",
+            "/data/local/xbin/su",
+            "/sbin/su",
+            "/su/bin/su",
+            "/system/bin/su",
+            "/system/bin/.ext/su",
+            "/system/bin/failsafe/su",
+            "/system/sd/xbin/su",
+            "/system/usr/we-need-root/su",
+            "/system/xbin/su",
+            "/cache/su",
+            "/data/su",
+            "/dev/su",
+            NULL
+        };
+        for (int si = 0; SU_PATHS[si] != NULL; si++) {
+            int fd = my_openat(AT_FDCWD, SU_PATHS[si], O_RDONLY | O_CLOEXEC, 0);
+            if (fd >= 0) {
+                my_close(fd);
+                PH_NUKE("BLOCK_ROOTED: su binary at %s", SU_PATHS[si]);
+                nuke_app();
+            }
+        }
+    }
+
+    // ── 4. Magisk / KernelSU / APatch installation directories ──────────
+    // These are REAL directories on the underlying filesystem — not bind
+    // mounts — so Magisk DenyList does NOT remove them from our view.
+    // /data/adb/magisk  → Magisk (any version, any app rename)
+    // /data/adb/ksu     → KernelSU
+    // /data/adb/apd     → APatch
+    // O_DIRECTORY ensures we only trigger on directories, not stray files.
+    {
+        static const char * const ROOT_DIRS[] = {
+            "/data/adb/magisk",        /* Magisk — any version, any app rename      */
+            "/data/adb/ksu",           /* KernelSU                                   */
+            "/data/adb/apd",           /* APatch                                     */
+            "/data/adb/lspd",          /* LSPosed daemon directory                   */
+            "/sbin/.magisk",           /* Magisk tmpfs mount point (older Magisk)    */
+            "/dev/.magisk",            /* Magisk tmpfs (seen on some kernels)        */
+            "/system/framework/XposedBridge.jar",  /* Classic Xposed framework       */
+            "/system/xposed.prop",     /* Xposed installer properties file           */
+            NULL
+        };
+        for (int ri = 0; ROOT_DIRS[ri] != NULL; ri++) {
+            int fd = my_openat(AT_FDCWD, ROOT_DIRS[ri],
+                               O_RDONLY | O_CLOEXEC | O_DIRECTORY, 0);
+            if (fd >= 0) {
+                my_close(fd);
+                PH_NUKE("BLOCK_ROOTED: root dir found %s", ROOT_DIRS[ri]);
+                nuke_app();
+            }
+        }
+    }
+
+    // ── 5. /proc/self/mounts scan ────────────────────────────────────────
+    // Standard Magisk (without DenyList) bind-mounts show up in the process
+    // mount table with strings "magisk", "core/mirror", "core/img".
+    // DenyList unmounts these, but this layer still catches non-DenyList
+    // Magisk as a belt-and-suspenders check after layers 3 and 4.
+    // Overlapping buffer reads (overlap = len("core/mirror") = 11) ensure
+    // a keyword is never split across two read() calls.
+    {
+        static const char * const MOUNT_NEEDLES[] = {
+            "magisk",
+            "core/mirror",
+            "core/img",
+            "lspd",            /* LSPosed daemon mount                */
+            "zygisk",          /* Zygisk framework mount              */
+            "xposed",          /* Classic Xposed mount                */
+            NULL
+        };
+        int mfd = my_openat(AT_FDCWD, "/proc/self/mounts",
+                            O_RDONLY | O_CLOEXEC, 0);
+        if (mfd >= 0) {
+            char mbuf[512];
+            const int OVERLAP = 11; /* strlen("core/mirror") */
+            int mpos = 0;
+            ssize_t mn;
+            while ((mn = my_read(mfd, mbuf + mpos,
+                                 (ssize_t)sizeof(mbuf) - mpos - 1)) > 0) {
+                mbuf[mpos + mn] = '\0';
+                for (int ni = 0; MOUNT_NEEDLES[ni] != NULL; ni++) {
+                    if (my_strstr(mbuf, MOUNT_NEEDLES[ni])) {
+                        my_close(mfd);
+                        PH_NUKE("BLOCK_ROOTED: Magisk mount '%s' in /proc/self/mounts",
+                                MOUNT_NEEDLES[ni]);
+                        nuke_app();
+                    }
+                }
+                /* Carry last OVERLAP bytes to next iteration */
+                if (mpos + mn > OVERLAP) {
+                    for (int k = 0; k < OVERLAP; k++)
+                        mbuf[k] = mbuf[(mpos + mn) - OVERLAP + k];
+                    mpos = OVERLAP;
+                } else {
+                    mpos = 0;
+                }
+            }
+            my_close(mfd);
+        }
+    }
+    // ── 6. CapEff capability check ───────────────────────────────────────
+    // Every normal unprivileged Android app has CapEff = 0000000000000000.
+    // A root shell or process with elevated privileges has non-zero CapEff.
+    // This survives Shamiko, DenyList, and file hiding — capabilities are
+    // a kernel-enforced property that userspace tools cannot spoof via
+    // filesystem tricks.  We read /proc/self/status and parse the CapEff
+    // line directly.  If CapEff is anything other than all-zeros → nuke.
+    {
+        int csfd = my_openat(AT_FDCWD, "/proc/self/status",
+                             O_RDONLY | O_CLOEXEC, 0);
+        if (csfd >= 0) {
+            char csbuf[2048];
+            ssize_t csn = my_read(csfd, csbuf, sizeof(csbuf) - 1);
+            my_close(csfd);
+            if (csn > 0) {
+                csbuf[csn] = '\0';
+                const char *cap = my_strstr(csbuf, "CapEff:");
+                if (cap) {
+                    cap += 7; /* skip "CapEff:" */
+                    while (*cap == ' ' || *cap == '\t') cap++;
+                    /* Non-zero hex digits → elevated — nuke */
+                    const char *p = cap;
+                    int nonzero = 0;
+                    while ((*p >= '0' && *p <= '9') ||
+                           (*p >= 'a' && *p <= 'f') ||
+                           (*p >= 'A' && *p <= 'F')) {
+                        if (*p != '0') { nonzero = 1; break; }
+                        p++;
+                    }
+                    if (nonzero) {
+                        PH_NUKE("BLOCK_ROOTED: CapEff non-zero — elevated privileges");
+                        nuke_app();
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 7. Build props test-keys check ───────────────────────────────────
+    // Stock unrooted Android always ships "release-keys" in ro.build.tags.
+    // Custom ROMs and engineering builds use "test-keys" or "dev-keys".
+    // Root-friendly ROMs nearly always ship test-keys — this is a reliable
+    // signal that the device has a non-stock OS which may allow root.
+    // We read /system/build.prop directly via raw syscall (no libc).
+    {
+        static const char * const PROP_NEEDLES[] = {
+            "test-keys",
+            "dev-keys",
+            NULL
+        };
+        int bpfd = my_openat(AT_FDCWD, "/system/build.prop",
+                             O_RDONLY | O_CLOEXEC, 0);
+        if (bpfd >= 0) {
+            char bpbuf[512];
+            const int BP_OVERLAP = 9; /* strlen("test-keys") */
+            int bppos = 0;
+            ssize_t bpn;
+            while ((bpn = my_read(bpfd, bpbuf + bppos,
+                                  (ssize_t)sizeof(bpbuf) - bppos - 1)) > 0) {
+                bpbuf[bppos + bpn] = '\0';
+                for (int bi = 0; PROP_NEEDLES[bi] != NULL; bi++) {
+                    if (my_strstr(bpbuf, PROP_NEEDLES[bi])) {
+                        my_close(bpfd);
+                        PH_NUKE("BLOCK_ROOTED: build.prop contains '%s'",
+                                PROP_NEEDLES[bi]);
+                        nuke_app();
+                    }
+                }
+                if (bppos + bpn > BP_OVERLAP) {
+                    for (int k = 0; k < BP_OVERLAP; k++)
+                        bpbuf[k] = bpbuf[(bppos + bpn) - BP_OVERLAP + k];
+                    bppos = BP_OVERLAP;
+                } else {
+                    bppos = 0;
+                }
+            }
+            my_close(bpfd);
+        }
+    }
+#endif /* BLOCK_ROOTED_DEVICES — checks 3–7 */
+
+    // ── 6. Monkey / root-tool check -- SYNCHRONOUS before any thread ────
     // Runs synchronously so it fires BEFORE System.loadLibrary() returns
     // and BEFORE any Java code calls nativeDecryptShard().
     detect_monkey_and_root_tools();

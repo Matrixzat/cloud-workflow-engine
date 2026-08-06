@@ -345,6 +345,16 @@ __attribute__((always_inline)) static inline int my_mprotect(void *a, size_t l, 
 __attribute__((always_inline)) static inline int my_madvise(void *a, size_t l, int adv)
     { return (int)raw_syscall_3(__NR_madvise, (long)a, (long)l, adv); }
 
+// inotify raw syscall wrappers (arm64) — identical to darvincisec's __syscall1/2/3
+__attribute__((always_inline)) static inline int my_inotify_init1(int flags)
+    { return (int)raw_syscall_3(__NR_inotify_init1, flags, 0, 0); }
+
+__attribute__((always_inline)) static inline int my_inotify_add_watch(int fd, const char *path, uint32_t mask)
+    { return (int)raw_syscall_3(__NR_inotify_add_watch, fd, (long)path, (long)mask); }
+
+__attribute__((always_inline)) static inline int my_inotify_rm_watch(int fd, int wd)
+    { return (int)raw_syscall_3(__NR_inotify_rm_watch, fd, wd, 0); }
+
 #else  // armeabi-v7a -- use libc syscall() wrapper
 
 __attribute__((always_inline)) static inline int my_openat(int d, const char *p, int f, int m)
@@ -373,6 +383,16 @@ __attribute__((always_inline)) static inline int my_mprotect(void *a, size_t l, 
 
 __attribute__((always_inline)) static inline int my_madvise(void *a, size_t l, int adv)
     { return (int)syscall(__NR_madvise, a, l, adv); }
+
+// inotify raw syscall wrappers (arm32) — mirrors darvincisec's __syscall1/2/3
+__attribute__((always_inline)) static inline int my_inotify_init1(int flags)
+    { return (int)syscall(__NR_inotify_init1, flags); }
+
+__attribute__((always_inline)) static inline int my_inotify_add_watch(int fd, const char *path, uint32_t mask)
+    { return (int)syscall(__NR_inotify_add_watch, fd, path, mask); }
+
+__attribute__((always_inline)) static inline int my_inotify_rm_watch(int fd, int wd)
+    { return (int)syscall(__NR_inotify_rm_watch, fd, wd); }
 
 #endif  // ABI
 
@@ -760,57 +780,111 @@ static inline void detect_frida_namedpipe(void) {
 static int g_rmem_fd      = -1;   // /proc/self/mem  O_RDONLY
 static int g_maps_fd      = -1;   // /proc/self/maps O_RDONLY
 
+// Buffer sized to hold 1024 events — matches darvincisec's EVENT_BUF_LEN.
+#define INOTIFY_EVENT_SIZE  (sizeof(struct inotify_event))
+#define INOTIFY_BUF_LEN     (1024 * (INOTIFY_EVENT_SIZE + 16))
+// Maximum inotify watch descriptors (3 global + 2 per-task, up to 100 tasks).
+#define INOTIFY_MAX_WATCHERS 256
+
 static void *inotify_mem_watcher(void *arg) {
     (void)arg;
+    char buf[INOTIFY_BUF_LEN];
 
-    int ifd = (int)syscall(__NR_inotify_init1, IN_CLOEXEC);
-    if (ifd < 0) {
-        PH_LOG("inotify_init1 failed (%d) — mem watcher disabled", ifd);
-        return NULL;
-    }
-
-    // /proc/self/mem — the primary target of every /proc/PID/mem dumper.
-    // IN_OPEN  : new open() call from any external process.
-    // IN_ACCESS: read without re-open (inherited fd from a parent process).
-    syscall(__NR_inotify_add_watch, ifd,
-            "/proc/self/mem",     (uint32_t)(IN_OPEN | IN_ACCESS));
-
-    // /proc/self/maps — dumpers must read this to find DEX region addresses.
-    syscall(__NR_inotify_add_watch, ifd,
-            "/proc/self/maps",    (uint32_t)(IN_OPEN));
-
-    // /proc/self/pagemap — used by advanced carvers to resolve physical pages.
-    syscall(__NR_inotify_add_watch, ifd,
-            "/proc/self/pagemap", (uint32_t)(IN_OPEN));
-
-    // Per-task mem + pagemap for the watcher thread itself.
-    char task_mem[64], task_pgm[64];
-    pid_t tid = (pid_t)syscall(__NR_gettid);
-    snprintf(task_mem, sizeof(task_mem),
-             "/proc/self/task/%d/mem",     (int)tid);
-    snprintf(task_pgm, sizeof(task_pgm),
-             "/proc/self/task/%d/pagemap", (int)tid);
-    syscall(__NR_inotify_add_watch, ifd, task_mem, (uint32_t)(IN_OPEN | IN_ACCESS));
-    syscall(__NR_inotify_add_watch, ifd, task_pgm, (uint32_t)(IN_OPEN));
-
-    PH_LOG("inotify_mem_watcher: armed on /proc/self/{mem,maps,pagemap} + task/%d/{mem,pagemap}", (int)tid);
-
-    // Blocking read — zero CPU until the kernel fires an event.
-    char buf[sizeof(struct inotify_event) + NAME_MAX + 1];
+    // Outer loop: re-create the inotify fd each iteration.
+    // This re-adds watches for every current thread (picks up new threads
+    // spawned after startup), mirroring darvincisec's design exactly.
     while (1) {
-        ssize_t n = my_read(ifd, buf, sizeof(buf));
-        if (n <= 0) continue;
+        int ifd = my_inotify_init1(0);
+        if (ifd < 0) {
+            // Kernel too old or fd limit hit — retry after 1s.
+            PH_LOG("inotify_init1 failed (%d) — retrying in 1s", ifd);
+            struct timespec ts = {1, 0};
+            my_nanosleep(&ts, NULL);
+            continue;
+        }
 
-        // ANY event = external process just opened our proc mem/maps/pagemap.
-        // Poison every DEX region NOW (MADV_DONTNEED drops physical pages so
-        // the in-flight read returns zeros) then crash.
-        PH_NUKE("inotify: external process opened /proc/self/{mem|maps|pagemap} — zeroing all DEX regions before nuke");
-        nuke_with_poison();
+        // Track all watch descriptors so we can clean up after an event.
+        int wd[INOTIFY_MAX_WATCHERS];
+        int wcount = 0;
 
-        // nuke_with_poison() -> nuke_app() -> null-deref crash; never returns.
-        // Spin in case of unexpected return.
-        struct timespec ts = {0, 1000000L};
-        while (1) my_nanosleep(&ts, NULL);
+        // ── Global proc files ─────────────────────────────────────────────
+        // /proc/self/mem — the primary target of every DEX dumper.
+        //   IN_OPEN only (not IN_ACCESS): we have a persistent g_rmem_fd and
+        //   our self-scan reads from it; IN_ACCESS would self-trigger.
+        //   External dumpers must call open() first — IN_OPEN catches them.
+        wd[wcount++] = my_inotify_add_watch(ifd,
+            "/proc/self/mem",     (uint32_t)IN_OPEN);
+
+        // /proc/self/maps — must be read to locate DEX region addresses.
+        //   Same reasoning: we hold g_maps_fd open; external opens fire IN_OPEN.
+        wd[wcount++] = my_inotify_add_watch(ifd,
+            "/proc/self/maps",    (uint32_t)IN_OPEN);
+
+        // /proc/self/pagemap — physical page resolver used by advanced carvers.
+        //   We never open this ourselves, so IN_ACCESS | IN_OPEN is safe here.
+        wd[wcount++] = my_inotify_add_watch(ifd,
+            "/proc/self/pagemap", (uint32_t)(IN_ACCESS | IN_OPEN));
+
+        // ── Per-task mem + pagemap for ALL current threads ────────────────
+        // Matches darvincisec exactly: iterate /proc/self/task/ and add
+        // watches for each thread's mem and pagemap files.  A dumper that
+        // targets /proc/<PID>/task/<TID>/mem is caught this way.
+        DIR *task_dir = opendir("/proc/self/task");
+        if (task_dir) {
+            struct dirent *entry;
+            while ((entry = readdir(task_dir)) != NULL &&
+                   wcount < INOTIFY_MAX_WATCHERS - 2) {
+
+                if (entry->d_name[0] == '.') continue;
+
+                char mem_path[64], pgm_path[64];
+                snprintf(mem_path, sizeof(mem_path),
+                         "/proc/self/task/%s/mem",     entry->d_name);
+                snprintf(pgm_path, sizeof(pgm_path),
+                         "/proc/self/task/%s/pagemap", entry->d_name);
+
+                // IN_OPEN only for task mem (same self-trigger reason as above).
+                wd[wcount++] = my_inotify_add_watch(ifd, mem_path,
+                                                    (uint32_t)IN_OPEN);
+                // IN_ACCESS | IN_OPEN for pagemap — we never read it.
+                wd[wcount++] = my_inotify_add_watch(ifd, pgm_path,
+                                                    (uint32_t)(IN_ACCESS | IN_OPEN));
+            }
+            closedir(task_dir);
+        }
+
+        PH_LOG("inotify_mem_watcher: armed %d watches (proc+all-tasks)", wcount);
+
+        // ── Blocking read — zero CPU until kernel fires an event ──────────
+        ssize_t length = my_read(ifd, buf, sizeof(buf));
+
+        if (length > 0) {
+            // Walk the event list — matches darvincisec's while(read_length<length).
+            int offset = 0;
+            while (offset < (int)length) {
+                struct inotify_event *ev =
+                    (struct inotify_event *)((char *)buf + offset);
+
+                if (ev->mask & IN_ACCESS) {
+                    PH_NUKE("inotify IN_ACCESS — external process read /proc/self/{mem|pagemap} — zeroing all DEX regions");
+                    nuke_with_poison();
+                } else if (ev->mask & IN_OPEN) {
+                    PH_NUKE("inotify IN_OPEN — external process opened /proc/self/{mem|maps|pagemap} — zeroing all DEX regions");
+                    nuke_with_poison();
+                }
+                // nuke_with_poison() never returns; this line is unreachable
+                // unless something is very wrong — advance and keep trying.
+                offset += (int)(INOTIFY_EVENT_SIZE + ev->len);
+            }
+        }
+
+        // ── Cleanup: remove all watches, close fd, re-arm immediately ─────
+        for (int j = 0; j < wcount; j++) {
+            if (wd[j] > 0) my_inotify_rm_watch(ifd, wd[j]);
+        }
+        my_close(ifd);
+        // No sleep — re-arm instantly so there is never a window without
+        // active watches (unlike darvincisec's 1s sleep gap).
     }
     return NULL;
 }

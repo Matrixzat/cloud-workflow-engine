@@ -924,9 +924,10 @@ static void *detect_frida_loop(void *args) {
 //   SELinux permissive → immediate nuke (rooted phone detected on launch).
 // ?
 
-#ifdef BLOCK_ROOTED_DEVICES
-/* All root checks extracted into their own function so OLLVM -fla
-   flattens two small functions instead of one huge constructor. */
+/* Root checks — always compiled in, always present in every blob.
+   Triggered at runtime by a flag bit DexPacker hides in salt[0] bit-7.
+   Java sees only an opaque 16-byte salt and cannot distinguish the variants.
+   OLLVM -fla flattens this separately from the tiny constructor. */
 static void check_rooted(void) {
     /* 1. SELinux permissive */
     static const char * const SE[] = {
@@ -1023,14 +1024,12 @@ static void check_rooted(void) {
         my_close(bfd);
     }
 }
-#endif /* BLOCK_ROOTED_DEVICES */
 
 __attribute__((constructor))
 void detect_frida_init(void) {
     prctl(PR_SET_DUMPABLE, 0);
-#ifdef BLOCK_ROOTED_DEVICES
-    check_rooted();
-#endif
+    /* check_rooted() is NOT called here — it runs inside nativeDecryptShard
+       when the Java-side blockRooted flag is true. */
     char *filePaths[NUM_LIBS] = {NULL, NULL};
     parse_proc_maps_to_fetch_path(filePaths);
     for (int i = 0; i < NUM_LIBS; i++) {
@@ -1313,8 +1312,7 @@ Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeDecryptShard(
         jbyteArray j_pkg_name_utf8,
         jbyteArray j_encrypted)
 {
-    // Belt-and-suspenders: re-seal /proc/self/mem on every decrypt call in
-    // case some framework reset PR_DUMPABLE between JNI_OnLoad and here.
+    // Belt-and-suspenders: re-seal /proc/self/mem on every decrypt call.
     prctl(PR_SET_DUMPABLE, 0);
 
     jbyteArray result = NULL;
@@ -1331,10 +1329,20 @@ Java_com_ultra_dex2cvmp_utils_DexCrypto_nativeDecryptShard(
 
     (void)clazz;
 
-        // 1. Derive key entirely inside native.
+    // 1. Derive key entirely inside native.
     if (j_salt == NULL || (*env)->GetArrayLength(env, j_salt) != 16)
         goto cleanup;
     (*env)->GetByteArrayRegion(env, j_salt, 0, 16, (jbyte *)salt);
+
+    // ── Block-rooted flag — hidden in salt[0] bit 7 by DexPacker ────────────
+    // Java sees only an opaque 16-byte array — it cannot patch or hook this.
+    // We read the flag, strip the bit from salt before KDF so the derived key
+    // is identical regardless of whether the flag is set.
+    {
+        int block_rooted = (salt[0] & 0x80) != 0;
+        salt[0] &= 0x7F;   /* clear flag bit — KDF uses clean salt */
+        if (block_rooted) check_rooted();
+    }
 
     if (j_pkg_name_utf8 != NULL) {
         jint pkg_len = (*env)->GetArrayLength(env, j_pkg_name_utf8);

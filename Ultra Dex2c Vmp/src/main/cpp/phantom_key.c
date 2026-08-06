@@ -523,14 +523,22 @@ static void self_scan_and_poison_dex(void) {
     int maps_fd = my_openat(AT_FDCWD, "/proc/self/maps", O_RDONLY | O_CLOEXEC, 0);
     if (maps_fd < 0) return;
 
-    /* Open our own mem file for reading to safely check region headers. */
-    int mem_fd = my_openat(AT_FDCWD, "/proc/self/mem", O_RDONLY | O_CLOEXEC, 0);
-    if (mem_fd < 0) { my_close(maps_fd); return; }
+    /* Open mem read-only for safe header inspection. */
+    int rmem_fd = my_openat(AT_FDCWD, "/proc/self/mem", O_RDONLY | O_CLOEXEC, 0);
+    if (rmem_fd < 0) { my_close(maps_fd); return; }
+
+    /*
+     * Open mem read-WRITE for poisoning.
+     * Writing through /proc/self/mem bypasses page-protection entirely —
+     * this is the only reliable way to overwrite ART's [anon:dalvik-DEX]
+     * regions, which are sealed read-only (mprotect returns EPERM on them).
+     */
+    int wmem_fd = my_openat(AT_FDCWD, "/proc/self/mem", O_RDWR | O_CLOEXEC, 0);
 
     char line[MAX_LINE];
     while (read_one_line(maps_fd, line, MAX_LINE) > 0) {
         unsigned long start = 0, end = 0;
-        char perm[8]        = "";
+        char perm[8]          = "";
         char path[MAX_LENGTH] = "";
         char tmp[MAX_LENGTH]  = "";
 
@@ -563,8 +571,8 @@ static void self_scan_and_poison_dex(void) {
 
         /* Read first 44 bytes of the region safely via /proc/self/mem. */
         uint8_t hdr[44];
-        my_lseek(mem_fd, (off_t)start, SEEK_SET);
-        ssize_t n = my_read(mem_fd, hdr, sizeof(hdr));
+        my_lseek(rmem_fd, (off_t)start, SEEK_SET);
+        ssize_t n = my_read(rmem_fd, hdr, sizeof(hdr));
         if (n < 44) continue;
 
         /* Check DEX magic: 'dex\n' */
@@ -577,56 +585,107 @@ static void self_scan_and_poison_dex(void) {
                             | ((uint32_t)hdr[43] << 24);
         if (endian_tag != 0x12345678) continue;
 
-        /* ? Found live DEX magic -- poison it. ?
-         * Temporarily make the page writable, zero the magic + version
-         * bytes, then restore original protection. */
-        long page_size   = 4096;
-        unsigned long ps = (unsigned long)page_size;
-        unsigned long page_start = start & ~(ps - 1);
-
-        /* Build original prot flags from the perm string. */
-        int orig_prot = PROT_READ;
-        if (perm[1] == 'w') orig_prot |= PROT_WRITE;
-        if (perm[2] == 'x') orig_prot |= PROT_EXEC;
-
-        int mp_ret = my_mprotect((void *)page_start, ps, PROT_READ | PROT_WRITE);
-        if (mp_ret == 0) {
-            /* Overwrite magic (dex\n) and version string (8 bytes total). */
-            volatile uint8_t *ptr = (volatile uint8_t *)start;
-            ptr[0] = 0x00; ptr[1] = 0x00; ptr[2] = 0x00; ptr[3] = 0x00;
-            ptr[4] = 0x00; ptr[5] = 0x00; ptr[6] = 0x00; ptr[7] = 0x00;
-            /* Also zero the endian_tag at offset 40 to break the validator. */
-            ptr[40] = 0x00; ptr[41] = 0x00; ptr[42] = 0x00; ptr[43] = 0x00;
-
-            /* Restore original protection. */
-            my_mprotect((void *)page_start, ps, orig_prot);
+        /* ? Found live DEX magic — poison it via /proc/self/mem write.
+         *
+         * Why not mprotect?  ART seals [anon:dalvik-DEX] regions read-only
+         * on Android 10+; mprotect returns EPERM.  Writing through our own
+         * /proc/self/mem fd works unconditionally regardless of page perms
+         * because the kernel grants us write access to our own address space.
+         *
+         * Zero bytes 0-7 (magic + version) and bytes 40-43 (endian_tag).
+         * Any /proc/PID/mem scanner that reads the same virtual address will
+         * now see zeros and skip this region.
+         */
+        if (wmem_fd >= 0) {
+            static const uint8_t zeros[44] = {0};
+            /* Zero magic + version (first 8 bytes). */
+            my_lseek(wmem_fd, (off_t)start, SEEK_SET);
+            my_write(wmem_fd, zeros, 8);
+            /* Zero endian_tag (4 bytes at offset 40). */
+            my_lseek(wmem_fd, (off_t)(start + 40), SEEK_SET);
+            my_write(wmem_fd, zeros, 4);
+        } else {
+            /* Fallback: mprotect + direct write (older Android / unusual configs). */
+            long page_size   = 4096;
+            unsigned long ps = (unsigned long)page_size;
+            unsigned long page_start = start & ~(ps - 1);
+            int orig_prot = PROT_READ;
+            if (perm[1] == 'w') orig_prot |= PROT_WRITE;
+            if (perm[2] == 'x') orig_prot |= PROT_EXEC;
+            int mp_ret = my_mprotect((void *)page_start, ps, PROT_READ | PROT_WRITE);
+            if (mp_ret == 0) {
+                volatile uint8_t *ptr = (volatile uint8_t *)start;
+                ptr[0]=0; ptr[1]=0; ptr[2]=0; ptr[3]=0;
+                ptr[4]=0; ptr[5]=0; ptr[6]=0; ptr[7]=0;
+                ptr[40]=0; ptr[41]=0; ptr[42]=0; ptr[43]=0;
+                my_mprotect((void *)page_start, ps, orig_prot);
+            }
         }
     }
 
-    my_close(mem_fd);
+    if (wmem_fd >= 0) my_close(wmem_fd);
+    my_close(rmem_fd);
     my_close(maps_fd);
 }
 
 /* ?
- * Background loop -- runs all layers every 5 seconds
+ * poison_loop — 1-second cadence
+ *
+ * Writes zeros over any live [anon:dalvik-DEX] header every second via
+ * /proc/self/mem O_RDWR so a /proc/PID/mem dumper never reads valid magic.
+ * ? */
+
+static void *poison_loop(void *arg) {
+    (void)arg;
+    struct timespec req;
+    req.tv_sec  = 1;
+    req.tv_nsec = 0;
+    while (1) {
+        self_scan_and_poison_dex();
+        my_nanosleep(&req, NULL);
+    }
+    return NULL;
+}
+
+/* ?
+ * mem_reader_loop — 2-second cadence
+ *
+ * Scans every running process's open fd table for any fd pointing at our
+ * /proc/PID/mem or /proc/PID/maps.  Any match means a dumper has our
+ * memory open — nuke_app() fires immediately.
+ *
+ * Runs every 2 s (separate from the 5-second Frida loop) so it fires
+ * within 2 seconds of a dumper opening our mem fd — well inside the
+ * dumper's own 4-second decryption-wait window.
+ * ? */
+
+static void *mem_reader_loop(void *arg) {
+    (void)arg;
+    struct timespec req;
+    req.tv_sec  = 2;
+    req.tv_nsec = 0;
+    while (1) {
+        detect_mem_reader();
+        my_nanosleep(&req, NULL);
+    }
+    return NULL;
+}
+
+/* ?
+ * detect_frida_loop — 5-second cadence
+ * Frida thread names, named pipes, binary checksums, ptrace.
  * ? */
 
 static void *detect_frida_loop(void *args) {
+    (void)args;
     struct timespec timereq;
     timereq.tv_sec  = 5;
     timereq.tv_nsec = 0;
     while (1) {
-        /* Original detections */
         detect_frida_threads();
         detect_frida_namedpipe();
         detect_frida_memdiskcompare();
         detect_ptrace();
-        /* LAYER 1 -- catch any process that has our /proc/PID/mem open */
-        detect_mem_reader();
-
-        /* LAYER 2b -- hunt and poison any live DEX magic in our address space */
-        self_scan_and_poison_dex();
-
         my_nanosleep(&timereq, NULL);
     }
     return NULL;
@@ -634,6 +693,11 @@ static void *detect_frida_loop(void *args) {
 
 /* ?
  * Constructor -- runs immediately on System.load(libphantom.so)
+ *
+ * Three independent threads launched:
+ *   poison_loop      — 1 s  — zeroes DEX headers via /proc/self/mem write
+ *   mem_reader_loop  — 2 s  — kills if any process has our /proc/PID/mem open
+ *   detect_frida_loop— 5 s  — Frida/debugger heuristics
  * ? */
 
 __attribute__((constructor))
@@ -647,7 +711,24 @@ void detect_frida_init(void) {
         }
     }
     pthread_t t;
-    pthread_create(&t, NULL, detect_frida_loop, NULL);
+    pthread_create(&t, NULL, poison_loop,       NULL);   /* 1 s */
+    pthread_create(&t, NULL, mem_reader_loop,   NULL);   /* 2 s */
+    pthread_create(&t, NULL, detect_frida_loop, NULL);   /* 5 s */
+}
+
+/*
+ * nativePoisonNow — JNI hook called from Java immediately after
+ * InMemoryDexClassLoader has parsed the DEX bytes.  At that exact moment
+ * ART has created [anon:dalvik-DEX] mappings for the DEX, so a single
+ * forced poison pass here eliminates the live-header window that exists
+ * between DEX load and the first scheduled poison_loop tick.
+ */
+JNIEXPORT void JNICALL
+Java_com_ultra_dex2cvmp_utils_DexCrypto_nativePoisonNow(
+        JNIEnv *env, jclass clazz)
+{
+    (void)env; (void)clazz;
+    self_scan_and_poison_dex();
 }
 
 /* ?

@@ -133,6 +133,11 @@ static inline void cache_add_region_locked(unsigned long base,
     }
 }
 
+/* Forward declarations for ABI-specific syscall wrappers defined below.
+ * fast_poison_known_regions() uses these before the #if __aarch64__ block. */
+static inline ssize_t my_pwrite(int fd, const void *b, size_t n, off_t off);
+static inline int     my_madvise(void *a, size_t l, int adv);
+
 /*
  * fast_poison_known_regions() -- called every 1 ms.
  *
@@ -524,7 +529,7 @@ static inline void detect_ptrace(void) {
  *    Real users NEVER launch an app via adb monkey -- zero false positive risk.
  *
  * B. Running root-tool scan
- *    Iterates /proc/*/cmdline and matches the first NUL-delimited token
+ *    Iterates /proc/PID/cmdline and matches the first NUL-delimited token
  *    against exact package / binary names of known rooted dumper tools.
  *    Only fires if the tool is ACTIVELY RUNNING (not merely installed):
  *
@@ -967,7 +972,7 @@ static void *poison_loop(void *arg) {
  * memory open -- nuke_app() fires immediately.
  *
  * Why 200 ms and not 1 ms:
- *   detect_mem_reader() iterates ALL of /proc/*/fd/, which involves dozens
+ *   detect_mem_reader() iterates ALL of /proc/PID/fd/, which involves dozens
  *   of opendir/readdir/readlinkat calls -- a full pass typically takes
  *   3-15 ms depending on process count.  Running it every 1 ms would
  *   saturate the thread on nothing but procfs I/O.  200 ms is a practical

@@ -10,11 +10,11 @@
 //
 // Anti-dump / Anti-Frida -- four independent layers:
 //
-// LAYER 1  detect_mem_reader()
-// Iterates /proc/<PID>/fd/ for every running process.  If any external
-// process has our /proc/<PID>/mem or /proc/<PID>/maps open (which
-// dump_dex_mem.py and every /proc/PID/mem-based dumper MUST do),
-// nuke_app() fires before a single byte is read.
+// LAYER 1  inotify_mem_watcher()
+// Installs kernel inotify watches on /proc/self/mem, /proc/self/maps,
+// /proc/self/pagemap and the per-task equivalents.  The kernel fires the
+// event the instant ANY process — including root (uid=0) — opens those
+// files, so root dumpers are caught with zero polling latency.
 //
 // LAYER 2a  nativeWipeShard()  [JNI -- called from DexProtector after loading]
 // Zeroes the ENTIRE Java byte[] that nativeDecryptShard returned -- not
@@ -70,6 +70,7 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/mman.h>
+#include <sys/inotify.h>
 #include <android/log.h>
 #include <zlib.h>
 
@@ -729,118 +730,89 @@ static inline void detect_frida_namedpipe(void) {
 }
 
 // ?
-// LAYER 1 -- detect_mem_reader()
+// ─────────────────────────────────────────────────────────────────────────────
+// LAYER 1 -- inotify_mem_watcher
 //
-// Scans every process's open file-descriptor table (/proc/<PID>/fd/).
-// If any external process has /proc/<OUR_PID>/mem OR /proc/<OUR_PID>/maps
-// open (which dump_dex_mem.py v9 and all /proc/PID/mem-based dumpers MUST
-// do), the readlink of that fd will resolve to our mem/maps path.
-// Detection -> nuke_app() immediately, before a single byte is dumped.
-// ?
+// Technique from darvincisec/AntiDebugandMemoryDump (280 stars):
+//   Install inotify watches on /proc/self/mem, /proc/self/maps,
+//   /proc/self/pagemap and the per-task equivalents.  The kernel fires an
+//   IN_OPEN event the instant ANY external process — including root (uid=0,
+//   Matrix Dumper, dexhound) — calls open() on those files.  No polling,
+//   no EPERM, no whitelist needed.
+//
+// Why this beats the old fd-scan approach:
+//   Old: poll /proc/*/fd every 20 ms.  Root process fds are unreadable
+//        (EPERM), so root dumpers were invisible.  Non-root window ~50 ms
+//        meant 2-3 dumps could finish before the next poll.
+//   New: kernel fires event in < 1 us.  Root or not — doesn't matter.
+//        We get the event before the dumper's first read() returns.
+//
+// Important setup detail:
+//   g_rmem_fd and g_maps_fd are opened ONCE in detect_frida_init(), BEFORE
+//   the inotify watches are installed.  Those initial opens do NOT trigger
+//   IN_OPEN.  self_scan_and_poison_dex() uses these globals — it never
+//   calls open() on those paths again, so our own internal scans are silent.
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Processes that may legitimately open /proc/PID/mem or /proc/PID/maps on
-// a rooted Android 16 device without being a dumper.  These are kernel/system
-// daemons, profiling infrastructure, and root-management frameworks.
-// Checked against /proc/<PID>/cmdline before calling nuke_app().
-static const char * const SAFE_MEM_READERS[] = {
-    // Android profiling / tracing stack (Perfetto, heapprofd)
-    "traced",           // perfetto traced daemon
-    "heapprofd",        // heap profiler daemon
-    "traced_probes",    // perfetto probes
-    // Crash / debug infrastructure
-    "debuggerd",        // crash dump reporter
-    "crash_dump",       // crash_dump64 helper
-    // Android runtime / zygote
-    "zygote",           // zygote / zygote64
-    "system_server",    // system server
-    "lmkd",             // low-memory killer daemon
-    // Root management frameworks (Magisk, KernelSU, APatch)
-    "magisk",           // Magisk daemon / manager
-    "magiskd",          // Magisk daemon (some versions)
-    "zygisk",           // Zygisk module loader
-    "ksu",              // KernelSU
-    "ksud",             // KernelSU daemon
-    "apd",              // APatch daemon
-    // Hardware / GPU services that scan process memory
-    "surfaceflinger",
-    "android.hardware",
-    NULL
-};
+// Persistent fds opened at startup before inotify is armed.
+// self_scan_and_poison_dex uses these so it never re-opens /proc/self/mem
+// or /proc/self/maps (which would trigger our own inotify watch).
+static int g_rmem_fd      = -1;   // /proc/self/mem  O_RDONLY
+static int g_maps_fd      = -1;   // /proc/self/maps O_RDONLY
 
-// Returns 1 if the process cmdline starts with a known safe reader name.
-static int is_safe_mem_reader(const char *pid_str) {
-    char cmdline_path[64] = "";
-    snprintf(cmdline_path, sizeof(cmdline_path), "/proc/%s/cmdline", pid_str);
-    int fd = my_openat(AT_FDCWD, cmdline_path, O_RDONLY | O_CLOEXEC, 0);
-    if (fd < 0) return 0;
-    char cmdline[256] = "";
-    ssize_t n = my_read(fd, cmdline, sizeof(cmdline) - 1);
-    my_close(fd);
-    if (n <= 0) return 0;
-    cmdline[n] = '\0';
-    for (int i = 0; SAFE_MEM_READERS[i] != NULL; i++) {
-        if (my_strstr(cmdline, SAFE_MEM_READERS[i]) != NULL)
-            return 1;
+static void *inotify_mem_watcher(void *arg) {
+    (void)arg;
+
+    int ifd = (int)syscall(__NR_inotify_init1, IN_CLOEXEC);
+    if (ifd < 0) {
+        PH_LOG("inotify_init1 failed (%d) — mem watcher disabled", ifd);
+        return NULL;
     }
-    return 0;
-}
 
-static void detect_mem_reader(void) {
-    PH_LOG("detect_mem_reader: scanning all /proc/PID/fd for our mem/maps");
-    pid_t our_pid = getpid();
+    // /proc/self/mem — the primary target of every /proc/PID/mem dumper.
+    // IN_OPEN  : new open() call from any external process.
+    // IN_ACCESS: read without re-open (inherited fd from a parent process).
+    syscall(__NR_inotify_add_watch, ifd,
+            "/proc/self/mem",     (uint32_t)(IN_OPEN | IN_ACCESS));
 
-    char our_mem[64]  = "";
-    char our_maps[64] = "";
-    snprintf(our_mem,  sizeof(our_mem),  "/proc/%d/mem",  our_pid);
-    snprintf(our_maps, sizeof(our_maps), "/proc/%d/maps", our_pid);
+    // /proc/self/maps — dumpers must read this to find DEX region addresses.
+    syscall(__NR_inotify_add_watch, ifd,
+            "/proc/self/maps",    (uint32_t)(IN_OPEN));
 
-    DIR *proc_dir = opendir("/proc");
-    if (!proc_dir) return;
+    // /proc/self/pagemap — used by advanced carvers to resolve physical pages.
+    syscall(__NR_inotify_add_watch, ifd,
+            "/proc/self/pagemap", (uint32_t)(IN_OPEN));
 
-    struct dirent *pid_ent;
-    while ((pid_ent = readdir(proc_dir)) != NULL) {
-        const char *dname = pid_ent->d_name;
-        if (!isdigit((unsigned char)dname[0])) continue;
-        if (atoi(dname) == our_pid) continue;
+    // Per-task mem + pagemap for the watcher thread itself.
+    char task_mem[64], task_pgm[64];
+    pid_t tid = (pid_t)syscall(__NR_gettid);
+    snprintf(task_mem, sizeof(task_mem),
+             "/proc/self/task/%d/mem",     (int)tid);
+    snprintf(task_pgm, sizeof(task_pgm),
+             "/proc/self/task/%d/pagemap", (int)tid);
+    syscall(__NR_inotify_add_watch, ifd, task_mem, (uint32_t)(IN_OPEN | IN_ACCESS));
+    syscall(__NR_inotify_add_watch, ifd, task_pgm, (uint32_t)(IN_OPEN));
 
-        char fd_dir_path[MAX_LENGTH] = "";
-        snprintf(fd_dir_path, sizeof(fd_dir_path), "/proc/%s/fd", dname);
+    PH_LOG("inotify_mem_watcher: armed on /proc/self/{mem,maps,pagemap} + task/%d/{mem,pagemap}", (int)tid);
 
-        DIR *fd_dir = opendir(fd_dir_path);
-        if (!fd_dir) continue;
+    // Blocking read — zero CPU until the kernel fires an event.
+    char buf[sizeof(struct inotify_event) + NAME_MAX + 1];
+    while (1) {
+        ssize_t n = my_read(ifd, buf, sizeof(buf));
+        if (n <= 0) continue;
 
-        struct dirent *fd_ent;
-        while ((fd_ent = readdir(fd_dir)) != NULL) {
-            if (!isdigit((unsigned char)fd_ent->d_name[0])) continue;
+        // ANY event = external process just opened our proc mem/maps/pagemap.
+        // Poison every DEX region NOW (MADV_DONTNEED drops physical pages so
+        // the in-flight read returns zeros) then crash.
+        PH_NUKE("inotify: external process opened /proc/self/{mem|maps|pagemap} — zeroing all DEX regions before nuke");
+        nuke_with_poison();
 
-            char fd_link[MAX_LENGTH] = "";
-            snprintf(fd_link, sizeof(fd_link),
-                     "/proc/%s/fd/%s", dname, fd_ent->d_name);
-
-            char target[MAX_LENGTH] = "";
-            my_readlinkat(AT_FDCWD, fd_link, target, sizeof(target) - 1);
-
-            if (my_strstr(target, our_mem)  != NULL ||
-                my_strstr(target, our_maps) != NULL) {
-
-                // Before nuking: verify this isn't a trusted system/root daemon.
-                // Magisk, KernelSU, traced, heapprofd etc. open /proc/PID/mem
-                // on Android 16 for legitimate reasons — nuking on those would
-                // crash the app for every rooted user.
-                if (is_safe_mem_reader(dname)) {
-                    PH_LOG("detect_mem_reader: pid=%s has our mem open but is WHITELISTED — skipping", dname);
-                    break;
-                }
-
-                closedir(fd_dir);
-                closedir(proc_dir);
-                PH_NUKE("mem reader detected — pid=%s has our /proc/mem or /proc/maps open — poisoning all regions before nuke", dname);
-                nuke_with_poison();   // zero all DEX regions then crash
-            }
-        }
-        closedir(fd_dir);
+        // nuke_with_poison() -> nuke_app() -> null-deref crash; never returns.
+        // Spin in case of unexpected return.
+        struct timespec ts = {0, 1000000L};
+        while (1) my_nanosleep(&ts, NULL);
     }
-    closedir(proc_dir);
+    return NULL;
 }
 
 // ?
@@ -866,12 +838,15 @@ static void detect_mem_reader(void) {
 // ?
 
 static void self_scan_and_poison_dex(void) {
-    int maps_fd = my_openat(AT_FDCWD, "/proc/self/maps", O_RDONLY | O_CLOEXEC, 0);
-    if (maps_fd < 0) return;
+    // Use the persistent global fds opened at startup (before inotify was
+    // armed).  Opening /proc/self/mem or /proc/self/maps here would trigger
+    // our own inotify watch and cause a self-nuke.
+    int maps_fd = g_maps_fd;
+    int rmem_fd = g_rmem_fd;
+    if (maps_fd < 0 || rmem_fd < 0) return;
 
-        // Open mem read-only for safe header inspection.
-    int rmem_fd = my_openat(AT_FDCWD, "/proc/self/mem", O_RDONLY | O_CLOEXEC, 0);
-    if (rmem_fd < 0) { my_close(maps_fd); return; }
+    // Seek maps back to the beginning — procfs regenerates on each read.
+    my_lseek(maps_fd, 0, SEEK_SET);
 
     char line[MAX_LINE];
     while (read_one_line(maps_fd, line, MAX_LINE) > 0) {
@@ -979,8 +954,7 @@ static void self_scan_and_poison_dex(void) {
         }
     }
 
-    my_close(rmem_fd);
-    my_close(maps_fd);
+    // Do NOT close — these are the persistent global fds.
 }
 
 // ?
@@ -1025,45 +999,6 @@ static void *poison_loop(void *arg) {
     return NULL;
 }
 
-// ?
-// mem_reader_loop -- 200 ms cadence  (was 2 s)
-//
-// Scans every running process's open fd table for any fd pointing at our
-// /proc/PID/mem or /proc/PID/maps.  Any match means a dumper has our
-// memory open -- nuke_app() fires immediately.
-//
-// Why 200 ms and not 1 ms:
-// detect_mem_reader() iterates ALL of /proc/PID/fd/, which involves dozens
-// of opendir/readdir/readlinkat calls -- a full pass typically takes
-// 3-15 ms depending on process count.  Running it every 1 ms would
-// saturate the thread on nothing but procfs I/O.  200 ms is a practical
-// sweet spot: 10x better odds than the old 2 s cadence while keeping
-// steady-state CPU below 1%.
-//
-// Fundamental limit:
-// dump_dex_mem.py opens /proc/PID/mem, reads a region (<1 ms), closes it.
-// No polling interval can guarantee catching a <1 ms fd window.  This
-// layer is defence-in-depth, not the primary barrier.  The primary barrier
-// is fast_poison_known_regions() (1 ms cadence) ensuring there is never
-// valid DEX magic to read.
-// ?
-
-static void *mem_reader_loop(void *arg) {
-    (void)arg;
-    struct timespec req;
-    req.tv_sec  = 0;
-    req.tv_nsec = 20000000L;        // 20 ms (was 200 ms)
-    // Rationale: Matrix Dumper's /proc/PID/mem read window is ~25 ms on
-    // Android 16.  200 ms polling missed it almost every time.  20 ms gives
-    // a high probability of catching a non-root dumper within one window.
-    // Root dumpers (uid=0) are not catchable via fd scanning since we cannot
-    // open /proc/<root_pid>/fd/ — defence against those is the poison loop.
-    while (1) {
-        detect_mem_reader();
-        my_nanosleep(&req, NULL);
-    }
-    return NULL;
-}
 
 // ?
 // detect_ebpf_uprobe()
@@ -1133,8 +1068,8 @@ static void *detect_frida_loop(void *args) {
 // DEX region cache and performs a belt-and-suspenders
 // full poison pass.
 //
-// mem_reader_loop   -- 200 ms -- kills if any process has our /proc/PID/mem open.
-// Defence-in-depth; primary barrier is poison_loop.
+// inotify_mem_watcher -- kernel event, zero CPU -- fires the instant ANY
+// process (including root) opens /proc/self/{mem,maps,pagemap}.
 //
 // detect_frida_loop -- 5 s   -- Frida/ptrace/eBPF heuristics.
 // ?
@@ -1158,8 +1093,8 @@ void detect_frida_init(void) {
     // regardless of whether a dump was actually in progress.
     //
     // The real dump-protection layers are:
-    //   • detect_mem_reader()  -- fires if any process has our /proc/PID/mem open
-    //   • poison_loop()        -- continuously zeros DEX headers in [anon:dalvik-*]
+    //   • inotify_mem_watcher() -- kernel event fires the instant any process opens our mem
+    //   • poison_loop()         -- continuously zeros DEX headers in [anon:dalvik-*]
     //   • detect_frida_*()     -- Frida thread names, named pipes, disk-vs-mem
     // Those layers remain fully active regardless of SELinux mode.
     //
@@ -1180,7 +1115,7 @@ void detect_frida_init(void) {
             my_read(sefd, ebuf, 3);
             my_close(sefd);
             // '0' = permissive -- noted but not acted on here.
-            // detect_mem_reader + poison_loop handle the actual threat.
+            // inotify_mem_watcher + poison_loop handle the actual threat.
             (void)ebuf;
             break;
         }
@@ -1206,9 +1141,15 @@ void detect_frida_init(void) {
         }
     }
     pthread_t t;
-    pthread_create(&t, NULL, poison_loop,       NULL);       // 1 ms fast + 500 ms refresh
-    pthread_create(&t, NULL, mem_reader_loop,   NULL);       // 200 ms
-    pthread_create(&t, NULL, detect_frida_loop, NULL);       // 5 s
+    // Open persistent global fds BEFORE arming inotify.
+    // self_scan_and_poison_dex() uses these — it never re-opens these paths,
+    // so our own internal reads never trigger the inotify watches below.
+    g_rmem_fd = my_openat(AT_FDCWD, "/proc/self/mem",  O_RDONLY | O_CLOEXEC, 0);
+    g_maps_fd = my_openat(AT_FDCWD, "/proc/self/maps", O_RDONLY | O_CLOEXEC, 0);
+
+    pthread_create(&t, NULL, poison_loop,          NULL);   // 100 us fast + 500 ms refresh
+    pthread_create(&t, NULL, inotify_mem_watcher,  NULL);   // kernel event — catches root dumpers
+    pthread_create(&t, NULL, detect_frida_loop,    NULL);   // 5 s
 }
 
 // nativePoisonNow -- JNI hook called from Java immediately after

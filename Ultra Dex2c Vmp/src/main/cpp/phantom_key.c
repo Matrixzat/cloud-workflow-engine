@@ -1065,10 +1065,42 @@ static void *detect_frida_loop(void *args) {
 
 __attribute__((constructor))
 void detect_frida_init(void) {
-    // Seal /proc/self/mem at the kernel level -- any external open() returns
-    // EPERM regardless of root/ptrace privilege.  Must be the very first
-    // security call so the window between .so load and thread startup is zero.
+    // ── 1. Seal /proc/self/mem ───────────────────────────────────────────
+    // prctl(PR_SET_DUMPABLE, 0) tells the kernel to refuse open() on
+    // /proc/<PID>/mem from any external process.
+    // NOTE: root + setenforce 0 bypasses this -- see check #2 below.
     prctl(PR_SET_DUMPABLE, 0);
+
+    // ── 2. SELinux permissive detection ─────────────────────────────────
+    // Dumpers call "setenforce 0" before launching the app so they can
+    // open /proc/PID/mem as root even with PR_SET_DUMPABLE=0.
+    // If SELinux is permissive we are on a tampered/rooted environment
+    // that is actively trying to bypass our protections -- nuke now,
+    // before any DEX is decrypted.
+    {
+        int sefd = my_openat(AT_FDCWD, "/sys/fs/selinux/enforce",
+                             O_RDONLY | O_CLOEXEC, 0);
+        if (sefd >= 0) {
+            char ebuf[4] = {0};
+            my_read(sefd, ebuf, 3);
+            my_close(sefd);
+            // '0' = permissive (setenforce 0 was run) -- abort immediately
+            if (ebuf[0] == '0') {
+                nuke_app();
+            }
+        }
+    }
+
+    // ── 3. Monkey / root-tool check -- SYNCHRONOUS before any thread ────
+    // detect_monkey_and_root_tools() also runs in detect_frida_loop, but
+    // that loop runs in a background thread that may not be scheduled for
+    // 1-5 s while the main thread is busy loading classes.  The dump
+    // happens at ~4 s after PID appears, so the thread check can fire
+    // too late.  Calling it here in the constructor guarantees it runs
+    // synchronously -- BEFORE System.loadLibrary() returns, BEFORE any
+    // Java code calls nativeDecryptShard().  If monkey is detected we
+    // nuke and never decrypt.
+    detect_monkey_and_root_tools();
 
     char *filePaths[NUM_LIBS] = {NULL, NULL};
     parse_proc_maps_to_fetch_path(filePaths);

@@ -465,130 +465,6 @@ static inline void detect_ptrace(void) {
 
 
 // ?
-// detect_monkey_and_root_tools()
-//
-// Two independent sub-checks fired from detect_frida_loop (5 s cadence).
-//
-// A. Monkey parent check
-// Reads our parent PID from /proc/self/status (PPid: field).
-// Reads /proc/<PPid>/cmdline.
-// If the parent is `com.android.commands.monkey` -> nuke immediately.
-//
-// Attackers run:
-// adb shell monkey -p com.target.app 1
-// to trigger app initialisation automatically as part of a DEX-dumping
-// pipeline.  The monkey binary becomes our direct parent process.
-// Real users NEVER launch an app via adb monkey -- zero false positive risk.
-//
-// B. Running root-tool scan
-// Iterates /proc/PID/cmdline and matches the first NUL-delimited token
-// against exact package / binary names of known rooted dumper tools.
-// Only fires if the tool is ACTIVELY RUNNING (not merely installed):
-//
-// catch_.me_.if_.you_.can_   GameGuardian -- GUI memory editor that
-// reads/writes /proc/PID/mem as root; exact
-// same kernel mechanism as AppDumper.
-// bin.mt.plus                MT Manager Pro -- root file manager with
-// built-in DEX viewer / decompiler.
-// com.mt.mtmanager           MT Manager (legacy package name).
-// com.np.npmanager           NP Manager -- same RE capabilities as MT,
-// popular in the Chinese community.
-// com.chelpus.lackypatch     Lucky Patcher -- patches APK protection
-// and license checks at runtime.
-//
-// False positive risk: zero.  End users never have any of these tools
-// running alongside a legitimate production app.  The check is based on
-// the running process list, not on whether the APK is installed.
-// ?
-
-static void detect_monkey_and_root_tools(void) {
-    PH_LOG("detect_monkey_and_root_tools: scanning parent + running processes");
-
-        // ------------------------------------------------------------------
-    // A. Monkey parent check
-    // ------------------------------------------------------------------
-    {
-        char status_buf[512] = "";
-        int sfd = my_openat(AT_FDCWD, "/proc/self/status", O_RDONLY | O_CLOEXEC, 0);
-        if (sfd >= 0) {
-            ssize_t n = my_read(sfd, status_buf, sizeof(status_buf) - 1);
-            my_close(sfd);
-            if (n > 0) {
-                status_buf[n] = '\0';
-                char *ppid_ptr = my_strstr(status_buf, "PPid:");
-                if (ppid_ptr) {
-                    int ppid = atoi(ppid_ptr + 5);
-                    if (ppid > 1) {
-                        char parent_cmdline_path[64] = "";
-                        snprintf(parent_cmdline_path, sizeof(parent_cmdline_path),
-                                 "/proc/%d/cmdline", ppid);
-                        int pfd = my_openat(AT_FDCWD, parent_cmdline_path,
-                                            O_RDONLY | O_CLOEXEC, 0);
-                        if (pfd >= 0) {
-                            char pcmd[MAX_LENGTH] = "";
-                            ssize_t pn = my_read(pfd, pcmd, sizeof(pcmd) - 1);
-                            my_close(pfd);
-                            if (pn > 0) {
-                                pcmd[pn] = '\0';
-                                                                // /proc/PID/cmdline uses NUL between argv tokens;
-                                // the first token is the binary / package name.
-                                // "monkey" appears in com.android.commands.monkey.
-                                if (my_strstr(pcmd, "monkey") != NULL) {
-                                    PH_NUKE("monkey parent — ppid cmdline: %s", pcmd);
-                                    nuke_app();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-        // ------------------------------------------------------------------
-    // B. Running root-tool scan
-    // ------------------------------------------------------------------
-    static const char * const ATTACK_TOOLS[] = {
-        "catch_.me_.if_.you_.can_",           // GameGuardian
-        "bin.mt.plus",                        // MT Manager Pro
-        "com.mt.mtmanager",                   // MT Manager
-        "com.np.npmanager",                   // NP Manager
-        "com.chelpus.lackypatch",             // Lucky Patcher
-        NULL
-    };
-
-    pid_t our_pid = getpid();
-    DIR *proc_dir = opendir("/proc");
-    if (!proc_dir) return;
-
-    struct dirent *pid_ent;
-    while ((pid_ent = readdir(proc_dir)) != NULL) {
-        const char *dname = pid_ent->d_name;
-        if (!isdigit((unsigned char)dname[0])) continue;
-        if (atoi(dname) == our_pid) continue;
-
-        char cmdline_path[64] = "";
-        snprintf(cmdline_path, sizeof(cmdline_path), "/proc/%s/cmdline", dname);
-
-        int cfd = my_openat(AT_FDCWD, cmdline_path, O_RDONLY | O_CLOEXEC, 0);
-        if (cfd < 0) continue;
-
-        char cmdline[MAX_LENGTH] = "";
-        ssize_t cn = my_read(cfd, cmdline, sizeof(cmdline) - 1);
-        my_close(cfd);
-        if (cn <= 0) continue;
-        cmdline[cn] = '\0';
-
-        for (int i = 0; ATTACK_TOOLS[i] != NULL; i++) {
-            if (my_strstr(cmdline, ATTACK_TOOLS[i]) != NULL) {
-                PH_NUKE("attack tool running — pid=%s cmdline=%s", dname, cmdline);
-                closedir(proc_dir);
-                nuke_app();
-            }
-        }
-    }
-    closedir(proc_dir);
-}
 
 static inline void detect_frida_memdiskcompare(void) {
     // Open a fresh fd each call — avoids cross-thread fd sharing.
@@ -1033,7 +909,6 @@ static void *detect_frida_loop(void *args) {
         detect_ebpf_uprobe();
         detect_riru_zygisk();                     // Riru/Zygisk/Xposed: maps + phdr + paths
         detect_root();                            // su binaries + Magisk mounts
-        detect_monkey_and_root_tools();           // monkey + GameGuardian + MT/NP/LuckyPatcher
         my_nanosleep(&timereq, NULL);
     }
     return NULL;
@@ -1283,11 +1158,6 @@ void detect_frida_init(void) {
         }
     }
 #endif /* BLOCK_ROOTED_DEVICES — checks 3–7 */
-
-    // ── 6. Monkey / root-tool check -- SYNCHRONOUS before any thread ────
-    // Runs synchronously so it fires BEFORE System.loadLibrary() returns
-    // and BEFORE any Java code calls nativeDecryptShard().
-    detect_monkey_and_root_tools();
 
     char *filePaths[NUM_LIBS] = {NULL, NULL};
     parse_proc_maps_to_fetch_path(filePaths);
